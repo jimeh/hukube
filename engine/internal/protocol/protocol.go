@@ -245,7 +245,7 @@ type ResourceRef struct {
 
 // ResourceData is the latest full Manifest of a Resource, as JSON.
 type ResourceData struct {
-	Object  json.RawMessage `json:"object,omitempty" tstype:"Record<string, unknown>"`
+	Object  json.RawMessage `json:"object,omitempty" tstype:"{ [key: string]: unknown }"`
 	Deleted bool            `json:"deleted,omitempty"`
 }
 

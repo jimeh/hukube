@@ -1,7 +1,9 @@
 package query
 
 import (
+	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,3 +144,16 @@ func TestCompileRejectsInvalidExpressions(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Clients index into rows, so an empty window must encode as [] rather than
+// null.
+func TestRunEncodesEmptyRowsAsArray(t *testing.T) {
+	q, _ := Compile(ptr(in(protocol.FieldName, "no-such-resource")))
+	raw, err := json.Marshal(Run(testStore(), q, protocol.Sort{}, 0, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"rows":[]`) {
+		t.Errorf("encoded result = %s, want rows as an empty array", raw)
+	}
+}

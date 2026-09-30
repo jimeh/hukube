@@ -146,7 +146,8 @@ func scanTypes(e protocol.Expr) []protocol.TypeKey {
 // Run evaluates a compiled query against a Store and returns one sorted
 // window of the matching Resources.
 func Run(store *index.Store, q *Compiled, sort protocol.Sort, offset, limit int) protocol.QueryResult {
-	var rows []protocol.Row
+	// Non-nil so an empty window encodes as [] rather than null.
+	rows := []protocol.Row{}
 	store.Each(q.types, func(t protocol.TypeKey, m index.Meta) {
 		if q.match(t, m) {
 			rows = append(rows, protocol.Row{
