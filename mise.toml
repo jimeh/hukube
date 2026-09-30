@@ -1,0 +1,149 @@
+[tools]
+bun = "1.4.2"
+go = "1.27.1"
+golangci-lint = "2.14.0"
+k3d = "5.9.0"
+kubectl = "1.37.1"
+"go:github.com/gzuidhof/tygo" = "0.2.21"
+"go:sigs.k8s.io/controller-runtime/tools/setup-envtest" = "0.25.1"
+
+[env]
+# Kubernetes version used for envtest's kube-apiserver and etcd binaries.
+ENVTEST_K8S_VERSION = "1.37.x"
+# k3d cluster used by end-to-end tests.
+E2E_CLUSTER = "hukube-e2e"
+
+[settings]
+experimental = true
+
+# --- Setup ---
+
+[tasks.install]
+description = "Install JavaScript dependencies"
+run = "bun install --frozen-lockfile"
+
+[tasks.gen]
+description = "Generate TypeScript protocol types from the Engine's Go definitions"
+dir = "engine"
+run = "tygo generate"
+
+# --- Development ---
+
+[tasks."build:engine"]
+description = "Build the Engine binary into engine/bin"
+dir = "engine"
+run = "go build -o bin/hukube-engine ./cmd/hukube-engine"
+
+[tasks."dev:engine"]
+description = "Run the Engine for UI development against the Vite dev server"
+depends = ["build:engine"]
+run = "engine/bin/hukube-engine --listen 127.0.0.1:7443 --token dev --allow-origin http://localhost:5173 --data-dir .data/engine"
+
+[tasks."dev:ui"]
+description = "Run the UI dev server (open http://localhost:5173/#token=dev)"
+dir = "apps/ui"
+run = "bun run dev"
+
+[tasks.dev]
+description = "Run the Engine and the UI dev server for the web Host"
+depends = ["dev:engine", "dev:ui"]
+
+[tasks."dev:desktop"]
+description = "Run the desktop Host against the UI dev server"
+depends = ["build:engine"]
+dir = "apps/desktop"
+run = "bun run dev"
+
+[tasks."build:ui"]
+description = "Build the UI bundle into apps/ui/dist"
+dir = "apps/ui"
+run = "bun run build"
+
+[tasks."build:desktop"]
+description = "Build the desktop Host's main and preload bundles"
+dir = "apps/desktop"
+run = "bun run build"
+
+[tasks.build]
+description = "Build the Engine, UI, and desktop Host"
+depends = ["build:engine", "build:ui", "build:desktop"]
+
+[tasks.package]
+description = "Package the desktop app for the current platform"
+depends = ["build"]
+dir = "apps/desktop"
+run = "bun run package"
+
+[tasks.web]
+description = "Serve the built UI from the Engine (web Host), open the printed URL"
+depends = ["build:engine", "build:ui"]
+run = "engine/bin/hukube-engine --web --ui-dir apps/ui/dist --data-dir .data/engine"
+
+# --- Checks ---
+
+[tasks."lint:ts"]
+description = "Lint TypeScript with type-aware oxlint"
+run = "bunx oxlint --type-aware --deny-warnings"
+
+[tasks."lint:go"]
+description = "Lint the Engine"
+dir = "engine"
+run = "golangci-lint run ./..."
+
+[tasks.lint]
+description = "Run all linters"
+depends = ["lint:ts", "lint:go"]
+
+[tasks.fmt]
+description = "Format all code"
+run = ["bunx oxfmt", "cd engine && golangci-lint fmt ./..."]
+
+[tasks."fmt:check"]
+description = "Check formatting without writing changes"
+run = ["bunx oxfmt --check", "cd engine && golangci-lint fmt --diff ./..."]
+
+[tasks.typecheck]
+description = "Typecheck all TypeScript projects"
+run = "bun run --filter '*' typecheck"
+
+[tasks."test:ts"]
+description = "Run TypeScript unit tests"
+run = "bunx vitest run"
+
+[tasks."test:engine"]
+description = "Run Engine unit and envtest integration tests"
+dir = "engine"
+run = 'KUBEBUILDER_ASSETS="$(setup-envtest use -p path "$ENVTEST_K8S_VERSION")" go test -race ./...'
+
+[tasks.test]
+description = "Run all unit and integration tests"
+depends = ["test:ts", "test:engine"]
+
+[tasks."gen:check"]
+description = "Fail if generated protocol types are out of date"
+depends = ["gen"]
+run = "git diff --exit-code -- packages/engine-client/src/protocol.gen.ts"
+
+[tasks.check]
+description = "Run every fast check: formatting, lint, typecheck, generated code, tests"
+depends = ["fmt:check", "lint", "typecheck", "gen:check", "test"]
+
+# --- End-to-end ---
+
+[tasks."e2e:cluster"]
+description = "Create the k3d cluster used by end-to-end tests, if missing"
+run = '''
+k3d cluster list "$E2E_CLUSTER" >/dev/null 2>&1 || \
+  k3d cluster create "$E2E_CLUSTER" --no-lb --wait --timeout 180s \
+    --k3s-arg "--disable=traefik,metrics-server@server:0"
+'''
+
+[tasks."e2e:cluster:delete"]
+description = "Delete the end-to-end k3d cluster"
+run = 'k3d cluster delete "$E2E_CLUSTER"'
+
+[tasks.e2e]
+description = "Run end-to-end tests against the k3d cluster"
+depends = ["e2e:cluster", "build:engine", "build:ui"]
+dir = "e2e"
+run = "bunx playwright test"

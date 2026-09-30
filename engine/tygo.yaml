@@ -1,0 +1,7 @@
+packages:
+  - path: "github.com/jimeh/hukube/engine/internal/protocol"
+    output_path: "../packages/engine-client/src/protocol.gen.ts"
+    enum_style: "union"
+    type_mappings:
+      time.Time: "string"
+      json.RawMessage: "unknown"
