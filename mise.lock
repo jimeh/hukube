@@ -213,3 +213,8 @@ url = "https://dl.k8s.io/v1.37.1/bin/darwin/amd64/kubectl"
 [tools.kubectl."platforms.windows-x64"]
 checksum = "sha256:14b93c4916a6f37a06fbc1f46b0a1d2404c4f9741be09f00d6caf8af3b05f1d3"
 url = "https://dl.k8s.io/v1.37.1/bin/windows/amd64/kubectl.exe"
+
+[[tools.node]]
+version = "24.21.0"
+backend = "core:node"
+specifiers = ["24.21.0"]

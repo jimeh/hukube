@@ -32,6 +32,12 @@ committing. `mise run e2e` needs Docker.
   build time, so locate app files with `app.getAppPath()`. Keep the main
   process CommonJS, because Playwright's Electron launcher cannot drive an ES
   module entry point.
+- **Custom-scheme origins:** `new URL("hukube://app/...").origin` is `"null"`,
+  so compare scheme and host (`originOf` in `apps/desktop/src/main.ts`), not
+  `URL.origin`.
+- **Engine hostnames:** the Engine refuses requests whose `Host` is not a
+  loopback name, to block DNS rebinding. Anything that serves or proxies it
+  under another name must pass `--allow-host`, as `dev:tailnet` does.
 - **Chromium sandbox:** Ubuntu 24.04+ blocks the unprivileged user namespaces
   Chromium's sandbox uses. Pass `--no-sandbox` only to development and test
   launches, never in shipped code.

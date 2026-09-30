@@ -1,6 +1,8 @@
 [tools]
 bun = "1.4.2"
 go = "1.27.1"
+# Vitest, Playwright, and electron-builder run on Node.
+node = "24.21.0"
 golangci-lint = "2.14.0"
 k3d = "5.9.0"
 kubectl = "1.37.1"
@@ -68,7 +70,10 @@ host="${HUKUBE_TAILNET_HOST:-$(tailscale status --json | bun -e \
 token="$(openssl rand -hex 24)"
 
 coproc ENGINE {
-  HUKUBE_TOKEN="$token" exec engine/bin/hukube-engine --listen 127.0.0.1:0 --data-dir .data/engine
+  # Its own data dir: Engines cache settings in memory, so two sharing one
+  # would overwrite each other's saved layouts.
+  HUKUBE_TOKEN="$token" exec engine/bin/hukube-engine --listen 127.0.0.1:0 \
+    --allow-host "$host" --data-dir .data/engine-tailnet
 }
 engine_pid=$ENGINE_PID
 trap 'kill "$engine_pid" 2>/dev/null || true' EXIT

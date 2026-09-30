@@ -9,7 +9,17 @@ import { join, normalize, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  net,
+  protocol,
+  shell,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
 
 import type { EngineEndpoint } from "@hukube/host";
 
@@ -17,7 +27,14 @@ const appScheme = "hukube";
 const appOrigin = `${appScheme}://app`;
 /** Set during development to load the UI from the Vite dev server. */
 const devUiUrl = process.env["HUKUBE_UI_URL"];
-const uiOrigin = devUiUrl ? new URL(devUiUrl).origin : appOrigin;
+/**
+ * The scheme and host of a URL. URL.origin is "null" for custom schemes such
+ * as hukube://, so it cannot be used to compare against the app's origin.
+ */
+function originOf(url: URL): string {
+  return `${url.protocol}//${url.host}`;
+}
+const uiOrigin = devUiUrl ? originOf(new URL(devUiUrl)) : appOrigin;
 
 // The app path is apps/desktop in development. Bun inlines __dirname at build
 // time, so it cannot locate files at runtime.
@@ -123,7 +140,19 @@ function serveUi() {
   });
 }
 
-function createWindow(path = "/") {
+/** Resolves an app path against the UI, or returns undefined if it leaves the UI's origin. */
+function appUrl(path: string): URL | undefined {
+  const url = new URL(path, devUiUrl ?? `${appOrigin}/`);
+  return originOf(url) === uiOrigin ? url : undefined;
+}
+
+/** Whether an IPC message came from the app's own UI, not another page. */
+function fromUi(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
+  const frameUrl = event.senderFrame?.url;
+  return frameUrl ? originOf(new URL(frameUrl)) === uiOrigin : false;
+}
+
+function createWindow(url: URL = appUrl("/")!) {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -136,14 +165,14 @@ function createWindow(path = "/") {
     },
   });
   // Links to other sites open in the system browser, never inside the app.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    openExternal(url);
+  win.webContents.setWindowOpenHandler((details) => {
+    openExternal(details.url);
     return { action: "deny" };
   });
-  win.webContents.on("will-navigate", (event, url) => {
-    if (new URL(url).origin !== uiOrigin) event.preventDefault();
+  win.webContents.on("will-navigate", (event, destination) => {
+    if (originOf(new URL(destination)) !== uiOrigin) event.preventDefault();
   });
-  void win.loadURL(new URL(path, devUiUrl ?? `${appOrigin}/`).href);
+  void win.loadURL(url.href);
 }
 
 function openExternal(url: string) {
@@ -151,12 +180,14 @@ function openExternal(url: string) {
   if (scheme === "https:" || scheme === "http:") void shell.openExternal(url);
 }
 
-ipcMain.handle("hukube:engine", () => endpoint);
-ipcMain.on("hukube:open-window", (_event, path: unknown) => {
-  if (typeof path === "string" && path.startsWith("/")) createWindow(path);
+// Only the app's UI may learn the Engine's token or open windows.
+ipcMain.handle("hukube:engine", (event) => (fromUi(event) ? endpoint : undefined));
+ipcMain.on("hukube:open-window", (event, path: unknown) => {
+  const url = fromUi(event) && typeof path === "string" ? appUrl(path) : undefined;
+  if (url) createWindow(url);
 });
-ipcMain.on("hukube:open-external", (_event, url: unknown) => {
-  if (typeof url === "string") openExternal(url);
+ipcMain.on("hukube:open-external", (event, url: unknown) => {
+  if (fromUi(event) && typeof url === "string") openExternal(url);
 });
 
 app.on("before-quit", () => {
