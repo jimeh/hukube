@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["react", "react-dom"],
+    "paths": {
+      "@hukube/ui/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}

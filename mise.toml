@@ -10,8 +10,10 @@ kubectl = "1.37.1"
 [env]
 # Kubernetes version used for envtest's kube-apiserver and etcd binaries.
 ENVTEST_K8S_VERSION = "1.37.x"
-# k3d cluster used by end-to-end tests.
+# k3d cluster used by end-to-end tests, and its kubeconfig. The cluster is kept
+# out of ~/.kube/config so tests never touch your own contexts.
 E2E_CLUSTER = "hukube-e2e"
+E2E_KUBECONFIG = "{{config_root}}/.data/e2e/kubeconfig"
 
 [settings]
 experimental = true
@@ -41,22 +43,32 @@ run = "engine/bin/hukube-engine --listen 127.0.0.1:7443 --token dev --allow-orig
 
 [tasks."dev:ui"]
 description = "Run the UI dev server (open http://localhost:5173/#token=dev)"
-dir = "apps/ui"
+dir = "apps/app"
 run = "bun run dev"
 
 [tasks.dev]
 description = "Run the Engine and the UI dev server for the web Host"
 depends = ["dev:engine", "dev:ui"]
 
-[tasks."dev:desktop"]
-description = "Run the desktop Host against the UI dev server"
+[tasks."dev:desktop:electron"]
+description = "Run Electron against the UI dev server once it is up"
 depends = ["build:engine"]
 dir = "apps/desktop"
-run = "bun run dev"
+# Extra Electron flags come from $HUKUBE_ELECTRON_FLAGS, such as --no-sandbox on
+# Linux hosts that block unprivileged user namespaces (Ubuntu 24.04+).
+run = '''
+until curl -sf http://localhost:5173 >/dev/null; do sleep 0.5; done
+bun run build
+HUKUBE_UI_URL=http://localhost:5173 bunx electron . ${HUKUBE_ELECTRON_FLAGS:-}
+'''
+
+[tasks."dev:desktop"]
+description = "Run the desktop Host with the UI dev server"
+depends = ["dev:ui", "dev:desktop:electron"]
 
 [tasks."build:ui"]
-description = "Build the UI bundle into apps/ui/dist"
-dir = "apps/ui"
+description = "Build the UI bundle into apps/app/dist"
+dir = "apps/app"
 run = "bun run build"
 
 [tasks."build:desktop"]
@@ -77,7 +89,7 @@ run = "bun run package"
 [tasks.web]
 description = "Serve the built UI from the Engine (web Host), open the printed URL"
 depends = ["build:engine", "build:ui"]
-run = "engine/bin/hukube-engine --web --ui-dir apps/ui/dist --data-dir .data/engine"
+run = "engine/bin/hukube-engine --web --ui-dir apps/app/dist --data-dir .data/engine"
 
 # --- Checks ---
 
@@ -131,19 +143,34 @@ depends = ["fmt:check", "lint", "typecheck", "gen:check", "test"]
 # --- End-to-end ---
 
 [tasks."e2e:cluster"]
-description = "Create the k3d cluster used by end-to-end tests, if missing"
+description = "Create the k3d cluster used by end-to-end tests, if missing, and write its kubeconfig to .data/e2e"
 run = '''
 k3d cluster list "$E2E_CLUSTER" >/dev/null 2>&1 || \
   k3d cluster create "$E2E_CLUSTER" --no-lb --wait --timeout 180s \
+    --kubeconfig-update-default=false --kubeconfig-switch-context=false \
     --k3s-arg "--disable=traefik,metrics-server@server:0"
+mkdir -p .data/e2e
+k3d kubeconfig get "$E2E_CLUSTER" > "$E2E_KUBECONFIG"
 '''
 
 [tasks."e2e:cluster:delete"]
 description = "Delete the end-to-end k3d cluster"
 run = 'k3d cluster delete "$E2E_CLUSTER"'
 
-[tasks.e2e]
-description = "Run end-to-end tests against the k3d cluster"
-depends = ["e2e:cluster", "build:engine", "build:ui"]
+[tasks."e2e:browsers"]
+description = "Install the Chromium build Playwright drives"
 dir = "e2e"
-run = "bunx playwright test"
+run = "bunx playwright install chromium"
+
+[tasks.e2e]
+description = "Run end-to-end tests for the web and desktop Hosts against the k3d cluster"
+depends = ["e2e:cluster", "e2e:browsers", "build"]
+dir = "e2e"
+# Electron needs a display; use a virtual one on headless Linux.
+run = '''
+if [ "$(uname)" = Linux ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  xvfb-run -a bunx playwright test
+else
+  bunx playwright test
+fi
+'''

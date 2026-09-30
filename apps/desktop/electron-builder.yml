@@ -1,0 +1,19 @@
+appId: io.github.jimeh.hukube
+productName: hukube
+executableName: hukube
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: ../../engine/bin/hukube-engine
+    to: engine/hukube-engine
+  - from: ../app/dist
+    to: ui
+mac:
+  category: public.app-category.developer-tools
+  target: [dmg, zip]
+linux:
+  category: Development
+  target: [AppImage, dir]
