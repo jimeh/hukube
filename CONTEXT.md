@@ -47,7 +47,7 @@ _Avoid_: Object, item, entity
 
 **Resource Type**:
 A kind of Resource served by a Cluster, built-in or from a CRD, identified by
-group, version, and kind.
+its API group and name regardless of API version.
 _Avoid_: Resource (for types), CRD (for the type itself), kind (alone)
 
 **Manifest**:
