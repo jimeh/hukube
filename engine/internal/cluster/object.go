@@ -16,10 +16,6 @@ import (
 	"github.com/jimeh/hukube/engine/internal/protocol"
 )
 
-// objectRetry is how long WatchObject waits before retrying after an error,
-// or after a watch that ended almost as soon as it started.
-var objectRetry = 2 * time.Second
-
 // WatchObject calls emit with the full Manifest of one Resource, and again
 // whenever it changes, until ctx ends. A Resource that does not exist, or is
 // deleted, is emitted as Deleted, and emitted again if it is created later.
@@ -28,7 +24,8 @@ var objectRetry = 2 * time.Second
 // while the Cluster is still connecting succeed, and it re-resolves the type
 // on every retry, so it follows a change of preferred API version. Errors,
 // including a type the connected Cluster does not serve, are passed to onErr
-// and retried.
+// and retried after Timing.ObjectRetry; so is a watch that ended almost as
+// soon as it started.
 func (c *Cluster) WatchObject(ctx context.Context, ref protocol.ResourceRef, emit func(protocol.ResourceData), onErr func(error)) {
 	selector := fields.OneTermEqualSelector("metadata.name", ref.Name).String()
 	go func() {
@@ -44,12 +41,12 @@ func (c *Cluster) WatchObject(ctx context.Context, ref protocol.ResourceRef, emi
 			}
 			if err != nil {
 				onErr(err)
-			} else if time.Since(started) >= objectRetry {
+			} else if time.Since(started) >= c.timing.ObjectRetry {
 				continue
 			}
 			select {
 			case <-ctx.Done():
-			case <-time.After(objectRetry):
+			case <-time.After(c.timing.ObjectRetry):
 			}
 		}
 	}()
@@ -59,8 +56,12 @@ func (c *Cluster) WatchObject(ctx context.Context, ref protocol.ResourceRef, emi
 // it. Once the Cluster is ready, a type it does not serve is reported through
 // onErr while waiting for it to appear. It returns an error only when ctx ends.
 func (c *Cluster) objectClient(ctx context.Context, ref protocol.ResourceRef, onErr func(error)) (dynamic.ResourceInterface, error) {
-	changed, stop := c.typesChanged.Subscribe()
-	defer stop()
+	// Discovery finishes before the Cluster becomes ready, so wake on either
+	// signal. Subscribe before checking, so no change is missed in between.
+	typesChanged, stopTypes := c.typesChanged.Subscribe()
+	defer stopTypes()
+	statusChanged, stopStatus := c.statusChanged.Subscribe()
+	defer stopStatus()
 	reported := false
 	for {
 		if gvr, namespaced, ok := c.resolve(ref.Type); ok {
@@ -76,7 +77,8 @@ func (c *Cluster) objectClient(ctx context.Context, ref protocol.ResourceRef, on
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-changed:
+		case <-typesChanged:
+		case <-statusChanged:
 		}
 	}
 }

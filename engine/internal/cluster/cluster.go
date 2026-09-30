@@ -34,16 +34,29 @@ const (
 	apiServiceType protocol.TypeKey = "apiservices.apiregistration.k8s.io"
 )
 
-// Timing for connection retries and discovery refreshes. Variables so tests
-// can shorten them.
-var (
-	retryMin        = 2 * time.Second
-	retryMax        = time.Minute
-	discoveryDelay  = 2 * time.Second
-	discoveryPeriod = 5 * time.Minute
-	healthPeriod    = 30 * time.Second
-	healthTimeout   = 10 * time.Second
-)
+// Timing controls a Cluster's retries, discovery refreshes, and health
+// checks. Each Cluster copies it when created, so tests can shorten it without
+// racing Clusters that are already running.
+type Timing struct {
+	RetryMin        time.Duration
+	RetryMax        time.Duration
+	DiscoveryDelay  time.Duration
+	DiscoveryPeriod time.Duration
+	HealthPeriod    time.Duration
+	HealthTimeout   time.Duration
+	ObjectRetry     time.Duration
+}
+
+// DefaultTiming is the Timing used by NewManager.
+var DefaultTiming = Timing{
+	RetryMin:        2 * time.Second,
+	RetryMax:        time.Minute,
+	DiscoveryDelay:  2 * time.Second,
+	DiscoveryPeriod: 5 * time.Minute,
+	HealthPeriod:    30 * time.Second,
+	HealthTimeout:   10 * time.Second,
+	ObjectRetry:     2 * time.Second,
+}
 
 // ErrUnknownType is returned for a TypeKey the Cluster does not serve.
 var ErrUnknownType = errors.New("unknown resource type")
@@ -54,6 +67,7 @@ type Manager struct {
 	ctx    context.Context
 	source kubeconfig.Source
 	log    *slog.Logger
+	timing Timing
 
 	mu       sync.Mutex
 	clusters map[string]*Cluster
@@ -61,7 +75,12 @@ type Manager struct {
 
 // NewManager returns a Manager whose connections live as long as ctx.
 func NewManager(ctx context.Context, source kubeconfig.Source, log *slog.Logger) *Manager {
-	return &Manager{ctx: ctx, source: source, log: log, clusters: make(map[string]*Cluster)}
+	return NewManagerWithTiming(ctx, source, log, DefaultTiming)
+}
+
+// NewManagerWithTiming returns a Manager whose Clusters use the given Timing.
+func NewManagerWithTiming(ctx context.Context, source kubeconfig.Source, log *slog.Logger, timing Timing) *Manager {
+	return &Manager{ctx: ctx, source: source, log: log, timing: timing, clusters: make(map[string]*Cluster)}
 }
 
 // Get returns the Cluster with the given ID, connecting to it if needed.
@@ -75,7 +94,7 @@ func (m *Manager) Get(id string) (*Cluster, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := newCluster(id, cfg, m.log.With("cluster", id))
+	c, err := newCluster(id, cfg, m.log.With("cluster", id), m.timing)
 	if err != nil {
 		return nil, err
 	}
@@ -86,9 +105,10 @@ func (m *Manager) Get(id string) (*Cluster, error) {
 
 // Cluster is the Engine's live connection to one Cluster.
 type Cluster struct {
-	id   string
-	log  *slog.Logger
-	disc discovery.DiscoveryInterface
+	id     string
+	log    *slog.Logger
+	timing Timing
+	disc   discovery.DiscoveryInterface
 	// probe checks reachability with a short timeout; disc has none, because
 	// the clients sharing its configuration hold long-lived watches.
 	probe discovery.DiscoveryInterface
@@ -117,7 +137,7 @@ type indexedType struct {
 	cancel context.CancelFunc
 }
 
-func newCluster(id string, cfg *rest.Config, log *slog.Logger) (*Cluster, error) {
+func newCluster(id string, cfg *rest.Config, log *slog.Logger, timing Timing) (*Cluster, error) {
 	cfg = rest.CopyConfig(cfg)
 	cfg.QPS = 100
 	cfg.Burst = 200
@@ -129,7 +149,7 @@ func newCluster(id string, cfg *rest.Config, log *slog.Logger) (*Cluster, error)
 		return nil, fmt.Errorf("discovery client: %w", err)
 	}
 	probeCfg := rest.CopyConfig(cfg)
-	probeCfg.Timeout = healthTimeout
+	probeCfg.Timeout = timing.HealthTimeout
 	probe, err := discovery.NewDiscoveryClientForConfig(probeCfg)
 	if err != nil {
 		return nil, fmt.Errorf("probe client: %w", err)
@@ -145,6 +165,7 @@ func newCluster(id string, cfg *rest.Config, log *slog.Logger) (*Cluster, error)
 	return &Cluster{
 		id:         id,
 		log:        log,
+		timing:     timing,
 		disc:       disc,
 		probe:      probe,
 		meta:       meta,
@@ -211,7 +232,7 @@ func (c *Cluster) setStatus(s protocol.ClusterStatus) {
 }
 
 func (c *Cluster) run(ctx context.Context) {
-	for delay := retryMin; ; delay = min(delay*2, retryMax) {
+	for delay := c.timing.RetryMin; ; delay = min(delay*2, c.timing.RetryMax) {
 		err := c.connect(ctx)
 		if err == nil {
 			break
@@ -228,32 +249,46 @@ func (c *Cluster) run(ctx context.Context) {
 		}
 	}
 
-	ticker := time.NewTicker(discoveryPeriod)
+	// Probe health separately, so a slow discovery cannot delay noticing an
+	// outage.
+	go c.watchHealth(ctx)
+
+	ticker := time.NewTicker(c.timing.DiscoveryPeriod)
 	defer ticker.Stop()
-	health := time.NewTicker(healthPeriod)
-	defer health.Stop()
 	for {
+		periodic := false
 		select {
 		case <-ctx.Done():
 			return
-		case <-health.C:
-			c.checkHealth()
-			continue
 		case <-c.rediscover:
 			// Let a burst of CRD or APIService changes settle first.
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(discoveryDelay):
+			case <-time.After(c.timing.DiscoveryDelay):
 			}
 			select {
 			case <-c.rediscover:
 			default:
 			}
 		case <-ticker.C:
+			periodic = true
 		}
-		if err := c.discover(ctx); err != nil {
+		if err := c.discover(ctx, periodic); err != nil {
 			c.log.Warn("discovery failed", "err", err)
+		}
+	}
+}
+
+func (c *Cluster) watchHealth(ctx context.Context) {
+	ticker := time.NewTicker(c.timing.HealthPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.checkHealth()
 		}
 	}
 }
@@ -281,7 +316,7 @@ func (c *Cluster) connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server version: %w", err)
 	}
-	if err := c.discover(ctx); err != nil {
+	if err := c.discover(ctx, false); err != nil {
 		return err
 	}
 	c.setStatus(protocol.ClusterStatus{Phase: protocol.ClusterPhaseReady, ServerVersion: version.GitVersion})
@@ -289,8 +324,11 @@ func (c *Cluster) connect(ctx context.Context) error {
 }
 
 // discover reconciles the indexed types with the Cluster's API discovery,
-// starting and stopping a watch per type.
-func (c *Cluster) discover(ctx context.Context) error {
+// starting and stopping a watch per type. retryRefused also restarts types the
+// Cluster refused to serve, in case permissions or the API changed since. Only
+// the periodic refresh sets it, so bursts of CRD changes do not re-list every
+// refused type each time.
+func (c *Cluster) discover(ctx context.Context, retryRefused bool) error {
 	lists, err := c.disc.ServerPreferredResources()
 	var failedGroups map[schema.GroupVersion]error
 	if err != nil {
@@ -347,10 +385,10 @@ func (c *Cluster) discover(ctx context.Context) error {
 			delete(c.types, key)
 			c.Index.RemoveType(key)
 		case want.gvr != current.gvr,
-			current.info.State == protocol.TypeStateForbidden,
-			current.info.State == protocol.TypeStateFailed:
-			// Re-watch when the preferred version changed, and retry types the
-			// Cluster refused, in case permissions or the API changed since.
+			retryRefused && current.info.State == protocol.TypeStateForbidden,
+			retryRefused && current.info.State == protocol.TypeStateFailed:
+			// Re-watch when the preferred version changed, or retry a refused
+			// type.
 			current.cancel()
 			c.Index.RemoveType(key)
 			c.types[key] = want

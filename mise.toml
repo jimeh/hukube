@@ -73,7 +73,7 @@ coproc ENGINE {
   # Its own data dir: Engines cache settings in memory, so two sharing one
   # would overwrite each other's saved layouts.
   HUKUBE_TOKEN="$token" exec engine/bin/hukube-engine --listen 127.0.0.1:0 \
-    --allow-host "$host" --data-dir .data/engine-tailnet
+    --allow-host "$host" --allow-host "$ip" --data-dir .data/engine-tailnet
 }
 engine_pid=$ENGINE_PID
 trap 'kill "$engine_pid" 2>/dev/null || true' EXIT

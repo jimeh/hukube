@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"slices"
 	"sync"
 
 	"github.com/jimeh/hukube/engine/internal/cluster"
@@ -48,10 +49,13 @@ func (o *outbox) error(id uint64, err error) {
 	o.push(protocol.ServerMessage{ID: id, Type: protocol.ServerTypeError, Error: toProtocolError(err)})
 }
 
-// drop discards pending data for a cancelled subscription.
+// drop discards pending data for a subscription.
 func (o *outbox) drop(id uint64) {
 	o.mu.Lock()
-	delete(o.pending, id)
+	if _, ok := o.pending[id]; ok {
+		delete(o.pending, id)
+		o.order = slices.DeleteFunc(o.order, func(other uint64) bool { return other == id })
+	}
 	o.mu.Unlock()
 }
 

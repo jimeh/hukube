@@ -317,12 +317,15 @@ func TestRejectsRequestsForNonLoopbackHosts(t *testing.T) {
 		}
 	}
 
-	allowed := New(Config{Token: testToken, AllowedHosts: []string{"hukube.example.com"}, Log: slog.New(slog.DiscardHandler)})
-	req := httptest.NewRequest(http.MethodGet, "http://hukube.example.com:5173/healthz", nil)
-	rec := httptest.NewRecorder()
-	allowed.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("allowed host: status %d, want 200", rec.Code)
+	// Hostnames are case-insensitive, in the allow list and in requests.
+	allowed := New(Config{Token: testToken, AllowedHosts: []string{"Hukube.Example.com"}, Log: slog.New(slog.DiscardHandler)})
+	for _, host := range []string{"hukube.example.com:5173", "HUKUBE.example.com:5173"} {
+		req := httptest.NewRequest(http.MethodGet, "http://"+host+"/healthz", nil)
+		rec := httptest.NewRecorder()
+		allowed.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("allowed host %s: status %d, want 200", host, rec.Code)
+		}
 	}
 }
 
@@ -339,5 +342,17 @@ func TestOutboxErrorSupersedesPendingData(t *testing.T) {
 	}
 	if want := "5:error"; strings.Join(got, " ") != want {
 		t.Errorf("take() = %v, want %s", got, want)
+	}
+
+	// Data recovered after the error, before the next write, is sent once.
+	o.latest(protocol.ServerMessage{ID: 5, Type: protocol.ServerTypeData, Data: "stale"})
+	o.error(5, errors.New("watch failed"))
+	o.latest(protocol.ServerMessage{ID: 5, Type: protocol.ServerTypeData, Data: "recovered"})
+	got = got[:0]
+	for _, m := range o.take() {
+		got = append(got, fmt.Sprintf("%d:%s:%v", m.ID, m.Type, m.Data))
+	}
+	if want := "5:error:<nil> 5:data:recovered"; strings.Join(got, " ") != want {
+		t.Errorf("take() after recovery = %v, want %s", got, want)
 	}
 }

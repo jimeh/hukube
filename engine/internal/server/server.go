@@ -54,6 +54,11 @@ func New(cfg Config) *Server {
 	if cfg.Token == "" {
 		panic("server: empty token")
 	}
+	hosts := make([]string, len(cfg.AllowedHosts))
+	for i, host := range cfg.AllowedHosts {
+		hosts[i] = strings.ToLower(host)
+	}
+	cfg.AllowedHosts = hosts
 	return &Server{cfg: cfg}
 }
 

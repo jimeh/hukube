@@ -31,10 +31,15 @@ import (
 var cfg *rest.Config
 
 func TestMain(m *testing.M) {
-	discoveryDelay = 100 * time.Millisecond
-	discoveryPeriod = time.Second
-	objectRetry = 100 * time.Millisecond
 	os.Exit(testenv.Run(m, &cfg))
+}
+
+// testTiming shortens delays that tests wait on.
+func testTiming() Timing {
+	t := DefaultTiming
+	t.DiscoveryDelay = 100 * time.Millisecond
+	t.ObjectRetry = 100 * time.Millisecond
+	return t
 }
 
 const waitTimeout = 30 * time.Second
@@ -58,15 +63,15 @@ func eventually(t *testing.T, cond func() (bool, string)) {
 
 func connect(t *testing.T) *Cluster {
 	t.Helper()
-	return connectAs(t, cfg)
+	return connectAs(t, cfg, testTiming())
 }
 
 // connectAs connects to the API server at restCfg and waits until ready.
-func connectAs(t *testing.T, restCfg *rest.Config) *Cluster {
+func connectAs(t *testing.T, restCfg *rest.Config, timing Timing) *Cluster {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m := NewManager(ctx, testenv.Source{Config: restCfg}, slog.New(slog.DiscardHandler))
+	m := NewManagerWithTiming(ctx, testenv.Source{Config: restCfg}, slog.New(slog.DiscardHandler), timing)
 	c, err := m.Get(testenv.ClusterID)
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +246,10 @@ func TestWatchObjectFollowsOneResource(t *testing.T) {
 // Types the Cluster refuses to list are marked forbidden instead of being
 // retried forever, and are indexed once access is granted.
 func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
-	c := connectAs(t, testenv.User(t, "limited"))
+	// Refused types are retried by the periodic refresh only.
+	timing := testTiming()
+	timing.DiscoveryPeriod = time.Second
+	c := connectAs(t, testenv.User(t, "limited"), timing)
 	eventually(t, func() (bool, string) {
 		rt, ok := typeState(c, "configmaps")
 		return ok && rt.State == protocol.TypeStateForbidden, fmt.Sprintf("%+v", rt)
@@ -283,9 +291,8 @@ func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
 // After the first connection, losing and regaining the API server shows in
 // the Cluster's status, so clients do not present stale lists as live.
 func TestStatusFollowsAPIServerReachability(t *testing.T) {
-	previous := healthPeriod
-	healthPeriod = 50 * time.Millisecond
-	t.Cleanup(func() { healthPeriod = previous })
+	timing := testTiming()
+	timing.HealthPeriod = 50 * time.Millisecond
 
 	var down atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +314,7 @@ func TestStatusFollowsAPIServerReachability(t *testing.T) {
 	}))
 	t.Cleanup(api.Close)
 
-	c := connectAs(t, &rest.Config{Host: api.URL})
+	c := connectAs(t, &rest.Config{Host: api.URL}, timing)
 	down.Store(true)
 	eventually(t, func() (bool, string) {
 		s := c.Status()
