@@ -41,6 +41,8 @@ var (
 	retryMax        = time.Minute
 	discoveryDelay  = 2 * time.Second
 	discoveryPeriod = 5 * time.Minute
+	healthPeriod    = 30 * time.Second
+	healthTimeout   = 10 * time.Second
 )
 
 // ErrUnknownType is returned for a TypeKey the Cluster does not serve.
@@ -87,8 +89,11 @@ type Cluster struct {
 	id   string
 	log  *slog.Logger
 	disc discovery.DiscoveryInterface
-	meta metadata.Interface
-	dyn  dynamic.Interface
+	// probe checks reachability with a short timeout; disc has none, because
+	// the clients sharing its configuration hold long-lived watches.
+	probe discovery.DiscoveryInterface
+	meta  metadata.Interface
+	dyn   dynamic.Interface
 
 	// Index holds metadata for every Resource of every indexed type.
 	Index *index.Store
@@ -101,7 +106,12 @@ type Cluster struct {
 	rediscover    chan struct{}
 }
 
+// indexedType is one generation of indexing for a Resource Type. Discovery
+// replaces the whole value when it restarts a type, so callbacks from an
+// older generation can tell they are stale by pointer identity.
 type indexedType struct {
+	// key never changes, so it may be read without holding Cluster.mu.
+	key    protocol.TypeKey
 	info   protocol.ResourceType
 	gvr    schema.GroupVersionResource
 	cancel context.CancelFunc
@@ -118,6 +128,12 @@ func newCluster(id string, cfg *rest.Config, log *slog.Logger) (*Cluster, error)
 	if err != nil {
 		return nil, fmt.Errorf("discovery client: %w", err)
 	}
+	probeCfg := rest.CopyConfig(cfg)
+	probeCfg.Timeout = healthTimeout
+	probe, err := discovery.NewDiscoveryClientForConfig(probeCfg)
+	if err != nil {
+		return nil, fmt.Errorf("probe client: %w", err)
+	}
 	meta, err := metadata.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("metadata client: %w", err)
@@ -130,6 +146,7 @@ func newCluster(id string, cfg *rest.Config, log *slog.Logger) (*Cluster, error)
 		id:         id,
 		log:        log,
 		disc:       disc,
+		probe:      probe,
 		meta:       meta,
 		dyn:        dyn,
 		Index:      index.New(),
@@ -174,14 +191,16 @@ func (c *Cluster) TypesChanged() (<-chan struct{}, func()) {
 	return c.typesChanged.Subscribe()
 }
 
-func (c *Cluster) lookup(key protocol.TypeKey) (*indexedType, error) {
+// resolve returns where a type is currently served. It copies the fields
+// because discovery updates them under c.mu.
+func (c *Cluster) resolve(key protocol.TypeKey) (gvr schema.GroupVersionResource, namespaced bool, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	t, ok := c.types[key]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownType, key)
+		return schema.GroupVersionResource{}, false, false
 	}
-	return t, nil
+	return t.gvr, t.info.Namespaced, true
 }
 
 func (c *Cluster) setStatus(s protocol.ClusterStatus) {
@@ -211,10 +230,15 @@ func (c *Cluster) run(ctx context.Context) {
 
 	ticker := time.NewTicker(discoveryPeriod)
 	defer ticker.Stop()
+	health := time.NewTicker(healthPeriod)
+	defer health.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-health.C:
+			c.checkHealth()
+			continue
 		case <-c.rediscover:
 			// Let a burst of CRD or APIService changes settle first.
 			select {
@@ -231,6 +255,24 @@ func (c *Cluster) run(ctx context.Context) {
 		if err := c.discover(ctx); err != nil {
 			c.log.Warn("discovery failed", "err", err)
 		}
+	}
+}
+
+// checkHealth reports losing and regaining the API server after the first
+// connection, so clients do not show stale lists as healthy.
+func (c *Cluster) checkHealth() {
+	version, err := c.probe.ServerVersion()
+	status := c.Status()
+	switch {
+	case err != nil && status.Phase == protocol.ClusterPhaseReady:
+		c.log.Warn("lost connection", "err", err)
+		c.setStatus(protocol.ClusterStatus{
+			Phase:         protocol.ClusterPhaseFailed,
+			Message:       "Lost connection: " + err.Error(),
+			ServerVersion: status.ServerVersion,
+		})
+	case err == nil && status.Phase != protocol.ClusterPhaseReady:
+		c.setStatus(protocol.ClusterStatus{Phase: protocol.ClusterPhaseReady, ServerVersion: version.GitVersion})
 	}
 }
 
@@ -276,6 +318,7 @@ func (c *Cluster) discover(ctx context.Context) error {
 				key = protocol.TypeKey(r.Name + "." + gv.Group)
 			}
 			desired[key] = &indexedType{
+				key: key,
 				gvr: gv.WithResource(r.Name),
 				info: protocol.ResourceType{
 					Key:        key,
@@ -303,8 +346,11 @@ func (c *Cluster) discover(ctx context.Context) error {
 			current.cancel()
 			delete(c.types, key)
 			c.Index.RemoveType(key)
-		case want.gvr != current.gvr:
-			// The preferred version changed, so re-watch at the new one.
+		case want.gvr != current.gvr,
+			current.info.State == protocol.TypeStateForbidden,
+			current.info.State == protocol.TypeStateFailed:
+			// Re-watch when the preferred version changed, and retry types the
+			// Cluster refused, in case permissions or the API changed since.
 			current.cancel()
 			c.Index.RemoveType(key)
 			c.types[key] = want
@@ -338,31 +384,31 @@ func withState(info protocol.ResourceType, state protocol.TypeState) protocol.Re
 func (c *Cluster) startType(ctx context.Context, t *indexedType) {
 	tctx, cancel := context.WithCancel(ctx)
 	t.cancel = cancel
-	key := t.info.Key
 	client := c.meta.Resource(t.gvr)
 
 	lw := &cache.ListWatch{
 		ListWithContextFunc: func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
 			list, err := client.List(ctx, opts)
-			c.checkTypeErr(key, err, cancel)
+			c.checkTypeErr(t, err)
 			return list, err
 		},
 		WatchFuncWithContext: func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 			w, err := client.Watch(ctx, opts)
-			c.checkTypeErr(key, err, cancel)
+			c.checkTypeErr(t, err)
 			return w, err
 		},
 	}
-	store := &typeStore{cluster: c, key: key}
+	store := &typeStore{cluster: c, t: t}
 	reflector := cache.NewReflectorWithOptions(lw, &metav1.PartialObjectMetadata{}, store, cache.ReflectorOptions{
-		Name: c.id + "/" + string(key),
+		Name: c.id + "/" + string(t.key),
 	})
 	go reflector.RunWithContext(tctx)
 }
 
 // checkTypeErr stops indexing a type when the Cluster will keep refusing to
-// serve it, instead of letting the reflector retry forever.
-func (c *Cluster) checkTypeErr(key protocol.TypeKey, err error, cancel context.CancelFunc) {
+// serve it, instead of letting the reflector retry forever. Discovery retries
+// it later.
+func (c *Cluster) checkTypeErr(t *indexedType, err error) {
 	var state protocol.TypeState
 	switch {
 	case err == nil:
@@ -374,14 +420,13 @@ func (c *Cluster) checkTypeErr(key protocol.TypeKey, err error, cancel context.C
 	default:
 		return
 	}
-	cancel()
-	c.setTypeState(key, state)
+	t.cancel()
+	c.setTypeState(t, state)
 }
 
-func (c *Cluster) setTypeState(key protocol.TypeKey, state protocol.TypeState) {
+func (c *Cluster) setTypeState(t *indexedType, state protocol.TypeState) {
 	c.mu.Lock()
-	t, ok := c.types[key]
-	changed := ok && t.info.State != state
+	changed := c.types[t.key] == t && t.info.State != state
 	if changed {
 		t.info.State = state
 	}
@@ -391,27 +436,38 @@ func (c *Cluster) setTypeState(key protocol.TypeKey, state protocol.TypeState) {
 	}
 }
 
-// record passes observed Changes through the Engine's single Change pipeline.
-func (c *Cluster) record(changes []index.Change, fromWatch bool) {
-	c.Index.Apply(changes)
-	if !fromWatch {
-		return
+// record passes observed Changes from one generation of a type through the
+// Engine's single Change pipeline. Changes from a generation that discovery
+// has since replaced or removed are dropped, so a stopping reflector cannot
+// repopulate the index. Changes to CRDs or APIServices request rediscovery
+// when mayRediscover is set. It reports whether the changes were applied.
+func (c *Cluster) record(t *indexedType, mayRediscover bool, changes func() []index.Change) bool {
+	c.mu.Lock()
+	if c.types[t.key] != t {
+		c.mu.Unlock()
+		return false
 	}
-	for _, ch := range changes {
-		if ch.Type == crdType || ch.Type == apiServiceType {
-			select {
-			case c.rediscover <- struct{}{}:
-			default:
-			}
-			return
+	applied := changes()
+	c.Index.Apply(applied)
+	c.mu.Unlock()
+
+	if mayRediscover && len(applied) > 0 && (t.key == crdType || t.key == apiServiceType) {
+		select {
+		case c.rediscover <- struct{}{}:
+		default:
 		}
 	}
+	return true
 }
 
-// typeStore receives one type's metadata from its reflector.
+// typeStore receives one generation of a type's metadata from its reflector.
+// The reflector calls it from a single goroutine.
 type typeStore struct {
 	cluster *Cluster
-	key     protocol.TypeKey
+	t       *indexedType
+	// synced is set after the first relist, whose additions describe the
+	// Cluster's existing state rather than changes to it.
+	synced bool
 }
 
 func (s *typeStore) Add(obj any) error    { return s.change(index.Added, obj) }
@@ -428,7 +484,9 @@ func (s *typeStore) change(kind index.ChangeKind, obj any) error {
 	if err != nil {
 		return err
 	}
-	s.cluster.record([]index.Change{{Kind: kind, Type: s.key, Meta: m, Time: time.Now()}}, true)
+	s.cluster.record(s.t, true, func() []index.Change {
+		return []index.Change{{Kind: kind, Type: s.t.key, Meta: m, Time: time.Now()}}
+	})
 	return nil
 }
 
@@ -441,8 +499,16 @@ func (s *typeStore) Replace(objs []any, _ string) error {
 		}
 		metas = append(metas, m)
 	}
-	s.cluster.record(s.cluster.Index.Diff(s.key, metas, time.Now()), false)
-	s.cluster.setTypeState(s.key, protocol.TypeStateReady)
+	// Later relists also recover changes missed while the watch was down, so
+	// they may change the set of Resource Types. The first only loads what
+	// already exists.
+	applied := s.cluster.record(s.t, s.synced, func() []index.Change {
+		return s.cluster.Index.Diff(s.t.key, metas, time.Now())
+	})
+	s.synced = true
+	if applied {
+		s.cluster.setTypeState(s.t, protocol.TypeStateReady)
+	}
 	return nil
 }
 

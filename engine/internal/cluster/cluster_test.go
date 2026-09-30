@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +32,7 @@ var cfg *rest.Config
 
 func TestMain(m *testing.M) {
 	discoveryDelay = 100 * time.Millisecond
+	discoveryPeriod = time.Second
 	objectRetry = 100 * time.Millisecond
 	os.Exit(testenv.Run(m, &cfg))
 }
@@ -52,9 +58,15 @@ func eventually(t *testing.T, cond func() (bool, string)) {
 
 func connect(t *testing.T) *Cluster {
 	t.Helper()
+	return connectAs(t, cfg)
+}
+
+// connectAs connects to the API server at restCfg and waits until ready.
+func connectAs(t *testing.T, restCfg *rest.Config) *Cluster {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m := NewManager(ctx, testenv.Source{Config: cfg}, slog.New(slog.DiscardHandler))
+	m := NewManager(ctx, testenv.Source{Config: restCfg}, slog.New(slog.DiscardHandler))
 	c, err := m.Get(testenv.ClusterID)
 	if err != nil {
 		t.Fatal(err)
@@ -182,10 +194,7 @@ func TestWatchObjectFollowsOneResource(t *testing.T) {
 
 	emits := make(chan protocol.ResourceData, 16)
 	ref := protocol.ResourceRef{Cluster: testenv.ClusterID, Type: "configmaps", Namespace: ns, Name: "watched"}
-	err := c.WatchObject(ctx, ref, func(d protocol.ResourceData) { emits <- d }, func(err error) { t.Log("watch error:", err) })
-	if err != nil {
-		t.Fatal(err)
-	}
+	c.WatchObject(ctx, ref, func(d protocol.ResourceData) { emits <- d }, func(err error) { t.Log("watch error:", err) })
 
 	next := func(want string, match func(protocol.ResourceData) bool) {
 		t.Helper()
@@ -227,6 +236,88 @@ func TestWatchObjectFollowsOneResource(t *testing.T) {
 		t.Fatal(err)
 	}
 	next("deletion", func(d protocol.ResourceData) bool { return d.Deleted })
+}
+
+// Types the Cluster refuses to list are marked forbidden instead of being
+// retried forever, and are indexed once access is granted.
+func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
+	c := connectAs(t, testenv.User(t, "limited"))
+	eventually(t, func() (bool, string) {
+		rt, ok := typeState(c, "configmaps")
+		return ok && rt.State == protocol.TypeStateForbidden, fmt.Sprintf("%+v", rt)
+	})
+
+	ctx := context.Background()
+	rbac := kubernetes.NewForConfigOrDie(cfg).RbacV1()
+	role := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "read-configmaps"},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"list", "watch"},
+		}},
+	}
+	if _, err := rbac.ClusterRoles().Create(ctx, role, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "limited-read-configmaps"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: role.Name},
+		Subjects:   []rbacv1.Subject{{APIGroup: "rbac.authorization.k8s.io", Kind: "User", Name: "limited"}},
+	}
+	if _, err := rbac.ClusterRoleBindings().Create(ctx, binding, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = rbac.ClusterRoleBindings().Delete(context.Background(), binding.Name, metav1.DeleteOptions{})
+		_ = rbac.ClusterRoles().Delete(context.Background(), role.Name, metav1.DeleteOptions{})
+	})
+
+	eventually(t, func() (bool, string) {
+		rt, _ := typeState(c, "configmaps")
+		return rt.State == protocol.TypeStateReady && rt.Count > 0, fmt.Sprintf("%+v", rt)
+	})
+	if rt, _ := typeState(c, "secrets"); rt.State != protocol.TypeStateForbidden {
+		t.Errorf("secrets state = %q, want forbidden", rt.State)
+	}
+}
+
+// After the first connection, losing and regaining the API server shows in
+// the Cluster's status, so clients do not present stale lists as live.
+func TestStatusFollowsAPIServerReachability(t *testing.T) {
+	previous := healthPeriod
+	healthPeriod = 50 * time.Millisecond
+	t.Cleanup(func() { healthPeriod = previous })
+
+	var down atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/version":
+			_, _ = w.Write([]byte(`{"gitVersion":"v1.99.0"}`))
+		case "/api":
+			_, _ = w.Write([]byte(`{"kind":"APIVersions","versions":[]}`))
+		case "/apis":
+			_, _ = w.Write([]byte(`{"kind":"APIGroupList","apiVersion":"v1","groups":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+
+	c := connectAs(t, &rest.Config{Host: api.URL})
+	down.Store(true)
+	eventually(t, func() (bool, string) {
+		s := c.Status()
+		return s.Phase == protocol.ClusterPhaseFailed && strings.HasPrefix(s.Message, "Lost connection"), fmt.Sprintf("%+v", s)
+	})
+	down.Store(false)
+	eventually(t, func() (bool, string) {
+		s := c.Status()
+		return s.Phase == protocol.ClusterPhaseReady && s.ServerVersion == "v1.99.0", fmt.Sprintf("%+v", s)
+	})
 }
 
 func ptr[T any](v T) *T { return &v }

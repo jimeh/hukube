@@ -102,7 +102,7 @@ var topics = map[protocol.Method]topic{
 			lastErr error
 		)
 		wctx, cancel := context.WithCancel(ctx)
-		err = c.WatchObject(wctx, p,
+		c.WatchObject(wctx, p,
 			func(d protocol.ResourceData) {
 				mu.Lock()
 				latest, lastErr = &d, nil
@@ -116,10 +116,6 @@ var topics = map[protocol.Method]topic{
 				notify()
 			},
 		)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
 		return &liveValue{
 			compute: func() (any, error) {
 				mu.Lock()

@@ -16,36 +16,69 @@ import (
 	"github.com/jimeh/hukube/engine/internal/protocol"
 )
 
-// objectRetry is how long WatchObject waits before re-listing after an error.
+// objectRetry is how long WatchObject waits before retrying after an error,
+// or after a watch that ended almost as soon as it started.
 var objectRetry = 2 * time.Second
 
 // WatchObject calls emit with the full Manifest of one Resource, and again
 // whenever it changes, until ctx ends. A Resource that does not exist, or is
 // deleted, is emitted as Deleted, and emitted again if it is created later.
-// Errors from the Cluster are passed to onErr and retried.
-func (c *Cluster) WatchObject(ctx context.Context, ref protocol.ResourceRef, emit func(protocol.ResourceData), onErr func(error)) error {
-	t, err := c.lookup(ref.Type)
-	if err != nil {
-		return err
-	}
-	var client dynamic.ResourceInterface = c.dyn.Resource(t.gvr)
-	if t.info.Namespaced {
-		client = c.dyn.Resource(t.gvr).Namespace(ref.Namespace)
-	}
+//
+// It waits for the Resource Type to be discovered, so subscriptions made
+// while the Cluster is still connecting succeed, and it re-resolves the type
+// on every retry, so it follows a change of preferred API version. Errors,
+// including a type the connected Cluster does not serve, are passed to onErr
+// and retried.
+func (c *Cluster) WatchObject(ctx context.Context, ref protocol.ResourceRef, emit func(protocol.ResourceData), onErr func(error)) {
 	selector := fields.OneTermEqualSelector("metadata.name", ref.Name).String()
-
 	go func() {
 		for ctx.Err() == nil {
-			if err := watchObjectOnce(ctx, client, selector, emit); err != nil && ctx.Err() == nil {
+			client, err := c.objectClient(ctx, ref, onErr)
+			if err != nil {
+				return
+			}
+			started := time.Now()
+			err = watchObjectOnce(ctx, client, selector, emit)
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
 				onErr(err)
-				select {
-				case <-ctx.Done():
-				case <-time.After(objectRetry):
-				}
+			} else if time.Since(started) >= objectRetry {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(objectRetry):
 			}
 		}
 	}()
-	return nil
+}
+
+// objectClient waits until ref's type is discovered and returns a client for
+// it. Once the Cluster is ready, a type it does not serve is reported through
+// onErr while waiting for it to appear. It returns an error only when ctx ends.
+func (c *Cluster) objectClient(ctx context.Context, ref protocol.ResourceRef, onErr func(error)) (dynamic.ResourceInterface, error) {
+	changed, stop := c.typesChanged.Subscribe()
+	defer stop()
+	reported := false
+	for {
+		if gvr, namespaced, ok := c.resolve(ref.Type); ok {
+			if namespaced {
+				return c.dyn.Resource(gvr).Namespace(ref.Namespace), nil
+			}
+			return c.dyn.Resource(gvr), nil
+		}
+		if !reported && c.Status().Phase == protocol.ClusterPhaseReady {
+			onErr(fmt.Errorf("%w: %q", ErrUnknownType, ref.Type))
+			reported = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-changed:
+		}
+	}
 }
 
 // watchObjectOnce lists the object, emits it, then follows its watch until the

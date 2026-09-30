@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,10 @@ type Config struct {
 	// AllowedOrigins lists exact browser origins, such as a dev server or the
 	// desktop Host's app origin, allowed in addition to same-origin pages.
 	AllowedOrigins []string
+	// AllowedHosts lists hostnames, besides loopback names, that requests may
+	// address, such as a dev server's tailnet name. Checking the Host header
+	// stops DNS-rebinding pages from passing as same-origin.
+	AllowedHosts []string
 	// UIDir, when set, is a built UI bundle served at the root (web Host).
 	UIDir string
 
@@ -62,7 +67,26 @@ func (s *Server) Handler() http.Handler {
 	if s.cfg.UIDir != "" {
 		mux.Handle("GET /", spaHandler(s.cfg.UIDir))
 	}
-	return mux
+	return s.requireKnownHost(mux)
+}
+
+// requireKnownHost refuses requests addressed to a hostname other than a
+// loopback name or a configured host. A DNS-rebinding page sends its own name
+// in both Host and Origin, so the Origin check alone would accept it.
+func (s *Server) requireKnownHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		host = strings.ToLower(strings.Trim(host, "[]"))
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) && !slices.Contains(s.cfg.AllowedHosts, host) {
+			http.Error(w, "host not allowed", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -275,5 +276,68 @@ func TestOutboxKeepsOnlyLatestSubscriptionData(t *testing.T) {
 	}
 	if rest := o.take(); len(rest) != 0 {
 		t.Errorf("second take() = %v, want empty", rest)
+	}
+}
+
+// A restored Resource tab subscribes before its Cluster has finished
+// discovery; the subscription must deliver the Resource once the type is
+// known instead of failing for good.
+func TestResourceGetWaitsForDiscovery(t *testing.T) {
+	c := mustDial(t, newTestServer(t))
+	ref := protocol.ResourceRef{Cluster: testenv.ClusterID, Type: "namespaces", Name: "default"}
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourceGet, Params: params(ref)})
+	c.await(1, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		var d protocol.ResourceData
+		_ = json.Unmarshal(data, &d)
+		return m.Type == protocol.ServerTypeData && len(d.Object) > 0
+	})
+}
+
+// A page served from another hostname that resolves to loopback (DNS
+// rebinding) sends matching Host and Origin headers; the Engine must still
+// refuse it.
+func TestRejectsRequestsForNonLoopbackHosts(t *testing.T) {
+	srv := New(Config{Token: testToken, Log: slog.New(slog.DiscardHandler)})
+	tests := []struct {
+		host string
+		want int
+	}{
+		{"attacker.example:7443", http.StatusForbidden},
+		{"127.0.0.1:7443", http.StatusOK},
+		{"localhost:7443", http.StatusOK},
+		{"[::1]:7443", http.StatusOK},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/healthz", nil)
+		req.Header.Set("Origin", "http://"+tt.host)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != tt.want {
+			t.Errorf("Host %s: status %d, want %d", tt.host, rec.Code, tt.want)
+		}
+	}
+
+	allowed := New(Config{Token: testToken, AllowedHosts: []string{"hukube.example.com"}, Log: slog.New(slog.DiscardHandler)})
+	req := httptest.NewRequest(http.MethodGet, "http://hukube.example.com:5173/healthz", nil)
+	rec := httptest.NewRecorder()
+	allowed.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("allowed host: status %d, want 200", rec.Code)
+	}
+}
+
+// An error is newer than any data still waiting to be written for the same
+// subscription, so the client must not receive that older data after it.
+func TestOutboxErrorSupersedesPendingData(t *testing.T) {
+	o := newOutbox()
+	o.latest(protocol.ServerMessage{ID: 5, Type: protocol.ServerTypeData, Data: "stale"})
+	o.error(5, errors.New("watch failed"))
+
+	var got []string
+	for _, m := range o.take() {
+		got = append(got, fmt.Sprintf("%d:%s", m.ID, m.Type))
+	}
+	if want := "5:error"; strings.Join(got, " ") != want {
+		t.Errorf("take() = %v, want %s", got, want)
 	}
 }

@@ -17,6 +17,9 @@ import (
 // ClusterID is the ID of the single Cluster served by Source.
 const ClusterID = "envtest"
 
+// env is the running environment, set by Run.
+var env *envtest.Environment
+
 // Run starts an API server, stores its config in *cfg, runs the package's
 // tests, and stops the server. Without KUBEBUILDER_ASSETS it skips the
 // package's tests locally but fails in CI, so a misconfigured pipeline cannot
@@ -31,7 +34,7 @@ func Run(m *testing.M, cfg **rest.Config) int {
 		return 0
 	}
 
-	env := &envtest.Environment{}
+	env = &envtest.Environment{}
 	c, err := env.Start()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "start envtest:", err)
@@ -43,6 +46,17 @@ func Run(m *testing.M, cfg **rest.Config) int {
 		fmt.Fprintln(os.Stderr, "stop envtest:", err)
 	}
 	return code
+}
+
+// User returns client configuration for a new user with no RBAC permissions
+// beyond what Kubernetes grants every authenticated user.
+func User(t *testing.T, name string) *rest.Config {
+	t.Helper()
+	user, err := env.AddUser(envtest.User{Name: name}, nil)
+	if err != nil {
+		t.Fatalf("add user %q: %v", name, err)
+	}
+	return user.Config()
 }
 
 // Source serves one Cluster, ClusterID, backed by cfg.

@@ -38,6 +38,7 @@ type options struct {
 	listen           string
 	token            string
 	allowOrigins     stringList
+	allowHosts       stringList
 	web              bool
 	uiDir            string
 	kubeconfig       string
@@ -58,6 +59,7 @@ func run() error {
 	flag.StringVar(&o.listen, "listen", "127.0.0.1:0", "loopback `address` to listen on; port 0 picks a free port")
 	flag.StringVar(&o.token, "token", os.Getenv("HUKUBE_TOKEN"), "token clients must present (default $HUKUBE_TOKEN, or random)")
 	flag.Var(&o.allowOrigins, "allow-origin", "additional browser `origin` allowed to connect (repeatable)")
+	flag.Var(&o.allowHosts, "allow-host", "additional `hostname` requests may address, besides loopback names (repeatable)")
 	flag.BoolVar(&o.web, "web", false, "serve the UI from --ui-dir and print a URL to open it")
 	flag.StringVar(&o.uiDir, "ui-dir", "", "`directory` of the built UI bundle, served when --web is set")
 	flag.StringVar(&o.kubeconfig, "kubeconfig", "", "kubeconfig `path` (default $KUBECONFIG or ~/.kube/config)")
@@ -117,6 +119,7 @@ func run() error {
 	srv := server.New(server.Config{
 		Token:          o.token,
 		AllowedOrigins: o.allowOrigins,
+		AllowedHosts:   o.allowHosts,
 		UIDir:          uiDir,
 		Source:         source,
 		Clusters:       cluster.NewManager(ctx, source, log),
