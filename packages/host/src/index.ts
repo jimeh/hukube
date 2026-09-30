@@ -41,11 +41,12 @@ export function createDesktopHost(bridge: DesktopBridge): Host {
 const tokenKey = "hukube.engineToken";
 
 /**
- * A Host for browsers. The Engine serves the UI, or runs at engineUrl during
- * development, and hands out its token in the URL fragment (`#token=...`),
- * which is moved to session storage and removed from the address bar.
+ * A Host for browsers. The Engine is reached on the page's own origin, served
+ * by the Engine itself or proxied by the dev server. Its token arrives in the
+ * URL fragment (`#token=...`), which is moved to session storage and removed
+ * from the address bar.
  */
-export function createBrowserHost(options: { engineUrl?: string } = {}): Host {
+export function createBrowserHost(): Host {
   const fragment = new URLSearchParams(window.location.hash.slice(1));
   const fromUrl = fragment.get("token");
   if (fromUrl) {
@@ -59,7 +60,7 @@ export function createBrowserHost(options: { engineUrl?: string } = {}): Host {
     );
   }
   const token = sessionStorage.getItem(tokenKey);
-  const url = options.engineUrl ?? window.location.origin;
+  const url = window.location.origin;
 
   return {
     kind: "web",
@@ -83,8 +84,6 @@ export function createBrowserHost(options: { engineUrl?: string } = {}): Host {
 }
 
 /** Returns the desktop Host when running inside the desktop app, else the browser Host. */
-export function detectHost(options: { engineUrl?: string } = {}): Host {
-  return window.hukubeDesktop
-    ? createDesktopHost(window.hukubeDesktop)
-    : createBrowserHost(options);
+export function detectHost(): Host {
+  return window.hukubeDesktop ? createDesktopHost(window.hukubeDesktop) : createBrowserHost();
 }

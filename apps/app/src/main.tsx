@@ -22,7 +22,7 @@ declare module "@tanstack/react-router" {
 
 applyStoredTheme();
 const root = createRoot(document.getElementById("root")!);
-const host = detectHost({ engineUrl: import.meta.env.VITE_ENGINE_URL });
+const host = detectHost();
 
 host.engine().then(
   (endpoint) => {

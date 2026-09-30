@@ -39,7 +39,7 @@ run = "go build -o bin/hukube-engine ./cmd/hukube-engine"
 [tasks."dev:engine"]
 description = "Run the Engine for UI development against the Vite dev server"
 depends = ["build:engine"]
-run = "engine/bin/hukube-engine --listen 127.0.0.1:7443 --token dev --allow-origin http://localhost:5173 --data-dir .data/engine"
+run = "engine/bin/hukube-engine --listen 127.0.0.1:7443 --token dev --data-dir .data/engine"
 
 [tasks."dev:ui"]
 description = "Run the UI dev server (open http://localhost:5173/#token=dev)"
@@ -49,6 +49,40 @@ run = "bun run dev"
 [tasks.dev]
 description = "Run the Engine and the UI dev server for the web Host"
 depends = ["dev:engine", "dev:ui"]
+
+[tasks."dev:tailnet"]
+description = "Run the web Host for other devices on your tailnet, over plain HTTP on the Tailscale IP"
+depends = ["build:engine"]
+# The Engine stays on loopback, on a free port so this can run alongside
+# `mise run dev`; Vite binds only to the Tailscale IP and proxies the control
+# socket to it. Set HUKUBE_TAILNET_HOST (for example in mise.local.toml) to use
+# a hostname other than this node's MagicDNS name.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+ip="${HUKUBE_TAILNET_IP:-$(tailscale ip -4 | head -n1)}"
+host="${HUKUBE_TAILNET_HOST:-$(tailscale status --json | bun -e \
+  'console.log(JSON.parse(await Bun.stdin.text()).Self.DNSName.replace(/\.$/, ""))')}"
+# A fresh token per run: anyone on the tailnet with the URL gets the
+# Engine's cluster access.
+token="$(openssl rand -hex 24)"
+
+coproc ENGINE {
+  HUKUBE_TOKEN="$token" exec engine/bin/hukube-engine --listen 127.0.0.1:0 --data-dir .data/engine
+}
+engine_pid=$ENGINE_PID
+trap 'kill "$engine_pid" 2>/dev/null || true' EXIT
+# The Engine prints one JSON line with its URL once it listens.
+if ! read -r ready <&"${ENGINE[0]}"; then
+  echo "The Engine failed to start." >&2
+  exit 1
+fi
+engine_url="$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' <<<"$ready")"
+
+echo "hukube on your tailnet: http://${host}:5173/#token=${token}"
+cd apps/app
+HUKUBE_ENGINE_URL="$engine_url" HUKUBE_DEV_ALLOWED_HOSTS="$host" bunx vite --host "$ip"
+'''
 
 [tasks."dev:desktop:electron"]
 description = "Run Electron against the UI dev server once it is up"

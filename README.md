@@ -40,6 +40,23 @@ Run the web host against your kubeconfig, then open
 mise run dev
 ```
 
+Share the web host with other devices on your Tailscale network. The task
+binds the dev server to this node's Tailscale IP only, keeps the Engine on
+loopback, and prints a URL with a fresh Engine token:
+
+```sh
+mise run dev:tailnet  # → http://<node>.<tailnet>.ts.net:5173/#token=...
+```
+
+It serves plain HTTP, which Tailscale encrypts in transit. To use another
+hostname that resolves to the Tailscale IP, set it in an ignored
+`mise.local.toml`:
+
+```toml
+[env]
+HUKUBE_TAILNET_HOST = "hukube.example.com"
+```
+
 Run the desktop host:
 
 ```sh

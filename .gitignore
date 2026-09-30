@@ -7,3 +7,4 @@ engine/bin/
 test-results/
 playwright-report/
 .DS_Store
+mise.local.toml
