@@ -138,7 +138,8 @@ func fieldGetter(f protocol.Field) (func(protocol.TypeKey, index.Meta) string, e
 }
 
 // Types returns the Resource Types the query can match, or nil when it can
-// match any type.
+// match any type. It is empty but not nil when the query can match no type,
+// such as "type in []".
 func (q *Compiled) Types() []protocol.TypeKey { return slices.Clone(q.types) }
 
 // scanTypes returns the types an expression can match when it constrains the

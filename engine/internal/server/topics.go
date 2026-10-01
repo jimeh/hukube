@@ -181,9 +181,16 @@ func allChanges(c *cluster.Cluster) func() (<-chan struct{}, func()) {
 	return func() (<-chan struct{}, func()) { return c.Index.Changed() }
 }
 
-// queryChanges subscribes to changes of the types a Query can match.
+// queryChanges subscribes to changes of the types a Query can match. A Query
+// that can match no type never changes.
 func queryChanges(store *index.Store, q *query.Compiled) func() (<-chan struct{}, func()) {
-	return func() (<-chan struct{}, func()) { return store.Changed(q.Types()...) }
+	return func() (<-chan struct{}, func()) {
+		types := q.Types()
+		if types != nil && len(types) == 0 {
+			return nil, func() {}
+		}
+		return store.Changed(types...)
+	}
 }
 
 func decode[P any](raw json.RawMessage) (P, error) {
