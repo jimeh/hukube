@@ -142,14 +142,16 @@ function serveUi() {
 
 /** Resolves an app path against the UI, or returns undefined if it leaves the UI's origin. */
 function appUrl(path: string): URL | undefined {
-  const url = new URL(path, devUiUrl ?? `${appOrigin}/`);
-  return originOf(url) === uiOrigin ? url : undefined;
+  // URL.parse returns null for malformed input instead of throwing, so a bad
+  // string from a renderer cannot crash the main process.
+  const url = URL.parse(path, devUiUrl ?? `${appOrigin}/`);
+  return url && originOf(url) === uiOrigin ? url : undefined;
 }
 
 /** Whether an IPC message came from the app's own UI, not another page. */
 function fromUi(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
-  const frameUrl = event.senderFrame?.url;
-  return frameUrl ? originOf(new URL(frameUrl)) === uiOrigin : false;
+  const frameUrl = URL.parse(event.senderFrame?.url ?? "");
+  return frameUrl ? originOf(frameUrl) === uiOrigin : false;
 }
 
 function createWindow(url: URL = appUrl("/")!) {
@@ -170,14 +172,17 @@ function createWindow(url: URL = appUrl("/")!) {
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (event, destination) => {
-    if (originOf(new URL(destination)) !== uiOrigin) event.preventDefault();
+    const target = URL.parse(destination);
+    if (!target || originOf(target) !== uiOrigin) event.preventDefault();
   });
   void win.loadURL(url.href);
 }
 
 function openExternal(url: string) {
-  const { protocol: scheme } = new URL(url);
-  if (scheme === "https:" || scheme === "http:") void shell.openExternal(url);
+  const parsed = URL.parse(url);
+  if (parsed?.protocol === "https:" || parsed?.protocol === "http:") {
+    void shell.openExternal(parsed.href);
+  }
 }
 
 // Only the app's UI may learn the Engine's token or open windows.
