@@ -22,8 +22,9 @@ const defaultSaveDelayMs = 400;
  * persisting and writes any pending change instead of dropping it, so closing
  * a Cluster tab right after rearranging it keeps the new layout.
  *
- * Layouts are read once on open; changes made later by another window are not
- * applied live.
+ * Layouts are read once on open, and the last save wins: changes another
+ * client makes while this one is open are not applied here, and this
+ * client's next save replaces them (ADR-0009).
  */
 export function persistLayout(
   client: Pick<EngineClient, "subscribe" | "request">,

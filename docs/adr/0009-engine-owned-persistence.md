@@ -7,8 +7,13 @@ needs to open that Workspace, not move state between clients.
 
 ## Consequences
 
-- UI clients read and write this state through the protocol and receive
-  changes made by other clients, so two windows never overwrite each other
-  with stale copies.
+- Several clients can have the same Cluster open at once, such as desktop
+  windows and browser tabs on the web Host, so the Engine never assumes one
+  owner per Workspace.
+- For now, a Workspace layout is read when its Cluster opens and saved after
+  each change, and the last save wins. A client does not pick up layout
+  changes another client makes while both are open, and its next save
+  replaces them. Live syncing, or rejecting stale saves, can replace this
+  later without changing where the state lives.
 - Once the web Host has real authentication, stored state must be keyed per
   user.
