@@ -3,6 +3,8 @@
 package index
 
 import (
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -50,7 +52,7 @@ type Change struct {
 type Store struct {
 	mu      sync.RWMutex
 	types   map[protocol.TypeKey]map[string]Meta
-	changed notify.Signal
+	changed notify.Keyed[protocol.TypeKey]
 }
 
 // New returns an empty Store.
@@ -63,8 +65,10 @@ func (s *Store) Apply(changes []Change) {
 	if len(changes) == 0 {
 		return
 	}
+	touched := make(map[protocol.TypeKey]struct{})
 	s.mu.Lock()
 	for _, c := range changes {
+		touched[c.Type] = struct{}{}
 		metas := s.types[c.Type]
 		if metas == nil {
 			metas = make(map[string]Meta)
@@ -77,7 +81,7 @@ func (s *Store) Apply(changes []Change) {
 		}
 	}
 	s.mu.Unlock()
-	s.changed.Notify()
+	s.changed.Notify(slices.Collect(maps.Keys(touched))...)
 }
 
 // Diff returns the Changes that turn the stored Resources of a type into
@@ -124,7 +128,7 @@ func (s *Store) RemoveType(t protocol.TypeKey) {
 	delete(s.types, t)
 	s.mu.Unlock()
 	if existed {
-		s.changed.Notify()
+		s.changed.Notify(t)
 	}
 }
 
@@ -156,8 +160,10 @@ func (s *Store) Each(types []protocol.TypeKey, fn func(protocol.TypeKey, Meta)) 
 	}
 }
 
-// Changed returns a channel that receives a value after the Store changes,
-// with bursts coalesced, and a function that stops the subscription.
-func (s *Store) Changed() (<-chan struct{}, func()) {
-	return s.changed.Subscribe()
+// Changed returns a channel that receives a value after Resources of any of
+// the given types change, or after any change when no types are given, with
+// bursts coalesced, and a function that stops the subscription. The channel
+// is signalled before the method that made the change returns.
+func (s *Store) Changed(types ...protocol.TypeKey) (<-chan struct{}, func()) {
+	return s.changed.Subscribe(types...)
 }

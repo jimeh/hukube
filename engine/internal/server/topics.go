@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jimeh/hukube/engine/internal/cluster"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 	"github.com/jimeh/hukube/engine/internal/query"
 )
@@ -63,7 +64,7 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return c.Types(), nil },
-			stop:    forward(ctx, notify, c.TypesChanged, c.Index.Changed),
+			stop:    forward(ctx, notify, c.TypesChanged, allChanges(c)),
 		}, nil
 	},
 
@@ -82,7 +83,7 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return query.Run(c.Index, q, p.Sort, p.Offset, p.Limit), nil },
-			stop:    forward(ctx, notify, c.Index.Changed),
+			stop:    forward(ctx, notify, allChanges(c)),
 		}, nil
 	},
 
@@ -148,6 +149,11 @@ var topics = map[protocol.Method]topic{
 			stop: forward(ctx, notify, func() (<-chan struct{}, func()) { return srv.cfg.Settings.Watch(p.Key) }),
 		}, nil
 	},
+}
+
+// allChanges subscribes to changes of every type in a Cluster's index.
+func allChanges(c *cluster.Cluster) func() (<-chan struct{}, func()) {
+	return func() (<-chan struct{}, func()) { return c.Index.Changed() }
 }
 
 func decode[P any](raw json.RawMessage) (P, error) {
