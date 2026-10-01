@@ -7,6 +7,16 @@ export interface Scope {
   namespace?: string;
 }
 
+/** The Namespaces a palette knows of, and whether that is all of them. */
+export interface KnownNamespaces {
+  names: ReadonlySet<string>;
+  /**
+   * False when the list may be missing Namespaces, such as when it was cut
+   * off or the Namespaces cannot be listed. Prefixes are then not checked.
+   */
+  complete: boolean;
+}
+
 export type ParsedInput =
   | { kind: "ok"; scope: Scope; text: string }
   | { kind: "error"; message: string }
@@ -18,12 +28,13 @@ export type ParsedInput =
  * separated by "/", such as `deploy/api`, `kube-system/core`, or
  * `kube-system/po/core`, in either order. A segment names a Resource Type when
  * it matches a type's resource name, kind, short name, or key, and otherwise
- * an existing Namespace. A segment that names both is read as the type.
+ * a Namespace. A segment that names both is read as the type. A segment that
+ * names neither is an error, unless the known Namespaces are incomplete.
  */
 export function parsePaletteInput(
   input: string,
   types: readonly ResourceType[],
-  namespaces: ReadonlySet<string> | undefined,
+  namespaces: KnownNamespaces | undefined,
 ): ParsedInput {
   const segments = input.split("/");
   const text = segments.pop() ?? "";
@@ -42,7 +53,7 @@ export function parsePaletteInput(
       scope.types = { segment, keys };
     } else if (!namespaces) {
       return { kind: "pending" };
-    } else if (namespaces.has(segment)) {
+    } else if (namespaces.names.has(segment) || !namespaces.complete) {
       if (scope.namespace) return { kind: "error", message: "Use only one namespace prefix." };
       scope.namespace = segment;
     } else {
@@ -78,6 +89,12 @@ export function scopeQuery(scope: Scope): Expr | undefined {
 
 export interface ResourceItem {
   row: Row;
+  /**
+   * The item's identity. A Resource served under two types, such as an Event
+   * under `events` and `events.events.k8s.io`, appears once per type with the
+   * same UID, so the identity includes the type.
+   */
+  value: string;
   /** Set when the row answers earlier input, so choosing it would mislead. */
   disabled: boolean;
 }
@@ -93,7 +110,11 @@ export function resourceItems(
 ): ResourceItem[] {
   if (!result) return [];
   const stale = !params || result.text !== params.text || !sameJson(result.where, params.where);
-  return result.rows.map((row) => ({ row, disabled: stale }));
+  return result.rows.map((row) => ({
+    row,
+    value: `resource:${row.type}/${row.uid}`,
+    disabled: stale,
+  }));
 }
 
 /** Compares JSON values structurally, ignoring object key order. */
@@ -136,4 +157,18 @@ export function matchingTypes(
     .toSorted((a, b) => a.rank - b.rank || a.type.kind.localeCompare(b.type.kind))
     .slice(0, limit)
     .map((r) => r.type);
+}
+
+/**
+ * Whether a key event is the palette's shortcut: Cmd+K on macOS, Ctrl+K
+ * elsewhere. Layouts without Latin letters report their own character as the
+ * key, so the K key's position is accepted when the key is not a Latin letter.
+ */
+export function isPaletteShortcut(
+  e: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  mac: boolean,
+): boolean {
+  if (!(mac ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey) return false;
+  const key = e.key.toLowerCase();
+  return key === "k" || (!/^[a-z]$/.test(key) && e.code === "KeyK");
 }

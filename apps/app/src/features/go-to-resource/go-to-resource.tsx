@@ -15,16 +15,17 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 
-import { matchingTypes, parsePaletteInput, resourceItems, scopeQuery } from "./palette-input.ts";
+import {
+  isPaletteShortcut,
+  matchingTypes,
+  parsePaletteInput,
+  resourceItems,
+  scopeQuery,
+} from "./palette-input.ts";
 
 const resourceLimit = 50;
 const typeLimit = 8;
 const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
-
-/** Whether a key event is the palette's shortcut: Cmd+K on macOS, Ctrl+K elsewhere. */
-function isShortcut(e: KeyboardEvent): boolean {
-  return e.key.toLowerCase() === "k" && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey;
-}
 
 /**
  * The Go to Resource palette of one Workspace. It finds Resource Types and
@@ -54,7 +55,7 @@ export function GoToResource({ active }: { active: boolean }) {
     // Capture phase, so the shortcut wins over editors such as Monaco that
     // use Ctrl+K themselves.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!isShortcut(e)) return;
+      if (!isPaletteShortcut(e, isMac)) return;
       e.preventDefault();
       e.stopPropagation();
       onShortcut();
@@ -65,9 +66,15 @@ export function GoToResource({ active }: { active: boolean }) {
 
   const typeList = useMemo(() => [...types.values()], [types]);
   const namespaceList = useNamespaces(cluster, shown);
+  // A forbidden or failed Namespace type lists none, so it is not complete.
+  const namespacesListed = types.get("namespaces")?.state === "ready";
   const namespaces = useMemo(
-    () => (namespaceList ? new Set(namespaceList) : undefined),
-    [namespaceList],
+    () =>
+      namespaceList && {
+        names: new Set(namespaceList.names),
+        complete: namespaceList.complete && namespacesListed,
+      },
+    [namespaceList, namespacesListed],
   );
   const parsed = parsePaletteInput(input, typeList, namespaces);
   const where = parsed.kind === "ok" ? scopeQuery(parsed.scope) : undefined;
@@ -89,7 +96,7 @@ export function GoToResource({ active }: { active: boolean }) {
   // enabled item: the user's choice while it remains, else the first one.
   const enabledValues = [
     ...typeMatches.map((t) => typeValue(t.key)),
-    ...items.filter((i) => !i.disabled).map((i) => resourceValue(i.row.uid)),
+    ...items.filter((i) => !i.disabled).map((i) => i.value),
   ];
   const selection = enabledValues.includes(selected) ? selected : (enabledValues[0] ?? "");
 
@@ -149,10 +156,10 @@ export function GoToResource({ active }: { active: boolean }) {
           )}
           {items.length > 0 && (
             <CommandGroup heading="Resources">
-              {items.map(({ row, disabled }) => (
+              {items.map(({ row, value, disabled }) => (
                 <CommandItem
-                  key={row.uid}
-                  value={resourceValue(row.uid)}
+                  key={value}
+                  value={value}
                   disabled={disabled}
                   onSelect={() => chooseRow(row)}
                 >
@@ -181,7 +188,6 @@ export function GoToResource({ active }: { active: boolean }) {
 }
 
 const typeValue = (key: string) => `type:${key}`;
-const resourceValue = (uid: string) => `resource:${uid}`;
 
 function kindsOf(keys: string[], types: ReadonlyMap<string, ResourceType>): string {
   return [...new Set(keys.map((k) => types.get(k)?.kind ?? k))].join(", ");

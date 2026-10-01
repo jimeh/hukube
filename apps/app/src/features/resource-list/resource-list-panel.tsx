@@ -315,7 +315,7 @@ function NamespaceSelect({
   const namespaces = useNamespaces(cluster);
   const items = [
     { label: "All namespaces", value: allNamespaces },
-    ...(namespaces ?? []).map((name) => ({ label: name, value: name })),
+    ...(namespaces?.names ?? []).map((name) => ({ label: name, value: name })),
   ];
   return (
     <Select items={items} value={value} onValueChange={(v) => onChange(v)}>

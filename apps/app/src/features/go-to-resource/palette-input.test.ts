@@ -2,6 +2,7 @@ import type { FindResult, ResourceType } from "@hukube/engine-client";
 import { describe, expect, it } from "vitest";
 
 import {
+  isPaletteShortcut,
   matchingTypes,
   parsePaletteInput,
   resourceItems,
@@ -32,7 +33,7 @@ const types = [
   type("events.events.k8s.io", "Event", ["ev"]),
   type("monitors.example.com", "Monitor"),
 ];
-const namespaces = new Set(["default", "kube-system", "monitor"]);
+const namespaces = { names: new Set(["default", "kube-system", "monitor"]), complete: true };
 
 describe("parsePaletteInput", () => {
   it.each([
@@ -91,6 +92,15 @@ describe("parsePaletteInput", () => {
     expect(parsePaletteInput(input, types, namespaces)).toEqual({ kind: "error", message });
   });
 
+  it("reads an unknown segment as a Namespace when the known ones are incomplete", () => {
+    const partial = { ...namespaces, complete: false };
+    expect(parsePaletteInput("zz-team/po/api", types, partial)).toEqual({
+      kind: "ok",
+      scope: { namespace: "zz-team", types: { segment: "po", keys: ["pods"] } },
+      text: "api",
+    });
+  });
+
   it("waits for Namespaces before reading an unknown segment as one", () => {
     expect(parsePaletteInput("kube-system/x", types, undefined)).toEqual({ kind: "pending" });
     expect(parsePaletteInput("po/x", types, undefined)).toEqual({
@@ -131,8 +141,22 @@ describe("resourceItems", () => {
 
   it("enables rows that answer the current params", () => {
     expect(resourceItems(result, { text: "web", where })).toEqual([
-      { row: result.rows[0], disabled: false },
+      { row: result.rows[0], value: "resource:pods/1", disabled: false },
     ]);
+  });
+
+  it("tells apart one Resource served under two types", () => {
+    const row = { uid: "1", namespace: "default", name: "e", createdAt: "" };
+    const events: FindResult = {
+      text: "e",
+      total: 2,
+      rows: [
+        { ...row, type: "events" },
+        { ...row, type: "events.events.k8s.io" },
+      ],
+    };
+    const values = resourceItems(events, { text: "e" }).map((i) => i.value);
+    expect(new Set(values).size).toBe(2);
   });
 
   it.each([
@@ -171,5 +195,35 @@ describe("matchingTypes", () => {
     ]);
     expect(matchingTypes(candidates, "pod", 2)).toHaveLength(2);
     expect(matchingTypes(candidates, " ", 8)).toEqual([]);
+  });
+});
+
+const keyEvent = (k: string, code: string, mods: Partial<KeyboardEvent> = {}) => ({
+  key: k,
+  code,
+  metaKey: false,
+  ctrlKey: false,
+  altKey: false,
+  shiftKey: false,
+  ...mods,
+});
+
+describe("isPaletteShortcut", () => {
+  it.each([
+    ["Ctrl+K elsewhere", keyEvent("k", "KeyK", { ctrlKey: true }), false, true],
+    ["Cmd+K on macOS", keyEvent("k", "KeyK", { metaKey: true }), true, true],
+    ["Ctrl+K on macOS", keyEvent("k", "KeyK", { ctrlKey: true }), true, false],
+    ["Cmd+K elsewhere", keyEvent("k", "KeyK", { metaKey: true }), false, false],
+    ["Ctrl+Shift+K", keyEvent("K", "KeyK", { ctrlKey: true, shiftKey: true }), false, false],
+    ["Ctrl+K on a Cyrillic layout", keyEvent("л", "KeyK", { ctrlKey: true }), false, true],
+    [
+      "Ctrl+K on Dvorak, where K is elsewhere",
+      keyEvent("k", "KeyV", { ctrlKey: true }),
+      false,
+      true,
+    ],
+    ["Ctrl+T on Dvorak, at K's position", keyEvent("t", "KeyK", { ctrlKey: true }), false, false],
+  ])("%s", (_, event, mac, want) => {
+    expect(isPaletteShortcut(event, mac)).toBe(want);
   });
 });
