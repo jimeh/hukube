@@ -17,6 +17,10 @@ type request func(ctx context.Context, srv *Server, params json.RawMessage) (any
 // topic starts a subscription. compute returns the current value, or nil when
 // there is nothing to send yet; notify must be called whenever it may have
 // changed. stop releases everything the topic started.
+//
+// compute must encode the same state to the same JSON every time, such as by
+// sorting slices built from maps, because the session skips values identical
+// to the last one it sent.
 type topic func(ctx context.Context, srv *Server, params json.RawMessage, notify func()) (*liveValue, error)
 
 type liveValue struct {
