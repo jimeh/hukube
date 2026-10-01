@@ -19,6 +19,8 @@ type Meta struct {
 	Name            string
 	CreatedAt       time.Time
 	ResourceVersion string
+	// Labels must not be modified; they may be shared with the informer.
+	Labels map[string]string
 }
 
 // Key returns the Resource's namespace/name key, unique within its type.

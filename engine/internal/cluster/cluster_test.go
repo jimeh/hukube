@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,15 +114,25 @@ func TestIndexFollowsResourceChanges(t *testing.T) {
 		return ok && rt.State == protocol.TypeStateReady, fmt.Sprintf("%+v", rt)
 	})
 
-	_, err := cs.CoreV1().ConfigMaps(ns).Create(ctx,
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "indexed"}}, metav1.CreateOptions{})
+	cm, err := cs.CoreV1().ConfigMaps(ns).Create(ctx,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "indexed", Labels: map[string]string{"app": "web"}}},
+		metav1.CreateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, func() (bool, string) {
-		_, ok := c.Index.Get("configmaps", ns+"/indexed")
-		return ok, "configmap not in index"
-	})
+	hasLabels := func(want map[string]string) func() (bool, string) {
+		return func() (bool, string) {
+			m, ok := c.Index.Get("configmaps", ns+"/indexed")
+			return ok && maps.Equal(m.Labels, want), fmt.Sprintf("indexed: %v, labels: %v", ok, m.Labels)
+		}
+	}
+	eventually(t, hasLabels(map[string]string{"app": "web"}))
+
+	cm.Labels = map[string]string{"app": "api", "tier": "backend"}
+	if _, err := cs.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, hasLabels(map[string]string{"app": "api", "tier": "backend"}))
 
 	if err := cs.CoreV1().ConfigMaps(ns).Delete(ctx, "indexed", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)

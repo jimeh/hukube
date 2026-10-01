@@ -563,5 +563,6 @@ func toMeta(obj any) (index.Meta, error) {
 		Name:            o.Name,
 		CreatedAt:       o.CreationTimestamp.Time,
 		ResourceVersion: o.ResourceVersion,
+		Labels:          o.Labels,
 	}, nil
 }
