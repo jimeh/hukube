@@ -12,10 +12,12 @@ import (
 // time. A compute call blocks until it is given a value, so a test that has
 // seen the next compute start knows the previous emit has finished.
 type scriptedTopic struct {
-	ctx     context.Context
-	starts  chan func()
-	entered chan struct{}
-	values  chan scripted
+	ctx context.Context
+	// failNext, when set, makes the next start fail with it.
+	failNext error
+	starts   chan func()
+	entered  chan struct{}
+	values   chan scripted
 }
 
 type scripted struct {
@@ -33,6 +35,10 @@ func newScriptedTopic(ctx context.Context) *scriptedTopic {
 }
 
 func (st *scriptedTopic) start(_ context.Context, _ *Server, _ json.RawMessage, notify func()) (*liveValue, error) {
+	if err := st.failNext; err != nil {
+		st.failNext = nil
+		return nil, err
+	}
 	st.starts <- notify
 	return &liveValue{
 		compute: func() (any, error) {
@@ -165,4 +171,33 @@ func TestSubscriptionDeliversLatestValueToStalledClient(t *testing.T) {
 	h.compute("B", nil)
 	h.compute("A", nil)
 	h.expect("after A, B, A", `data:"A"`)
+}
+
+// A topic that fails to start reports an error, and the client then needs
+// the first value of the next start even if it equals the last one sent.
+func TestSubscriptionRecoversFromFailedStart(t *testing.T) {
+	h := startSubscription(t)
+	h.compute("A", nil)
+	h.expect("first value", `data:"A"`)
+
+	h.topic.failNext = errors.New("cluster unknown")
+	h.topic.values <- scripted{v: "A"}
+	h.sub.params <- json.RawMessage(`{"fail":true}`)
+	h.sub.params <- json.RawMessage(`{"fail":false}`)
+	h.notify = <-h.topic.starts
+	<-h.topic.entered
+	h.expect("failed start", "error:cluster unknown")
+	h.compute("A", nil)
+	h.expect("first value after a failed start", `data:"A"`)
+}
+
+// A value that cannot be encoded is reported as an error rather than sent.
+func TestSubscriptionReportsUnencodableData(t *testing.T) {
+	h := startSubscription(t)
+	h.compute("A", nil)
+	h.expect("first value", `data:"A"`)
+	h.compute(func() {}, nil)
+	h.expect("unencodable value", "error:encode data: json: unsupported type: func()")
+	h.compute("A", nil)
+	h.expect("value after the error", `data:"A"`)
 }
