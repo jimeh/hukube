@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/jimeh/hukube/engine/internal/cluster"
+	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 	"github.com/jimeh/hukube/engine/internal/query"
 )
@@ -87,7 +88,7 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return query.Run(c.Index, q, p.Sort, p.Offset, p.Limit), nil },
-			stop:    forward(ctx, notify, queryChanges(c, q)),
+			stop:    forward(ctx, notify, queryChanges(c.Index, q)),
 		}, nil
 	},
 
@@ -104,9 +105,10 @@ var topics = map[protocol.Method]topic{
 		if err != nil {
 			return nil, err
 		}
+		finder := query.NewFinder()
 		return &liveValue{
-			compute: func() (any, error) { return query.Find(c.Index, q, p), nil },
-			stop:    forward(ctx, notify, queryChanges(c, q)),
+			compute: func() (any, error) { return finder.Find(c.Index, q, p), nil },
+			stop:    forward(ctx, notify, queryChanges(c.Index, q)),
 		}, nil
 	},
 
@@ -180,8 +182,8 @@ func allChanges(c *cluster.Cluster) func() (<-chan struct{}, func()) {
 }
 
 // queryChanges subscribes to changes of the types a Query can match.
-func queryChanges(c *cluster.Cluster, q *query.Compiled) func() (<-chan struct{}, func()) {
-	return func() (<-chan struct{}, func()) { return c.Index.Changed(q.Types()...) }
+func queryChanges(store *index.Store, q *query.Compiled) func() (<-chan struct{}, func()) {
+	return func() (<-chan struct{}, func()) { return store.Changed(q.Types()...) }
 }
 
 func decode[P any](raw json.RawMessage) (P, error) {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
@@ -29,7 +30,7 @@ func find(t *testing.T, store *index.Store, where *protocol.Expr, text string, l
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Find(store, q, protocol.FindParams{Where: where, Text: text, Limit: limit})
+	return NewFinder().Find(store, q, protocol.FindParams{Where: where, Text: text, Limit: limit})
 }
 
 // These tests assert relative order, not fzf's scores, so upgrading fzf only
@@ -115,8 +116,6 @@ func TestFindLimits(t *testing.T) {
 	for i := range MaxFindLimit + 50 {
 		resources = append(resources, [3]string{"pods", "default", fmt.Sprintf("web-%03d", i)})
 	}
-	// The best match is indexed among many worse ones, so the heap must
-	// replace a worse match to keep it, whatever order the index yields.
 	resources = append(resources, [3]string{"pods", "default", "web"})
 	store := findStore(resources...)
 	total := MaxFindLimit + 51
@@ -139,6 +138,63 @@ func TestFindLimits(t *testing.T) {
 				t.Errorf("first row = %q, want the exact name", got.Rows[0].Name)
 			}
 		})
+	}
+}
+
+// The index map yields matches in any order, so the replacement of a worse
+// kept match is tested with fixed orders here.
+func TestOfferKeepsTheBestMatches(t *testing.T) {
+	m := func(name string, score int) match {
+		return match{score: score, row: protocol.Row{Type: "pods", Name: name}}
+	}
+	orders := map[string][]match{
+		"best last":  {m("c", 1), m("b", 2), m("a", 3)},
+		"best first": {m("a", 3), m("b", 2), m("c", 1)},
+		"mixed":      {m("b", 2), m("c", 1), m("a", 3)},
+	}
+	for name, offers := range orders {
+		t.Run(name, func(t *testing.T) {
+			var best worstFirst
+			for _, o := range offers {
+				best.offer(o, 2)
+			}
+			slices.SortFunc(best, func(a, b match) int { return rank(&a, &b) })
+			if len(best) != 2 || best[0].row.Name != "a" || best[1].row.Name != "b" {
+				t.Errorf("kept %+v, want a then b", best)
+			}
+		})
+	}
+}
+
+// Scoring is slow, so indexing must be able to proceed while a find scores.
+func TestFindScoresWithoutHoldingTheIndex(t *testing.T) {
+	store := findStore([3]string{"pods", "default", "web"})
+	q, _ := Compile(nil)
+	scoring := make(chan struct{})
+	resume := make(chan struct{})
+	f := NewFinder()
+	f.beforeScore = func() {
+		close(scoring)
+		<-resume
+	}
+	done := make(chan protocol.FindResult)
+	go func() { done <- f.Find(store, q, protocol.FindParams{Text: "web", Limit: 10}) }()
+	<-scoring
+
+	applied := make(chan struct{})
+	go func() {
+		store.Apply([]index.Change{{Kind: index.Added, Type: "secrets", Meta: index.Meta{Name: "s"}}})
+		close(applied)
+	}()
+	select {
+	case <-applied:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Apply did not complete while a find was scoring")
+	}
+
+	close(resume)
+	if got := <-done; len(got.Rows) != 1 || got.Rows[0].Name != "web" {
+		t.Errorf("rows = %+v, want web", got.Rows)
 	}
 }
 
@@ -172,11 +228,12 @@ func BenchmarkFind(b *testing.B) {
 	store := index.New()
 	store.Apply(changes)
 	q, _ := Compile(nil)
+	f := NewFinder()
 
 	for _, text := range []string{"svc", "service-4217"} {
 		b.Run(text, func(b *testing.B) {
 			for b.Loop() {
-				Find(store, q, protocol.FindParams{Text: text, Limit: 50})
+				f.Find(store, q, protocol.FindParams{Text: text, Limit: 50})
 			}
 		})
 	}

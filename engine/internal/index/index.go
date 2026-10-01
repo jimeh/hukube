@@ -141,6 +141,24 @@ func (s *Store) Count(t protocol.TypeKey) int {
 	return len(s.types[t])
 }
 
+// Total returns the number of Resources stored for the given types, or for
+// every type when types is nil.
+func (s *Store) Total(types []protocol.TypeKey) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	total := 0
+	if types == nil {
+		for _, metas := range s.types {
+			total += len(metas)
+		}
+		return total
+	}
+	for _, t := range types {
+		total += len(s.types[t])
+	}
+	return total
+}
+
 // Each calls fn for every stored Resource of the given types, or of every
 // type when types is nil, while holding a read lock. fn must not call back
 // into the Store.

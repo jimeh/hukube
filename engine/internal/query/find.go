@@ -76,9 +76,39 @@ func (h *worstFirst) Pop() any {
 	return m
 }
 
+// offer keeps m if it ranks among the best limit matches seen so far.
+func (h *worstFirst) offer(m match, limit int) {
+	switch {
+	case len(*h) < limit:
+		heap.Push(h, m)
+	case limit > 0 && rank(&m, &(*h)[0]) < 0:
+		(*h)[0] = m
+		heap.Fix(h, 0)
+	}
+}
+
+// Finder runs the finds of one subscription. It reuses its scratch space
+// between runs, so it is not safe for concurrent use.
+type Finder struct {
+	matcher    *matcher
+	candidates []protocol.Row
+	// beforeScore, when set, runs after the candidates are collected and
+	// before they are scored. Tests use it to observe the index unlocked.
+	beforeScore func()
+}
+
+// NewFinder returns a Finder with empty scratch space.
+func NewFinder() *Finder {
+	return &Finder{matcher: newMatcher()}
+}
+
 // Find returns the Resources among those q selects whose names best match
 // p.Text, best first, keeping at most p.Limit of them.
-func Find(store *index.Store, q *Compiled, p protocol.FindParams) protocol.FindResult {
+//
+// Scoring is far slower than selecting, so Find copies the selected
+// Resources while it holds the index's lock and scores them after releasing
+// it, so that indexing never waits for a find.
+func (f *Finder) Find(store *index.Store, q *Compiled, p protocol.FindParams) protocol.FindResult {
 	// Non-nil so an empty result encodes as [] rather than null.
 	result := protocol.FindResult{Text: p.Text, Where: p.Where, Rows: []protocol.Row{}}
 	words := parseWords(p.Text)
@@ -87,36 +117,46 @@ func Find(store *index.Store, q *Compiled, p protocol.FindParams) protocol.FindR
 	}
 	limit := min(max(p.Limit, 0), MaxFindLimit)
 
-	m := newMatcher()
-	best := make(worstFirst, 0, limit)
+	// Size the buffer first, so the copy below does not grow it while holding
+	// the index's lock. Resources indexed in between are appended as usual.
+	candidates := f.candidates[:0]
+	if need := store.Total(q.types); cap(candidates) < need {
+		candidates = make([]protocol.Row, 0, need)
+	}
 	store.Each(q.types, func(t protocol.TypeKey, meta index.Meta) {
-		if !q.match(t, meta) {
-			return
+		if q.match(t, meta) {
+			candidates = append(candidates, protocol.Row{
+				UID:       meta.UID,
+				Type:      t,
+				Namespace: meta.Namespace,
+				Name:      meta.Name,
+				CreatedAt: meta.CreatedAt,
+			})
 		}
+	})
+	// Keep the grown buffer for the next run, but not the rows it points to.
+	defer func() {
+		clear(candidates)
+		f.candidates = candidates[:0]
+	}()
+	if f.beforeScore != nil {
+		f.beforeScore()
+	}
+
+	best := make(worstFirst, 0, limit)
+candidates:
+	for _, row := range candidates {
 		score := 0
 		for _, w := range words {
-			s, ok := m.match(meta.Name, w)
+			s, ok := f.matcher.match(row.Name, w)
 			if !ok {
-				return
+				continue candidates
 			}
 			score += s
 		}
 		result.Total++
-		candidate := match{score: score, row: protocol.Row{
-			UID:       meta.UID,
-			Type:      t,
-			Namespace: meta.Namespace,
-			Name:      meta.Name,
-			CreatedAt: meta.CreatedAt,
-		}}
-		switch {
-		case len(best) < limit:
-			heap.Push(&best, candidate)
-		case limit > 0 && rank(&candidate, &best[0]) < 0:
-			best[0] = candidate
-			heap.Fix(&best, 0)
-		}
-	})
+		best.offer(match{score: score, row: row}, limit)
+	}
 
 	slices.SortFunc(best, func(a, b match) int { return rank(&a, &b) })
 	for _, b := range best {
