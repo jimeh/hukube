@@ -60,6 +60,19 @@ func TestRunFiltersAndSorts(t *testing.T) {
 			want:  []string{"Web-2", "web-1"},
 		},
 		{
+			name:  "a repeated type does not repeat rows",
+			where: ptr(in(protocol.FieldType, "pods", "pods")),
+			want:  []string{"Web-2", "coredns", "web-1"},
+		},
+		{
+			name: "or of types scans each once",
+			where: &protocol.Expr{Op: protocol.ExprOpOr, Args: []protocol.Expr{
+				in(protocol.FieldType, "configmaps", "pods"),
+				in(protocol.FieldType, "pods"),
+			}},
+			want: []string{"Web-2", "coredns", "web-1", "web-config"},
+		},
+		{
 			name:  "contains is case-insensitive",
 			where: &protocol.Expr{Op: protocol.ExprOpContains, Field: protocol.FieldName, Values: []string{"WEB"}},
 			want:  []string{"Web-2", "web-1", "web-config"},
@@ -122,6 +135,60 @@ func TestRunWindow(t *testing.T) {
 			t.Errorf("window(%d, %d) = total %d offset %d %v, want total 5 offset %d %v",
 				tt.offset, tt.limit, got.Total, got.Offset, names(got), tt.wantOffset, tt.want)
 		}
+	}
+}
+
+// Types decides which index changes wake a Query subscription, so it must
+// cover every type the Query can match and, where it can, nothing more.
+func TestCompiledTypes(t *testing.T) {
+	name := protocol.Expr{Op: protocol.ExprOpContains, Field: protocol.FieldName, Values: []string{"web"}}
+	tests := []struct {
+		name  string
+		where *protocol.Expr
+		want  []protocol.TypeKey
+	}{
+		{name: "no expression matches any type", want: nil},
+		{name: "one type", where: ptr(in(protocol.FieldType, "pods")), want: []protocol.TypeKey{"pods"}},
+		{
+			name:  "several types, repeated",
+			where: ptr(in(protocol.FieldType, "pods", "configmaps", "pods")),
+			want:  []protocol.TypeKey{"configmaps", "pods"},
+		},
+		{
+			name:  "and takes its constrained argument",
+			where: &protocol.Expr{Op: protocol.ExprOpAnd, Args: []protocol.Expr{name, in(protocol.FieldType, "pods")}},
+			want:  []protocol.TypeKey{"pods"},
+		},
+		{
+			name: "or of constrained branches takes their union",
+			where: &protocol.Expr{Op: protocol.ExprOpOr, Args: []protocol.Expr{
+				in(protocol.FieldType, "pods"),
+				{Op: protocol.ExprOpAnd, Args: []protocol.Expr{in(protocol.FieldType, "secrets", "pods"), name}},
+			}},
+			want: []protocol.TypeKey{"pods", "secrets"},
+		},
+		{
+			name:  "or with an unconstrained branch matches any type",
+			where: &protocol.Expr{Op: protocol.ExprOpOr, Args: []protocol.Expr{in(protocol.FieldType, "pods"), name}},
+			want:  nil,
+		},
+		{
+			name:  "not matches any type",
+			where: &protocol.Expr{Op: protocol.ExprOpNot, Args: []protocol.Expr{in(protocol.FieldType, "pods")}},
+			want:  nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := Compile(tt.where)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := q.Types()
+			if (got == nil) != (tt.want == nil) || !slices.Equal(got, tt.want) {
+				t.Errorf("Types() = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 

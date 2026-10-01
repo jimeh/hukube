@@ -123,8 +123,13 @@ func fieldGetter(f protocol.Field) (func(protocol.TypeKey, index.Meta) string, e
 	}
 }
 
+// Types returns the Resource Types the query can match, or nil when it can
+// match any type.
+func (q *Compiled) Types() []protocol.TypeKey { return slices.Clone(q.types) }
+
 // scanTypes returns the types an expression can match when it constrains the
-// type at the top level, so Run can skip every other type.
+// type, so Run can skip every other type. It returns nil when the expression
+// can match any type, and never repeats a type.
 func scanTypes(e protocol.Expr) []protocol.TypeKey {
 	switch {
 	case e.Op == protocol.ExprOpIn && e.Field == protocol.FieldType:
@@ -132,13 +137,25 @@ func scanTypes(e protocol.Expr) []protocol.TypeKey {
 		for i, v := range e.Values {
 			types[i] = protocol.TypeKey(v)
 		}
-		return types
+		slices.Sort(types)
+		return slices.Compact(types)
 	case e.Op == protocol.ExprOpAnd:
 		for _, arg := range e.Args {
 			if types := scanTypes(arg); types != nil {
 				return types
 			}
 		}
+	case e.Op == protocol.ExprOpOr:
+		union := []protocol.TypeKey{}
+		for _, arg := range e.Args {
+			types := scanTypes(arg)
+			if types == nil {
+				return nil
+			}
+			union = append(union, types...)
+		}
+		slices.Sort(union)
+		return slices.Compact(union)
 	}
 	return nil
 }

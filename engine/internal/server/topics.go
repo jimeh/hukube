@@ -83,7 +83,9 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return query.Run(c.Index, q, p.Sort, p.Offset, p.Limit), nil },
-			stop:    forward(ctx, notify, allChanges(c)),
+			stop: forward(ctx, notify, func() (<-chan struct{}, func()) {
+				return c.Index.Changed(q.Types()...)
+			}),
 		}, nil
 	},
 
