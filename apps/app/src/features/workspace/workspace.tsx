@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { clusterScope } from "@/features/clusters/cluster-color.ts";
+import { GoToResource } from "@/features/go-to-resource/go-to-resource.tsx";
 import { ResourceListPanel } from "@/features/resource-list/resource-list-panel.tsx";
 import { ResourcePanel } from "@/features/resource/resource-panel.tsx";
 import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
@@ -35,8 +36,11 @@ const components = {
 };
 const tabComponents = { tab: PanelTab };
 
-/** The Panes and Tabs for one Cluster, tinted with the Cluster's color. */
-export function Workspace({ cluster }: { cluster: string }) {
+/**
+ * The Panes and Tabs for one Cluster, tinted with the Cluster's color. Hidden
+ * Workspaces stay mounted, so active says whether this one is shown.
+ */
+export function Workspace({ cluster, active }: { cluster: string; active: boolean }) {
   const { data: status } = useSubscription("cluster.status", { cluster });
   const { data: typeList } = useSubscription("cluster.types", { cluster });
   const types = useMemo(() => new Map((typeList ?? []).map((t) => [t.key, t])), [typeList]);
@@ -105,6 +109,7 @@ export function Workspace({ cluster }: { cluster: string }) {
         </div>
         <StatusBar />
       </div>
+      <GoToResource active={active} />
     </WorkspaceContext>
   );
 }
