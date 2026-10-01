@@ -111,6 +111,10 @@ export const MethodClusterTypes = "cluster.types";
  */
 export const MethodResourcesQuery = "resources.query";
 /**
+ * MethodResourcesFind subscribes with FindParams to FindResult.
+ */
+export const MethodResourcesFind = "resources.find";
+/**
  * MethodResourceGet subscribes with ResourceRef to ResourceData.
  */
 export const MethodResourceGet = "resource.get";
@@ -122,7 +126,7 @@ export const MethodSettingsWatch = "settings.watch";
  * MethodSettingsPut stores a Setting and returns nothing.
  */
 export const MethodSettingsPut = "settings.put";
-export type Method = typeof MethodClustersList | typeof MethodClusterStatus | typeof MethodClusterTypes | typeof MethodResourcesQuery | typeof MethodResourceGet | typeof MethodSettingsWatch | typeof MethodSettingsPut;
+export type Method = typeof MethodClustersList | typeof MethodClusterStatus | typeof MethodClusterTypes | typeof MethodResourcesQuery | typeof MethodResourcesFind | typeof MethodResourceGet | typeof MethodSettingsWatch | typeof MethodSettingsPut;
 /**
  * Cluster is one kubeconfig context the Engine can connect to.
  */
@@ -272,6 +276,30 @@ export interface Row {
   namespace?: string;
   name: string;
   createdAt: string;
+}
+/**
+ * FindParams subscribes to the Resources, among those Where selects, whose
+ * names best match Text. Text holds space-separated words that must all
+ * match a name, case-insensitively: fuzzily, as in fzf, or as an exact
+ * substring when the word starts with "'". Text without words matches
+ * nothing.
+ */
+export interface FindParams {
+  cluster: string;
+  where?: Expr;
+  text: string;
+  limit: number /* int */;
+}
+/**
+ * FindResult holds the best matches of a find, best first, and the number of
+ * matches in total. It echoes the Text and Where it answers, so a client can
+ * tell it apart from results for params it has since replaced.
+ */
+export interface FindResult {
+  text: string;
+  where?: Expr;
+  total: number /* int */;
+  rows: Row[];
 }
 /**
  * ResourceRef addresses one Resource in a Cluster. Namespace is empty for

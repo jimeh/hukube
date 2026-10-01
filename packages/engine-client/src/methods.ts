@@ -2,6 +2,8 @@ import type {
   Cluster,
   ClusterParams,
   ClusterStatus,
+  FindParams,
+  FindResult,
   Method,
   QueryParams,
   QueryResult,
@@ -23,6 +25,7 @@ export interface Topics {
   "cluster.status": { params: ClusterParams; data: ClusterStatus };
   "cluster.types": { params: ClusterParams; data: ResourceType[] };
   "resources.query": { params: QueryParams; data: QueryResult };
+  "resources.find": { params: FindParams; data: FindResult };
   "resource.get": { params: ResourceRef; data: ResourceData };
   "settings.watch": { params: SettingKey; data: Setting };
 }

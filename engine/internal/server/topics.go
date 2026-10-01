@@ -87,9 +87,26 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return query.Run(c.Index, q, p.Sort, p.Offset, p.Limit), nil },
-			stop: forward(ctx, notify, func() (<-chan struct{}, func()) {
-				return c.Index.Changed(q.Types()...)
-			}),
+			stop:    forward(ctx, notify, queryChanges(c, q)),
+		}, nil
+	},
+
+	protocol.MethodResourcesFind: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
+		p, err := decode[protocol.FindParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		q, err := query.Compile(p.Where)
+		if err != nil {
+			return nil, badRequest(err)
+		}
+		c, err := srv.cfg.Clusters.Get(p.Cluster)
+		if err != nil {
+			return nil, err
+		}
+		return &liveValue{
+			compute: func() (any, error) { return query.Find(c.Index, q, p), nil },
+			stop:    forward(ctx, notify, queryChanges(c, q)),
 		}, nil
 	},
 
@@ -160,6 +177,11 @@ var topics = map[protocol.Method]topic{
 // allChanges subscribes to changes of every type in a Cluster's index.
 func allChanges(c *cluster.Cluster) func() (<-chan struct{}, func()) {
 	return func() (<-chan struct{}, func()) { return c.Index.Changed() }
+}
+
+// queryChanges subscribes to changes of the types a Query can match.
+func queryChanges(c *cluster.Cluster, q *query.Compiled) func() (<-chan struct{}, func()) {
+	return func() (<-chan struct{}, func()) { return c.Index.Changed(q.Types()...) }
 }
 
 func decode[P any](raw json.RawMessage) (P, error) {
