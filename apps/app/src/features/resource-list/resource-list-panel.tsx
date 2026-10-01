@@ -26,6 +26,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDeferredValue, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
+import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
@@ -311,16 +312,10 @@ function NamespaceSelect({
   value: string | null;
   onChange: (ns: string | null) => void;
 }) {
-  const { data } = useSubscription("resources.query", {
-    cluster,
-    where: { op: "in", field: "type", values: ["namespaces"] },
-    sort: { field: "name" },
-    offset: 0,
-    limit: 1000,
-  });
+  const namespaces = useNamespaces(cluster);
   const items = [
     { label: "All namespaces", value: allNamespaces },
-    ...(data?.rows ?? []).map((r) => ({ label: r.name, value: r.name })),
+    ...(namespaces ?? []).map((name) => ({ label: name, value: name })),
   ];
   return (
     <Select items={items} value={value} onValueChange={(v) => onChange(v)}>
