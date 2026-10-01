@@ -173,6 +173,10 @@ const (
 	// ExprOpContains matches when the field contains Values[0],
 	// case-insensitively.
 	ExprOpContains ExprOp = "contains"
+	// ExprOpSelector matches when the Resource's labels satisfy the
+	// Kubernetes label selector in Values[0], such as "app=web,tier!=db". It
+	// takes no Field.
+	ExprOpSelector ExprOp = "selector"
 )
 
 // Field is a Resource attribute a query Expr can test.

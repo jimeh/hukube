@@ -206,7 +206,13 @@ export const ExprOpIn = "in";
  * case-insensitively.
  */
 export const ExprOpContains = "contains";
-export type ExprOp = typeof ExprOpAnd | typeof ExprOpOr | typeof ExprOpNot | typeof ExprOpIn | typeof ExprOpContains;
+/**
+ * ExprOpSelector matches when the Resource's labels satisfy the
+ * Kubernetes label selector in Values[0], such as "app=web,tier!=db". It
+ * takes no Field.
+ */
+export const ExprOpSelector = "selector";
+export type ExprOp = typeof ExprOpAnd | typeof ExprOpOr | typeof ExprOpNot | typeof ExprOpIn | typeof ExprOpContains | typeof ExprOpSelector;
 /**
  * Field is a Resource attribute a query Expr can test.
  */

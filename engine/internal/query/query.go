@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/labels"
+
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 )
@@ -103,6 +105,18 @@ func compile(e protocol.Expr) (predicate, error) {
 		needle := strings.ToLower(e.Values[0])
 		return func(t protocol.TypeKey, m index.Meta) bool {
 			return strings.Contains(strings.ToLower(get(t, m)), needle)
+		}, nil
+
+	case protocol.ExprOpSelector:
+		if len(e.Values) != 1 {
+			return nil, fmt.Errorf("%q needs exactly one value", e.Op)
+		}
+		selector, err := labels.Parse(e.Values[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid label selector: %w", err)
+		}
+		return func(_ protocol.TypeKey, m index.Meta) bool {
+			return selector.Matches(labels.Set(m.Labels))
 		}, nil
 
 	default:
