@@ -105,10 +105,14 @@ var topics = map[protocol.Method]topic{
 		if err != nil {
 			return nil, err
 		}
-		finder := query.NewFinder()
+		finder := finders.Get().(*query.Finder)
+		stop := forward(ctx, notify, queryChanges(c.Index, q))
 		return &liveValue{
 			compute: func() (any, error) { return finder.Find(c.Index, q, p), nil },
-			stop:    forward(ctx, notify, queryChanges(c.Index, q)),
+			stop: func() {
+				stop()
+				finders.Put(finder)
+			},
 		}, nil
 	},
 
@@ -175,6 +179,13 @@ var topics = map[protocol.Method]topic{
 		}, nil
 	},
 }
+
+// finders holds Finders between find subscriptions. Typing restarts a find
+// with new params on every keystroke, and pooling lets each restart reuse the
+// previous one's scratch space, which grows to the number of Resources it
+// scans. A Finder is only used by the subscription that took it, because
+// compute and stop run on that subscription's goroutine.
+var finders = sync.Pool{New: func() any { return query.NewFinder() }}
 
 // allChanges subscribes to changes of every type in a Cluster's index.
 func allChanges(c *cluster.Cluster) func() (<-chan struct{}, func()) {

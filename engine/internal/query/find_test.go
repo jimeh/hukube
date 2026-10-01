@@ -198,6 +198,27 @@ func TestFindScoresWithoutHoldingTheIndex(t *testing.T) {
 	}
 }
 
+// A Finder reuses its scratch space, so a run must not see an earlier
+// run's candidates.
+func TestFinderReuseKeepsRunsIndependent(t *testing.T) {
+	store := findStore(
+		[3]string{"pods", "default", "web-app"},
+		[3]string{"services", "default", "api"},
+	)
+	all, _ := Compile(nil)
+	services, _ := Compile(ptr(in(protocol.FieldType, "services")))
+	f := NewFinder()
+	if got := f.Find(store, all, protocol.FindParams{Text: "a", Limit: 10}); got.Total != 2 {
+		t.Fatalf("total = %d, want both Resources", got.Total)
+	}
+	// web-app also matches "a", so it would show up if the first run's
+	// candidates leaked into this one.
+	got := f.Find(store, services, protocol.FindParams{Text: "a", Limit: 10})
+	if len(got.Rows) != 1 || got.Rows[0].Name != "api" || got.Total != 1 {
+		t.Errorf("rows = %+v, total %d; want only api", got.Rows, got.Total)
+	}
+}
+
 // Clients index into rows, so a find without results must encode them as []
 // rather than null.
 func TestFindWithoutResultsEncodesEmptyRows(t *testing.T) {
