@@ -1,0 +1,21 @@
+{
+  "name": "@hukube/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop Host for hukube, a Kubernetes workspace",
+  "author": "Jim Myhrberg",
+  "type": "module",
+  "main": "out/main.cjs",
+  "scripts": {
+    "build": "bun build src/main.ts --outfile out/main.cjs --target node --format cjs --external electron && bun build src/preload.ts --outfile out/preload.cjs --target node --format cjs --external electron",
+    "start": "bun run build && electron .",
+    "package": "electron-builder --config electron-builder.yml",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@hukube/host": "workspace:*",
+    "@types/node": "^26.6.3",
+    "electron": "^44.5.0",
+    "electron-builder": "^26.15.3"
+  }
+}

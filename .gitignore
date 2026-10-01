@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+engine/bin/
+.data/
+*.tsbuildinfo
+test-results/
+playwright-report/
+.DS_Store
+mise.local.toml
