@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { rowAt, windowFor } from "./query-window.ts";
+import { listQuery, rowAt, windowFor } from "./query-window.ts";
 
 describe("windowFor", () => {
   it.each([
@@ -30,5 +30,30 @@ describe("rowAt", () => {
     expect(rowAt(result, 99)).toBeUndefined();
     expect(rowAt(result, 101)).toBeUndefined();
     expect(rowAt(undefined, 0)).toBeUndefined();
+  });
+});
+
+describe("listQuery", () => {
+  const type = { op: "in", field: "type", values: ["pods"] };
+
+  it("omits blank filters", () => {
+    expect(listQuery("pods", { namespace: null, name: " ", selector: "  " })).toEqual({
+      op: "and",
+      args: [type],
+    });
+  });
+
+  it("adds each filter that is set, trimmed", () => {
+    expect(
+      listQuery("pods", { namespace: "default", name: " web ", selector: " app=web " }),
+    ).toEqual({
+      op: "and",
+      args: [
+        type,
+        { op: "in", field: "namespace", values: ["default"] },
+        { op: "contains", field: "name", values: ["web"] },
+        { op: "selector", values: ["app=web"] },
+      ],
+    });
   });
 });

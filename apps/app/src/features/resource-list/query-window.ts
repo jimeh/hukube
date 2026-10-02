@@ -20,10 +20,22 @@ export function rowAt(result: QueryResult | undefined, index: number): Row | und
   return result.rows[index - result.offset];
 }
 
-/** The Query for one Resource Type, optionally narrowed by namespace and name. */
-export function listQuery(type: TypeKey, namespace: string | null, name: string): Expr {
+export interface ListFilters {
+  /** Only Resources in this Namespace, or every Namespace when null. */
+  namespace: string | null;
+  /** Text the name must contain, case-insensitively. */
+  name: string;
+  /** A Kubernetes label selector, such as `app=web,tier!=db`. */
+  selector: string;
+}
+
+/** The Query for one Resource Type, narrowed by any filters that are set. */
+export function listQuery(type: TypeKey, filters: ListFilters): Expr {
   const args: Expr[] = [{ op: "in", field: "type", values: [type] }];
-  if (namespace) args.push({ op: "in", field: "namespace", values: [namespace] });
-  if (name.trim()) args.push({ op: "contains", field: "name", values: [name.trim()] });
+  if (filters.namespace) args.push({ op: "in", field: "namespace", values: [filters.namespace] });
+  const name = filters.name.trim();
+  if (name) args.push({ op: "contains", field: "name", values: [name] });
+  const selector = filters.selector.trim();
+  if (selector) args.push({ op: "selector", values: [selector] });
   return { op: "and", args };
 }

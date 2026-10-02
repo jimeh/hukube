@@ -46,3 +46,41 @@ test("browses a live ConfigMap from the cluster picker to its YAML", async ({ pa
   await expect(page.locator(".monaco-editor").getByText("hello-from-e2e")).toBeVisible();
   await expect(grid.getByRole("row")).toHaveCount(0);
 });
+
+test("goes to a Resource and a Resource Type from the palette", async ({ page }) => {
+  kubectl(
+    "-n",
+    namespace,
+    "create",
+    "configmap",
+    "e2e-palette",
+    "--from-literal=greeting=hello-from-palette",
+  );
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+
+  // A Namespace and a type prefix scope a fuzzy match on the name.
+  await page.keyboard.press("ControlOrMeta+K");
+  const input = page.getByRole("combobox", { name: "Go to Resource" });
+  // Type at a human pace, so results for earlier text arrive while typing.
+  await input.pressSequentially(`${namespace}/cm/e2epal`, { delay: 100 });
+  await expect(page.getByRole("option", { name: /e2e-palette/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Enter");
+  const editor = page.locator(".monaco-editor");
+  await expect(editor.getByText("hello-from-palette")).toBeVisible();
+
+  // The shortcut wins over the editor's own Ctrl+K handling.
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+K");
+  await input.fill("ConfigMap");
+  await expect(page.getByRole("option", { name: /^ConfigMap configmaps/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("grid", { name: "ConfigMap resources" })).toBeVisible();
+});

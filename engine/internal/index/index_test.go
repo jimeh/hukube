@@ -39,3 +39,60 @@ func TestDiff(t *testing.T) {
 		t.Errorf("services count = %d, want 1 (diff must not touch other types)", n)
 	}
 }
+
+func TestChangedWakesOnlySubscribersOfChangedTypes(t *testing.T) {
+	s := New()
+	all, stopAll := s.Changed()
+	defer stopAll()
+	pods, stopPods := s.Changed("pods")
+	defer stopPods()
+	services, stopServices := s.Changed("services")
+	defer stopServices()
+	podsOrSecrets, stopPodsOrSecrets := s.Changed("pods", "secrets")
+
+	// fired reports whether each channel was signalled, and drains it. Signals
+	// are sent before Apply and RemoveType return, so no waiting is needed.
+	fired := func() map[string]bool {
+		got := map[string]bool{}
+		for name, ch := range map[string]<-chan struct{}{"all": all, "pods": pods, "services": services, "podsOrSecrets": podsOrSecrets} {
+			select {
+			case <-ch:
+				got[name] = true
+			default:
+			}
+		}
+		return got
+	}
+	check := func(step string, want ...string) {
+		t.Helper()
+		got := fired()
+		for _, name := range want {
+			if !got[name] {
+				t.Errorf("%s: %s not signalled", step, name)
+			}
+			delete(got, name)
+		}
+		for name := range got {
+			t.Errorf("%s: %s signalled, want not", step, name)
+		}
+	}
+
+	s.Apply([]Change{{Kind: Added, Type: "pods", Meta: Meta{Name: "a"}}})
+	check("add pod", "all", "pods", "podsOrSecrets")
+
+	s.Apply([]Change{{Kind: Added, Type: "secrets", Meta: Meta{Name: "a"}}})
+	check("add secret, a type first seen after subscribing", "all", "podsOrSecrets")
+
+	s.RemoveType("pods")
+	check("remove pods", "all", "pods", "podsOrSecrets")
+
+	s.RemoveType("pods")
+	check("remove pods again, which no longer exist")
+
+	stopPodsOrSecrets()
+	s.Apply([]Change{
+		{Kind: Added, Type: "pods", Meta: Meta{Name: "b"}},
+		{Kind: Added, Type: "secrets", Meta: Meta{Name: "b"}},
+	})
+	check("after stopping the multi-type subscription", "all", "pods")
+}

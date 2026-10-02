@@ -16,11 +16,17 @@ import {
 } from "@hukube/ui/components/select";
 import { Skeleton } from "@hukube/ui/components/skeleton";
 import { cn } from "@hukube/ui/lib/utils";
-import { ArrowDown01Icon, ArrowUp01Icon, Search01Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  Search01Icon,
+  Tag01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDeferredValue, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
+import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
@@ -41,10 +47,12 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   const { cluster, types, openResource } = useWorkspace();
   const info = types.get(type);
   const [nameFilter, setNameFilter] = useState("");
+  const [selectorFilter, setSelectorFilter] = useState("");
   const [namespace, setNamespace] = useState<string | null>(allNamespaces);
   const [sort, setSort] = useState<Sort>({ field: "name" });
   const [selected, setSelected] = useState<number>();
   const deferredName = useDeferredValue(nameFilter);
+  const deferredSelector = useDeferredValue(selectorFilter);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const [total, setTotal] = useState(0);
@@ -58,9 +66,10 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   const window = windowFor(items[0]?.index ?? 0, items.at(-1)?.index ?? 0);
 
   const where = useMemo(
-    () => listQuery(type, namespace, deferredName),
-    [type, namespace, deferredName],
+    () => listQuery(type, { namespace, name: deferredName, selector: deferredSelector }),
+    [type, namespace, deferredName, deferredSelector],
   );
+  const filtered = Boolean(namespace || deferredName.trim() || deferredSelector.trim());
   const { data, error } = useSubscription(
     "resources.query",
     info && info.state !== "forbidden" ? { cluster, where, sort, ...window } : undefined,
@@ -135,6 +144,18 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
               onChange={(e) => setNameFilter(e.target.value)}
             />
           </InputGroup>
+          <InputGroup className="h-7 w-56">
+            <InputGroupAddon>
+              <HugeiconsIcon icon={Tag01Icon} strokeWidth={2} />
+            </InputGroupAddon>
+            <InputGroupInput
+              aria-label="Filter by label selector"
+              placeholder="Label selector"
+              className="font-mono"
+              value={selectorFilter}
+              onChange={(e) => setSelectorFilter(e.target.value)}
+            />
+          </InputGroup>
         </div>
       </div>
 
@@ -152,9 +173,9 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
       {error && <p className="px-3 py-2 text-destructive">{error.message}</p>}
       {data?.total === 0 && (
         <Notice
-          title={deferredName || namespace ? "No matches" : `No ${info?.kind ?? type} resources`}
+          title={filtered ? "No matches" : `No ${info?.kind ?? type} resources`}
           description={
-            deferredName || namespace
+            filtered
               ? "Nothing matches the current filters."
               : "The cluster has none right now. This list updates live."
           }
@@ -291,16 +312,10 @@ function NamespaceSelect({
   value: string | null;
   onChange: (ns: string | null) => void;
 }) {
-  const { data } = useSubscription("resources.query", {
-    cluster,
-    where: { op: "in", field: "type", values: ["namespaces"] },
-    sort: { field: "name" },
-    offset: 0,
-    limit: 1000,
-  });
+  const namespaces = useNamespaces(cluster);
   const items = [
     { label: "All namespaces", value: allNamespaces },
-    ...(data?.rows ?? []).map((r) => ({ label: r.name, value: r.name })),
+    ...(namespaces?.names ?? []).map((name) => ({ label: name, value: name })),
   ];
   return (
     <Select items={items} value={value} onValueChange={(v) => onChange(v)}>

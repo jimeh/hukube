@@ -90,6 +90,8 @@ const (
 	MethodClusterTypes Method = "cluster.types"
 	// MethodResourcesQuery subscribes with QueryParams to QueryResult.
 	MethodResourcesQuery Method = "resources.query"
+	// MethodResourcesFind subscribes with FindParams to FindResult.
+	MethodResourcesFind Method = "resources.find"
 	// MethodResourceGet subscribes with ResourceRef to ResourceData.
 	MethodResourceGet Method = "resource.get"
 	// MethodSettingsWatch subscribes with SettingKey to Setting.
@@ -173,6 +175,10 @@ const (
 	// ExprOpContains matches when the field contains Values[0],
 	// case-insensitively.
 	ExprOpContains ExprOp = "contains"
+	// ExprOpSelector matches when the Resource's labels satisfy the
+	// Kubernetes label selector in Values[0], such as "app=web,tier!=db". It
+	// takes no Field.
+	ExprOpSelector ExprOp = "selector"
 )
 
 // Field is a Resource attribute a query Expr can test.
@@ -232,6 +238,28 @@ type Row struct {
 	Namespace string    `json:"namespace,omitempty"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"createdAt" tstype:"string"`
+}
+
+// FindParams subscribes to the Resources, among those Where selects, whose
+// names best match Text. Text holds space-separated words that must all
+// match a name, case-insensitively: fuzzily, as in fzf, or as an exact
+// substring when the word starts with "'". Text without words matches
+// nothing.
+type FindParams struct {
+	Cluster string `json:"cluster"`
+	Where   *Expr  `json:"where,omitempty"`
+	Text    string `json:"text"`
+	Limit   int    `json:"limit"`
+}
+
+// FindResult holds the best matches of a find, best first, and the number of
+// matches in total. It echoes the Text and Where it answers, so a client can
+// tell it apart from results for params it has since replaced.
+type FindResult struct {
+	Text  string `json:"text"`
+	Where *Expr  `json:"where,omitempty"`
+	Total int    `json:"total"`
+	Rows  []Row  `json:"rows"`
 }
 
 // ResourceRef addresses one Resource in a Cluster. Namespace is empty for

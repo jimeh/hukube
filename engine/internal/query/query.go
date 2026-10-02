@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/labels"
+
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 )
@@ -105,6 +107,18 @@ func compile(e protocol.Expr) (predicate, error) {
 			return strings.Contains(strings.ToLower(get(t, m)), needle)
 		}, nil
 
+	case protocol.ExprOpSelector:
+		if len(e.Values) != 1 {
+			return nil, fmt.Errorf("%q needs exactly one value", e.Op)
+		}
+		selector, err := labels.Parse(e.Values[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid label selector: %w", err)
+		}
+		return func(_ protocol.TypeKey, m index.Meta) bool {
+			return selector.Matches(labels.Set(m.Labels))
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown operator %q", e.Op)
 	}
@@ -123,8 +137,14 @@ func fieldGetter(f protocol.Field) (func(protocol.TypeKey, index.Meta) string, e
 	}
 }
 
+// Types returns the Resource Types the query can match, or nil when it can
+// match any type. It is empty but not nil when the query can match no type,
+// such as "type in []".
+func (q *Compiled) Types() []protocol.TypeKey { return slices.Clone(q.types) }
+
 // scanTypes returns the types an expression can match when it constrains the
-// type at the top level, so Run can skip every other type.
+// type, so Run can skip every other type. It returns nil when the expression
+// can match any type, and never repeats a type.
 func scanTypes(e protocol.Expr) []protocol.TypeKey {
 	switch {
 	case e.Op == protocol.ExprOpIn && e.Field == protocol.FieldType:
@@ -132,13 +152,25 @@ func scanTypes(e protocol.Expr) []protocol.TypeKey {
 		for i, v := range e.Values {
 			types[i] = protocol.TypeKey(v)
 		}
-		return types
+		slices.Sort(types)
+		return slices.Compact(types)
 	case e.Op == protocol.ExprOpAnd:
 		for _, arg := range e.Args {
 			if types := scanTypes(arg); types != nil {
 				return types
 			}
 		}
+	case e.Op == protocol.ExprOpOr:
+		union := []protocol.TypeKey{}
+		for _, arg := range e.Args {
+			types := scanTypes(arg)
+			if types == nil {
+				return nil
+			}
+			union = append(union, types...)
+		}
+		slices.Sort(union)
+		return slices.Compact(union)
 	}
 	return nil
 }

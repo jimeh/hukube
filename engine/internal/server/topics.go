@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jimeh/hukube/engine/internal/cluster"
+	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 	"github.com/jimeh/hukube/engine/internal/query"
 )
@@ -16,6 +18,10 @@ type request func(ctx context.Context, srv *Server, params json.RawMessage) (any
 // topic starts a subscription. compute returns the current value, or nil when
 // there is nothing to send yet; notify must be called whenever it may have
 // changed. stop releases everything the topic started.
+//
+// compute must encode the same state to the same JSON every time, such as by
+// sorting slices built from maps, because the session skips values identical
+// to the last one it sent.
 type topic func(ctx context.Context, srv *Server, params json.RawMessage, notify func()) (*liveValue, error)
 
 type liveValue struct {
@@ -63,7 +69,7 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return c.Types(), nil },
-			stop:    forward(ctx, notify, c.TypesChanged, c.Index.Changed),
+			stop:    forward(ctx, notify, c.TypesChanged, allChanges(c)),
 		}, nil
 	},
 
@@ -82,7 +88,31 @@ var topics = map[protocol.Method]topic{
 		}
 		return &liveValue{
 			compute: func() (any, error) { return query.Run(c.Index, q, p.Sort, p.Offset, p.Limit), nil },
-			stop:    forward(ctx, notify, c.Index.Changed),
+			stop:    forward(ctx, notify, queryChanges(c.Index, q)),
+		}, nil
+	},
+
+	protocol.MethodResourcesFind: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
+		p, err := decode[protocol.FindParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		q, err := query.Compile(p.Where)
+		if err != nil {
+			return nil, badRequest(err)
+		}
+		c, err := srv.cfg.Clusters.Get(p.Cluster)
+		if err != nil {
+			return nil, err
+		}
+		finder := finders.Get().(*query.Finder)
+		stop := forward(ctx, notify, queryChanges(c.Index, q))
+		return &liveValue{
+			compute: func() (any, error) { return finder.Find(c.Index, q, p), nil },
+			stop: func() {
+				stop()
+				finders.Put(finder)
+			},
 		}, nil
 	},
 
@@ -148,6 +178,30 @@ var topics = map[protocol.Method]topic{
 			stop: forward(ctx, notify, func() (<-chan struct{}, func()) { return srv.cfg.Settings.Watch(p.Key) }),
 		}, nil
 	},
+}
+
+// finders holds Finders between find subscriptions. Typing restarts a find
+// with new params on every keystroke, and pooling lets each restart reuse the
+// previous one's scratch space, which grows to the number of Resources it
+// scans. A Finder is only used by the subscription that took it, because
+// compute and stop run on that subscription's goroutine.
+var finders = sync.Pool{New: func() any { return query.NewFinder() }}
+
+// allChanges subscribes to changes of every type in a Cluster's index.
+func allChanges(c *cluster.Cluster) func() (<-chan struct{}, func()) {
+	return func() (<-chan struct{}, func()) { return c.Index.Changed() }
+}
+
+// queryChanges subscribes to changes of the types a Query can match. A Query
+// that can match no type never changes.
+func queryChanges(store *index.Store, q *query.Compiled) func() (<-chan struct{}, func()) {
+	return func() (<-chan struct{}, func()) {
+		types := q.Types()
+		if types != nil && len(types) == 0 {
+			return nil, func() {}
+		}
+		return store.Changed(types...)
+	}
 }
 
 func decode[P any](raw json.RawMessage) (P, error) {

@@ -19,7 +19,7 @@ function RootLayout() {
       <main className="min-h-0 flex-1">
         {ids.map((id) => (
           <div key={id} hidden={id !== active} className="h-full">
-            <Workspace cluster={id} />
+            <Workspace cluster={id} active={id === active} />
           </div>
         ))}
         <Outlet />

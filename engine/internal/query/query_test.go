@@ -60,6 +60,19 @@ func TestRunFiltersAndSorts(t *testing.T) {
 			want:  []string{"Web-2", "web-1"},
 		},
 		{
+			name:  "a repeated type does not repeat rows",
+			where: ptr(in(protocol.FieldType, "pods", "pods")),
+			want:  []string{"Web-2", "coredns", "web-1"},
+		},
+		{
+			name: "or of types scans each once",
+			where: &protocol.Expr{Op: protocol.ExprOpOr, Args: []protocol.Expr{
+				in(protocol.FieldType, "configmaps", "pods"),
+				in(protocol.FieldType, "pods"),
+			}},
+			want: []string{"Web-2", "coredns", "web-1", "web-config"},
+		},
+		{
 			name:  "contains is case-insensitive",
 			where: &protocol.Expr{Op: protocol.ExprOpContains, Field: protocol.FieldName, Values: []string{"WEB"}},
 			want:  []string{"Web-2", "web-1", "web-config"},
@@ -125,14 +138,120 @@ func TestRunWindow(t *testing.T) {
 	}
 }
 
+// Types decides which index changes wake a Query subscription, so it must
+// cover every type the Query can match and, where it can, nothing more.
+func TestCompiledTypes(t *testing.T) {
+	name := protocol.Expr{Op: protocol.ExprOpContains, Field: protocol.FieldName, Values: []string{"web"}}
+	tests := []struct {
+		name  string
+		where *protocol.Expr
+		want  []protocol.TypeKey
+	}{
+		{name: "no expression matches any type", want: nil},
+		{name: "one type", where: ptr(in(protocol.FieldType, "pods")), want: []protocol.TypeKey{"pods"}},
+		{
+			name:  "several types, repeated",
+			where: ptr(in(protocol.FieldType, "pods", "configmaps", "pods")),
+			want:  []protocol.TypeKey{"configmaps", "pods"},
+		},
+		{
+			name:  "and takes its constrained argument",
+			where: &protocol.Expr{Op: protocol.ExprOpAnd, Args: []protocol.Expr{name, in(protocol.FieldType, "pods")}},
+			want:  []protocol.TypeKey{"pods"},
+		},
+		{
+			name: "or of constrained branches takes their union",
+			where: &protocol.Expr{Op: protocol.ExprOpOr, Args: []protocol.Expr{
+				in(protocol.FieldType, "pods"),
+				{Op: protocol.ExprOpAnd, Args: []protocol.Expr{in(protocol.FieldType, "secrets", "pods"), name}},
+			}},
+			want: []protocol.TypeKey{"pods", "secrets"},
+		},
+		{
+			name:  "or with an unconstrained branch matches any type",
+			where: &protocol.Expr{Op: protocol.ExprOpOr, Args: []protocol.Expr{in(protocol.FieldType, "pods"), name}},
+			want:  nil,
+		},
+		{
+			name:  "not matches any type",
+			where: &protocol.Expr{Op: protocol.ExprOpNot, Args: []protocol.Expr{in(protocol.FieldType, "pods")}},
+			want:  nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := Compile(tt.where)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := q.Types()
+			if (got == nil) != (tt.want == nil) || !slices.Equal(got, tt.want) {
+				t.Errorf("Types() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunMatchesLabelSelectors(t *testing.T) {
+	store := index.New()
+	add := func(name string, labels map[string]string) index.Change {
+		return index.Change{Kind: index.Added, Type: "pods", Meta: index.Meta{Namespace: "default", Name: name, Labels: labels}}
+	}
+	store.Apply([]index.Change{
+		add("web", map[string]string{"app": "web", "tier": "frontend"}),
+		add("api", map[string]string{"app": "api", "tier": "backend"}),
+		add("db", map[string]string{"app": "db", "tier": "backend", "critical": "true"}),
+		add("unlabelled", nil),
+	})
+	selector := func(s string) protocol.Expr {
+		return protocol.Expr{Op: protocol.ExprOpSelector, Values: []string{s}}
+	}
+	tests := []struct {
+		name  string
+		where protocol.Expr
+		want  []string
+	}{
+		{name: "equality", where: selector("app=web"), want: []string{"web"}},
+		{name: "several requirements must all hold", where: selector("tier=backend,app!=db"), want: []string{"api"}},
+		{name: "inequality matches a missing label", where: selector("app!=web"), want: []string{"api", "db", "unlabelled"}},
+		{name: "in", where: selector("app in (web,db)"), want: []string{"db", "web"}},
+		{name: "notin matches a missing label", where: selector("app notin (web,db)"), want: []string{"api", "unlabelled"}},
+		{name: "exists", where: selector("critical"), want: []string{"db"}},
+		{name: "does not exist", where: selector("!tier"), want: []string{"unlabelled"}},
+		{name: "empty matches everything", where: selector(""), want: []string{"api", "db", "unlabelled", "web"}},
+		{
+			name: "combines with not and and",
+			where: protocol.Expr{Op: protocol.ExprOpAnd, Args: []protocol.Expr{
+				selector("tier"),
+				{Op: protocol.ExprOpNot, Args: []protocol.Expr{selector("tier=frontend")}},
+			}},
+			want: []string{"api", "db"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := Compile(&tt.where)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := names(Run(store, q, protocol.Sort{}, 0, 100)); !slices.Equal(got, tt.want) {
+				t.Errorf("rows = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCompileRejectsInvalidExpressions(t *testing.T) {
 	tests := map[string]protocol.Expr{
-		"unknown operator":        {Op: "near"},
-		"unknown field":           {Op: protocol.ExprOpIn, Field: "color", Values: []string{"red"}},
-		"empty and":               {Op: protocol.ExprOpAnd},
-		"not with two arguments":  {Op: protocol.ExprOpNot, Args: []protocol.Expr{in(protocol.FieldName, "a"), in(protocol.FieldName, "b")}},
-		"contains without value":  {Op: protocol.ExprOpContains, Field: protocol.FieldName},
-		"invalid nested argument": {Op: protocol.ExprOpAnd, Args: []protocol.Expr{{Op: "near"}}},
+		"unknown operator":         {Op: "near"},
+		"unknown field":            {Op: protocol.ExprOpIn, Field: "color", Values: []string{"red"}},
+		"empty and":                {Op: protocol.ExprOpAnd},
+		"not with two arguments":   {Op: protocol.ExprOpNot, Args: []protocol.Expr{in(protocol.FieldName, "a"), in(protocol.FieldName, "b")}},
+		"contains without value":   {Op: protocol.ExprOpContains, Field: protocol.FieldName},
+		"invalid nested argument":  {Op: protocol.ExprOpAnd, Args: []protocol.Expr{{Op: "near"}}},
+		"unparseable selector":     {Op: protocol.ExprOpSelector, Values: []string{"app=(web"}},
+		"selector without value":   {Op: protocol.ExprOpSelector},
+		"selector with two values": {Op: protocol.ExprOpSelector, Values: []string{"app=web", "tier=db"}},
 	}
 	for name, expr := range tests {
 		t.Run(name, func(t *testing.T) {

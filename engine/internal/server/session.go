@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,6 +127,9 @@ func (s *session) handle(ctx context.Context, msg protocol.ClientMessage) {
 
 // runSubscription (re)starts the topic whenever params change and emits the
 // latest value whenever the topic signals, at most once per minEmitInterval.
+// A value identical to the last one sent is skipped, except the first value
+// after a restart and the first after an error, which the client needs to
+// learn the result of an update or to clear its error.
 func (s *session) runSubscription(ctx context.Context, id uint64, t topic, sub *subscription) {
 	wake := make(chan struct{}, 1)
 	notify := func() {
@@ -142,15 +146,35 @@ func (s *session) runSubscription(ctx context.Context, id uint64, t topic, sub *
 		}
 	}()
 
-	var lastEmit time.Time
-	emit := func() {
-		v, err := live.compute()
+	var (
+		lastEmit time.Time
+		lastSent json.RawMessage
+	)
+	fail := func(err error) {
+		s.out.error(id, err)
+		lastSent = nil
+	}
+	send := func(v any, err error) {
 		switch {
 		case err != nil:
-			s.out.error(id, err)
-		case v != nil:
-			s.out.latest(protocol.ServerMessage{ID: id, Type: protocol.ServerTypeData, Data: v})
+			fail(err)
+			return
+		case v == nil:
+			return
 		}
+		data, err := json.Marshal(v)
+		if err != nil {
+			fail(fmt.Errorf("encode data: %w", err))
+			return
+		}
+		if bytes.Equal(data, lastSent) {
+			return
+		}
+		lastSent = data
+		s.out.latest(protocol.ServerMessage{ID: id, Type: protocol.ServerTypeData, Data: json.RawMessage(data)})
+	}
+	emit := func() {
+		send(live.compute())
 		lastEmit = time.Now()
 	}
 
@@ -164,9 +188,10 @@ func (s *session) runSubscription(ctx context.Context, id uint64, t topic, sub *
 				live.stop()
 				live = nil
 			}
+			lastSent = nil
 			lv, err := t(ctx, s.srv, params, notify)
 			if err != nil {
-				s.out.error(id, err)
+				fail(err)
 				continue
 			}
 			live = lv
