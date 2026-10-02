@@ -1,0 +1,47 @@
+# Installed by `mise run setup`. Formats staged files, then lints and
+# typechecks what they can affect. `mise run check` and CI run everything,
+# including tests.
+pre-commit:
+  piped: true
+  jobs:
+    - name: format
+      group:
+        parallel: true
+        jobs:
+          - name: oxfmt
+            glob: "*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css,html,md,yml,yaml,toml}"
+            run: mise run fmt:oxfmt -- {staged_files}
+            stage_fixed: true
+          - name: gofmt
+            root: engine/
+            glob: "*.go"
+            run: mise run fmt:go -- {staged_files}
+            stage_fixed: true
+
+    # After formatting, which may rewrite the protocol's Go source.
+    - name: protocol
+      glob:
+        - "engine/internal/protocol/*.go"
+        - "engine/tygo.yaml"
+        - "packages/engine-client/src/protocol.gen.ts"
+      run: mise run gen:check
+
+    - name: lint
+      group:
+        parallel: true
+        jobs:
+          - name: oxlint
+            glob: "*.{ts,tsx,js,jsx,mjs,cjs}"
+            run: mise run lint:ts -- {staged_files}
+          # Type errors can surface in files that import a changed one, so
+          # typecheck every project.
+          - name: typecheck
+            glob: ["*.{ts,tsx}", "*tsconfig*.json"]
+            run: mise run typecheck
+          - name: golangci-lint
+            root: engine/
+            glob: "*.go"
+            run: mise run lint:go -- {staged_files}
+          - name: actions
+            glob: ".github/workflows/*.{yml,yaml}"
+            run: mise run lint:actions -- {staged_files}

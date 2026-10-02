@@ -30,7 +30,7 @@ Tools are managed with [mise](https://mise.jdx.dev):
 
 ```sh
 mise install          # Bun, Go, linters, k3d, kubectl
-mise run install      # JavaScript dependencies
+mise run setup        # JavaScript dependencies and the pre-commit hook
 ```
 
 Run the web host against your kubeconfig, then open

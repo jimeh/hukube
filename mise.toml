@@ -8,6 +8,10 @@ k3d = "5.9.0"
 kubectl = "1.37.1"
 "go:github.com/gzuidhof/tygo" = "0.2.21"
 "go:sigs.k8s.io/controller-runtime/tools/setup-envtest" = "0.25.1"
+actionlint = "1.7.12"
+lefthook = "2.1.14"
+pinact = "5.0.0"
+zizmor = "1.30.1"
 
 [env]
 # Kubernetes version used for envtest's kube-apiserver and etcd binaries.
@@ -19,12 +23,19 @@ E2E_KUBECONFIG = "{{config_root}}/.data/e2e/kubeconfig"
 
 [settings]
 experimental = true
+# Skip tool releases younger than 7 days when resolving or upgrading versions.
+minimum_release_age = "7d"
 
 # --- Setup ---
 
 [tasks.install]
 description = "Install JavaScript dependencies"
 run = "bun install --frozen-lockfile"
+
+[tasks.setup]
+description = "Install JavaScript dependencies and the Git pre-commit hook"
+depends = ["install"]
+run = "lefthook install"
 
 [tasks.gen]
 description = "Generate TypeScript protocol types from the Engine's Go definitions"
@@ -133,21 +144,59 @@ run = "engine/bin/hukube-engine --web --ui-dir apps/app/dist --data-dir .data/en
 # --- Checks ---
 
 [tasks."lint:ts"]
-description = "Lint TypeScript with type-aware oxlint"
-run = "bunx oxlint --type-aware --deny-warnings"
+description = "Lint TypeScript with type-aware oxlint, or only the given files"
+run = "bunx oxlint --type-aware --deny-warnings --no-error-on-unmatched-pattern"
 
 [tasks."lint:go"]
-description = "Lint the Engine"
+description = "Lint the Engine, or only the packages holding the given files"
 dir = "engine"
-run = "golangci-lint run ./..."
+usage = 'arg "[file]" var=#true help="Go files or package directories, relative to engine/"'
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+eval "set -- ${usage_file:-./...}"
+# golangci-lint checks whole packages, so lint the directories holding files.
+pkgs=()
+for arg in "$@"; do
+  [[ "$arg" == *.go ]] && arg="$(dirname "$arg")"
+  [[ "$arg" == ./* || "$arg" == /* ]] || arg="./$arg"
+  pkgs+=("$arg")
+done
+mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+golangci-lint run "${pkgs[@]}"
+'''
+
+[tasks."lint:actions"]
+description = "Lint GitHub Actions workflows, or only the given ones, including that actions are pinned to commit SHAs"
+usage = 'arg "[file]" var=#true help="Workflow files"'
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+eval "set -- ${usage_file:-}"
+actionlint "$@"
+zizmor --offline --quiet "${@:-.github/workflows}"
+'''
 
 [tasks.lint]
 description = "Run all linters"
-depends = ["lint:ts", "lint:go"]
+depends = ["lint:ts", "lint:go", "lint:actions"]
+
+[tasks."pin:actions"]
+description = "Pin GitHub Actions in workflows to commit SHAs"
+run = "pinact run"
 
 [tasks.fmt]
 description = "Format all code"
-run = ["bunx oxfmt", "cd engine && golangci-lint fmt ./..."]
+depends = ["fmt:oxfmt", "fmt:go"]
+
+[tasks."fmt:oxfmt"]
+description = "Format everything but Go with oxfmt, or only the given files"
+run = "bunx oxfmt --no-error-on-unmatched-pattern"
+
+[tasks."fmt:go"]
+description = "Format the Engine, or only the given files relative to engine/"
+dir = "engine"
+run = "golangci-lint fmt"
 
 [tasks."fmt:check"]
 description = "Check formatting without writing changes"
@@ -173,7 +222,12 @@ depends = ["test:ts", "test:engine"]
 [tasks."gen:check"]
 description = "Fail if generated protocol types are out of date"
 depends = ["gen"]
-run = "git diff --exit-code -- packages/engine-client/src/protocol.gen.ts"
+run = '''
+git diff --exit-code -- packages/engine-client/src/protocol.gen.ts || {
+  echo "protocol.gen.ts is out of date: commit the file \`mise run gen\` wrote." >&2
+  exit 1
+}
+'''
 
 [tasks.check]
 description = "Run every fast check: formatting, lint, typecheck, generated code, tests"

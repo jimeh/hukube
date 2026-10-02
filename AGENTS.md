@@ -6,8 +6,16 @@ comments, and UI copy.
 
 ## Commands
 
-Use Mise tasks (`mise tasks` lists them). `mise run check` must pass before
-committing. `mise run e2e` needs Docker.
+Use Mise tasks (`mise tasks` lists them). Run `mise run setup` in a fresh
+clone or worktree: it installs JavaScript dependencies and a pre-commit hook
+that formats staged files, then lints and typechecks what they affect.
+`mise run check` runs every check, including tests, and must pass before
+pushing. `mise run e2e` needs Docker.
+
+Pass a file or test name to run focused tests:
+`mise run test:ts -- packages/k8s/src/age.test.ts` or
+`mise run test:engine -- -run TestFind`. The `fmt:*` and `lint:*` tasks also
+take files; Go paths are relative to `engine/`.
 
 ## Layout
 
@@ -16,6 +24,8 @@ committing. `mise run e2e` needs Docker.
 - `packages/ui/`: shadcn components (`src/components` is CLI-managed and
   excluded from oxlint; add components with `bunx --bun shadcn@latest add`
   from `packages/ui`), plus the design tokens in `src/styles/globals.css`.
+- `packages/host/`: the `Host` interface the UI uses for platform features.
+- `packages/k8s/`: Kubernetes helpers: Resource URIs, type keys, and ages.
 - `apps/app/`: the UI; features live in `src/features/<feature>/`.
 - `apps/desktop/`: Electron main and preload.
 - `e2e/`: Playwright tests for the web and desktop hosts.
@@ -45,3 +55,9 @@ committing. `mise run e2e` needs Docker.
   `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
 - **envtest:** `go test` skips Engine integration tests without
   `KUBEBUILDER_ASSETS`; use `mise run test:engine`.
+- **Dependency cooldown:** `bunfig.toml` and `mise.toml` skip releases younger
+  than 7 days. For an urgent security fix, add the package to Bun's
+  `minimumReleaseAgeExcludes` or pin the exact tool version.
+- **GitHub Actions:** `uses:` references are pinned to commit SHAs, and
+  `mise run lint` fails on unpinned ones. Run `mise run pin:actions` after
+  adding or bumping an action.
