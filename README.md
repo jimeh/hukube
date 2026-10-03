@@ -65,6 +65,14 @@ mise run dev:desktop
 HUKUBE_ELECTRON_FLAGS=--no-sandbox mise run dev:desktop
 ```
 
+Check a change against sample Resources in the e2e k3d cluster (needs
+Docker). The Engine runs in the background until you stop it:
+
+```sh
+mise run dev:verify       # prints a URL including the Engine's token
+mise run dev:verify:stop
+```
+
 Serve the built UI from the Engine, as the web host does outside development:
 
 ```sh

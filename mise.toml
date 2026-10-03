@@ -167,19 +167,32 @@ golangci-lint run "${pkgs[@]}"
 '''
 
 [tasks."lint:actions"]
-description = "Lint GitHub Actions workflows, or only the given ones, including that actions are pinned to commit SHAs"
-usage = 'arg "[file]" var=#true help="Workflow files"'
+description = "Lint GitHub Actions workflows and Dependabot config, or only the given files, including that actions are pinned to commit SHAs"
+usage = 'arg "[file]" var=#true help="Files under .github"'
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 eval "set -- ${usage_file:-}"
-actionlint "$@"
-zizmor --offline --quiet "${@:-.github/workflows}"
+workflows=()
+for f in "$@"; do
+  if [[ "$f" == .github/workflows/* ]]; then workflows+=("$f"); fi
+done
+# actionlint reads only workflows, and finds them all when given none.
+if [[ $# -eq 0 ]]; then
+  actionlint
+elif [[ -n "${workflows[*]-}" ]]; then
+  actionlint "${workflows[@]}"
+fi
+zizmor --offline --quiet "${@:-.github}"
 '''
+
+[tasks."lint:mise"]
+description = "Fail if mise.lock lacks a tool from mise.toml or a platform's download URL"
+run = "bun scripts/check-mise-lock.ts"
 
 [tasks.lint]
 description = "Run all linters"
-depends = ["lint:ts", "lint:go", "lint:actions"]
+depends = ["lint:ts", "lint:go", "lint:actions", "lint:mise"]
 
 [tasks."pin:actions"]
 description = "Pin GitHub Actions in workflows to commit SHAs"
@@ -220,11 +233,28 @@ description = "Run all unit and integration tests"
 depends = ["test:ts", "test:engine"]
 
 [tasks."gen:check"]
-description = "Fail if generated protocol types are out of date"
+description = "Fail if generated protocol types are out of date, and regenerate them"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+file=packages/engine-client/src/protocol.gen.ts
+before="$(mktemp)"
+trap 'rm -f "$before"' EXIT
+cp "$file" "$before"
+mise run gen
+if ! cmp -s "$before" "$file"; then
+  git diff --no-index -- "$before" "$file" || true
+  echo "protocol.gen.ts was out of date; this check regenerated it." >&2
+  exit 1
+fi
+'''
+
+[tasks."gen:check:staged"]
+description = "Fail if the staged protocol types differ from freshly generated ones"
 depends = ["gen"]
 run = '''
 git diff --exit-code -- packages/engine-client/src/protocol.gen.ts || {
-  echo "protocol.gen.ts is out of date: commit the file \`mise run gen\` wrote." >&2
+  echo "The staged protocol.gen.ts is out of date: stage the file \`mise run gen\` wrote." >&2
   exit 1
 }
 '''
@@ -254,6 +284,70 @@ run = 'k3d cluster delete "$E2E_CLUSTER"'
 description = "Install the Chromium build Playwright drives"
 dir = "e2e"
 run = "bunx playwright install chromium"
+
+# --- Checking UI changes ---
+
+[tasks."dev:verify:seed"]
+description = "Apply the sample Resources in e2e/fixtures/sample to the e2e cluster"
+depends = ["e2e:cluster"]
+run = '''
+kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/crds.yaml
+kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for condition=established --timeout 30s \
+  crd/widgets.sample.hukube.dev
+kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/resources.yaml
+'''
+
+[tasks."dev:verify"]
+description = "Build the UI and start a background web Host against the seeded e2e cluster, printing its URL"
+depends = ["build:engine", "build:ui", "dev:verify:seed"]
+# A free port and its own data dir, so worktrees can each run one.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+dir=.data/verify
+mise run dev:verify:stop
+mkdir -p "$dir"
+token="$(openssl rand -hex 16)"
+HUKUBE_TOKEN="$token" nohup engine/bin/hukube-engine --web --ui-dir apps/app/dist \
+  --listen 127.0.0.1:0 --kubeconfig "$E2E_KUBECONFIG" --data-dir "$dir/engine" \
+  >"$dir/engine.out" 2>"$dir/engine.log" </dev/null &
+pid=$!
+echo "$pid" >"$dir/engine.pid"
+# The Engine prints one JSON line with its URL once it listens.
+url=""
+for _ in $(seq 100); do
+  url="$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' "$dir/engine.out")"
+  if [[ -n "$url" ]] || ! kill -0 "$pid" 2>/dev/null; then break; fi
+  sleep 0.1
+done
+if [[ -z "$url" ]]; then
+  echo "The Engine did not start; see $dir/engine.log." >&2
+  mise run dev:verify:stop
+  exit 1
+fi
+echo "$url/#token=$token" >"$dir/url"
+echo "hukube: $url/#token=$token"
+echo "Engine log: $dir/engine.log. Stop it with \`mise run dev:verify:stop\`."
+'''
+
+[tasks."dev:verify:stop"]
+description = "Stop the web Host that dev:verify started"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+pid_file=.data/verify/engine.pid
+[[ -f "$pid_file" ]] || exit 0
+pid="$(cat "$pid_file")"
+# Only signal the PID if it is still our Engine, not a reused PID.
+if ps -p "$pid" -o command= 2>/dev/null | grep -q hukube-engine; then
+  kill "$pid"
+  for _ in $(seq 50); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+fi
+rm -f "$pid_file" .data/verify/url
+'''
 
 [tasks.e2e]
 description = "Run end-to-end tests for the web and desktop Hosts against the k3d cluster"

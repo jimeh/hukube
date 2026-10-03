@@ -1,5 +1,7 @@
 # Plan: label Queries, quieter subscriptions, and Go to Resource
 
+Status: shipped in #2.
+
 ## Outcome
 
 After this work:

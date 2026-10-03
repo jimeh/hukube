@@ -24,7 +24,7 @@ pre-commit:
         - "engine/internal/protocol/*.go"
         - "engine/tygo.yaml"
         - "packages/engine-client/src/protocol.gen.ts"
-      run: mise run gen:check
+      run: mise run gen:check:staged
 
     - name: lint
       group:
@@ -43,5 +43,8 @@ pre-commit:
             glob: "*.go"
             run: mise run lint:go -- {staged_files}
           - name: actions
-            glob: ".github/workflows/*.{yml,yaml}"
+            glob: ".github/*.{yml,yaml}"
             run: mise run lint:actions -- {staged_files}
+          - name: mise-lock
+            glob: ["mise.toml", "mise.lock"]
+            run: mise run lint:mise
