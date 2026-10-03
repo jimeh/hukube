@@ -1,0 +1,116 @@
+# Sample Resources for checking UI changes with `mise run dev:verify`: two
+# labeled apps in one Namespace, a same-named ConfigMap in a second Namespace,
+# and a custom Resource.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-shop
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: sample-shop
+  labels: { app: web, tier: frontend }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web, tier: frontend }
+    spec:
+      containers:
+        - name: web
+          # k3s already pulls this image for its Pod sandboxes.
+          image: rancher/mirrored-pause:3.6
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: sample-shop
+  labels: { app: api, tier: backend }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api, tier: backend }
+    spec:
+      containers:
+        - name: api
+          image: rancher/mirrored-pause:3.6
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: sample-shop
+  labels: { app: web, tier: frontend }
+spec:
+  selector: { app: web }
+  ports:
+    - port: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: sample-shop
+  labels: { app: api, tier: backend }
+spec:
+  selector: { app: api }
+  ports:
+    - port: 8080
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: sample-shop
+  labels: { app: web, tier: frontend }
+data:
+  greeting: hello
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: sample-shop
+  labels: { app: api, tier: backend }
+data:
+  logLevel: debug
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-credentials
+  namespace: sample-shop
+  labels: { app: api, tier: backend }
+stringData:
+  password: not-a-secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: sample-staging
+  labels: { app: web, tier: frontend }
+data:
+  greeting: hello from staging
+---
+apiVersion: sample.hukube.dev/v1
+kind: Widget
+metadata:
+  name: gizmo
+  namespace: sample-shop
+  labels: { app: web }
+spec:
+  size: 3
