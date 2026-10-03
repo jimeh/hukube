@@ -145,7 +145,7 @@ run = "engine/bin/hukube-engine --web --ui-dir apps/app/dist --data-dir .data/en
 
 [tasks."lint:ts"]
 description = "Lint TypeScript with type-aware oxlint, or only the given files"
-run = "bunx oxlint --type-aware --deny-warnings --no-error-on-unmatched-pattern"
+run = "./node_modules/.bin/oxlint --type-aware --deny-warnings --no-error-on-unmatched-pattern"
 
 [tasks."lint:go"]
 description = "Lint the Engine, or only the packages holding the given files"
@@ -162,8 +162,9 @@ for arg in "$@"; do
   [[ "$arg" == ./* || "$arg" == /* ]] || arg="./$arg"
   pkgs+=("$arg")
 done
-mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
-golangci-lint run "${pkgs[@]}"
+unique_pkgs=()
+while IFS= read -r pkg; do unique_pkgs+=("$pkg"); done < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+golangci-lint run "${unique_pkgs[@]}"
 '''
 
 [tasks."lint:actions"]
@@ -204,7 +205,7 @@ depends = ["fmt:oxfmt", "fmt:go"]
 
 [tasks."fmt:oxfmt"]
 description = "Format everything but Go with oxfmt, or only the given files"
-run = "bunx oxfmt --no-error-on-unmatched-pattern"
+run = "./node_modules/.bin/oxfmt --no-error-on-unmatched-pattern"
 
 [tasks."fmt:go"]
 description = "Format the Engine, or only the given files relative to engine/"
@@ -213,7 +214,7 @@ run = "golangci-lint fmt"
 
 [tasks."fmt:check"]
 description = "Check formatting without writing changes"
-run = ["bunx oxfmt --check", "cd engine && golangci-lint fmt --diff ./..."]
+run = ["./node_modules/.bin/oxfmt --check", "cd engine && golangci-lint fmt --diff ./..."]
 
 [tasks.typecheck]
 description = "Typecheck all TypeScript projects"
@@ -221,7 +222,7 @@ run = "bun run --filter '*' typecheck"
 
 [tasks."test:ts"]
 description = "Run TypeScript unit tests"
-run = "bunx vitest run"
+run = "./node_modules/.bin/vitest run"
 
 [tasks."test:engine"]
 description = "Run Engine unit and envtest integration tests"
@@ -251,8 +252,14 @@ fi
 
 [tasks."gen:check:staged"]
 description = "Fail if the staged protocol types differ from freshly generated ones"
-depends = ["gen"]
 run = '''
+set -eu
+if ! git diff --quiet -- engine/internal/protocol engine/tygo.yaml || \
+  [ -n "$(git ls-files --others --exclude-standard -- engine/internal/protocol engine/tygo.yaml)" ]; then
+  echo "Stage or stash protocol source changes before checking the staged generated types." >&2
+  exit 1
+fi
+mise run gen
 git diff --exit-code -- packages/engine-client/src/protocol.gen.ts || {
   echo "The staged protocol.gen.ts is out of date: stage the file \`mise run gen\` wrote." >&2
   exit 1
@@ -304,15 +311,15 @@ depends = ["build:engine", "build:ui", "dev:verify:seed"]
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-dir=.data/verify
+dir="$PWD/.data/verify"
 mise run dev:verify:stop
 mkdir -p "$dir"
 token="$(openssl rand -hex 16)"
-HUKUBE_TOKEN="$token" nohup engine/bin/hukube-engine --web --ui-dir apps/app/dist \
+HUKUBE_TOKEN="$token" nohup "$PWD/engine/bin/hukube-engine" --web --ui-dir "$PWD/apps/app/dist" \
   --listen 127.0.0.1:0 --kubeconfig "$E2E_KUBECONFIG" --data-dir "$dir/engine" \
   >"$dir/engine.out" 2>"$dir/engine.log" </dev/null &
 pid=$!
-echo "$pid" >"$dir/engine.pid"
+trap 'kill "$pid" 2>/dev/null || true; rm -f "$dir/engine.pid" "$dir/url"' EXIT
 # The Engine prints one JSON line with its URL once it listens.
 url=""
 for _ in $(seq 100); do
@@ -322,10 +329,14 @@ for _ in $(seq 100); do
 done
 if [[ -z "$url" ]]; then
   echo "The Engine did not start; see $dir/engine.log." >&2
-  mise run dev:verify:stop
   exit 1
 fi
+# Record start time and the exact command, including this checkout's paths.
+identity="$(ps -ww -p "$pid" -o lstart= -o command=)"
+[[ -n "$identity" ]] || exit 1
+printf '%s\n%s\n' "$pid" "$identity" >"$dir/engine.pid"
 echo "$url/#token=$token" >"$dir/url"
+trap - EXIT
 echo "hukube: $url/#token=$token"
 echo "Engine log: $dir/engine.log. Stop it with \`mise run dev:verify:stop\`."
 '''
@@ -337,14 +348,28 @@ run = '''
 set -euo pipefail
 pid_file=.data/verify/engine.pid
 [[ -f "$pid_file" ]] || exit 0
-pid="$(cat "$pid_file")"
-# Only signal the PID if it is still our Engine, not a reused PID.
-if ps -p "$pid" -o command= 2>/dev/null | grep -q hukube-engine; then
+pid="$(sed -n '1p' "$pid_file")"
+identity="$(sed -n '2p' "$pid_file")"
+[[ "$pid" =~ ^[0-9]+$ ]] && [[ "$pid" -gt 0 ]] || {
+  echo "Invalid Engine PID record: $pid_file." >&2
+  exit 1
+}
+current="$(ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null || true)"
+if [[ -n "$current" ]]; then
+  if [[ -z "$identity" || "$current" != "$identity" ]]; then
+    echo "The Engine PID record no longer identifies its process; leaving PID $pid running." >&2
+    exit 1
+  fi
   kill "$pid"
   for _ in $(seq 50); do
-    kill -0 "$pid" 2>/dev/null || break
+    current="$(ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null || true)"
+    [[ "$current" == "$identity" ]] || break
     sleep 0.1
   done
+  if [[ "$current" == "$identity" ]]; then
+    echo "The Engine did not stop; retaining $pid_file so cleanup can be retried." >&2
+    exit 1
+  fi
 fi
 rm -f "$pid_file" .data/verify/url
 '''

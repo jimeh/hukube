@@ -10,7 +10,8 @@ Use Mise tasks (`mise tasks` lists them). Run `mise run setup` in a fresh
 clone or worktree: it installs JavaScript dependencies and a pre-commit hook
 that formats staged files, then lints and typechecks what they affect.
 `mise run check` runs every check, including tests, and must pass before
-pushing. `mise run e2e` needs Docker.
+pushing. Format, lint, and TypeScript test tasks require the checkout's installed
+binaries; run `mise run setup` if they are missing. `mise run e2e` needs Docker.
 
 Pass a file or test name to run focused tests:
 `mise run test:ts -- packages/k8s/src/age.test.ts` or
@@ -46,7 +47,8 @@ can match your own shell. It never touches the clusters in your kubeconfig.
 - **Protocol changes:** edit `engine/internal/protocol`, then run
   `mise run gen`. For tygo to generate TypeScript unions, enum constants must
   start with their type's name (`ClusterPhaseReady`). `tstype` tags must not
-  contain commas.
+  contain commas. Stage or stash all protocol source changes before the hook
+  checks the staged generated types.
 - **Wire encoding:** Go encodes nil slices as `null`, which crashes clients
   that expect arrays, so initialize slices that go on the wire. It encodes
   `[]byte` as a base64 string, so put pre-encoded JSON in an `any` field such
