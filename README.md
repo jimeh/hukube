@@ -30,7 +30,7 @@ Tools are managed with [mise](https://mise.jdx.dev):
 
 ```sh
 mise install          # Bun, Go, linters, k3d, kubectl
-mise run install      # JavaScript dependencies
+mise run setup        # JavaScript dependencies and the pre-commit hook
 ```
 
 Run the web host against your kubeconfig, then open
@@ -63,6 +63,14 @@ Run the desktop host:
 mise run dev:desktop
 # On Linux hosts that block unprivileged user namespaces (Ubuntu 24.04+):
 HUKUBE_ELECTRON_FLAGS=--no-sandbox mise run dev:desktop
+```
+
+Check a change against sample Resources in the e2e k3d cluster (needs
+Docker). The Engine runs in the background until you stop it:
+
+```sh
+mise run dev:verify       # prints a URL including the Engine's token
+mise run dev:verify:stop
 ```
 
 Serve the built UI from the Engine, as the web host does outside development:
