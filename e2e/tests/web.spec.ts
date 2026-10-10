@@ -47,6 +47,37 @@ test("browses a live ConfigMap from the cluster picker to its YAML", async ({ pa
   await expect(grid.getByRole("row")).toHaveCount(0);
 });
 
+test("shows a Resource Type's columns and keeps their cells current", async ({ page }) => {
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+
+  const sidebar = page.getByRole("complementary", { name: "Resource types" });
+  await sidebar.getByRole("button", { name: /^ConfigMap \d+$/ }).click();
+  await page.getByRole("textbox", { name: "Filter by name" }).fill("e2e-columns");
+  // The Cluster decides the columns: ConfigMaps have one for their number of
+  // keys, between the Namespace and the age.
+  await expect(page.getByRole("columnheader", { name: "Data" })).toBeVisible();
+
+  kubectl("-n", namespace, "create", "configmap", "e2e-columns", "--from-literal=first=1");
+  const grid = page.getByRole("grid", { name: "ConfigMap resources" });
+  const row = grid.getByRole("row", { name: new RegExp(`e2e-columns ${namespace}`) });
+  const data = row.getByRole("gridcell").nth(2);
+  await expect(data).toHaveText("1");
+
+  // A change that leaves the name and age alone still reaches the list.
+  kubectl(
+    "-n",
+    namespace,
+    "patch",
+    "configmap",
+    "e2e-columns",
+    "--type=merge",
+    "--patch",
+    '{"data":{"second":"2"}}',
+  );
+  await expect(data).toHaveText("2");
+});
+
 test("goes to a Resource and a Resource Type from the palette", async ({ page }) => {
   kubectl(
     "-n",
