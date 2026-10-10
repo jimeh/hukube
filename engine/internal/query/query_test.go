@@ -104,7 +104,7 @@ func TestRunFiltersAndSorts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := Run(store, q, tt.sort, 0, 100)
+			got := Run(store, q, nil, tt.sort, 0, 100)
 			if !slices.Equal(names(got), tt.want) {
 				t.Errorf("rows = %v, want %v", names(got), tt.want)
 			}
@@ -130,7 +130,7 @@ func TestRunWindow(t *testing.T) {
 		{offset: 0, limit: 0, wantOffset: 0, want: []string{}},
 	}
 	for _, tt := range tests {
-		got := Run(store, q, protocol.Sort{}, tt.offset, tt.limit)
+		got := Run(store, q, nil, protocol.Sort{}, tt.offset, tt.limit)
 		if got.Total != 5 || got.Offset != tt.wantOffset || !slices.Equal(names(got), tt.want) {
 			t.Errorf("window(%d, %d) = total %d offset %d %v, want total 5 offset %d %v",
 				tt.offset, tt.limit, got.Total, got.Offset, names(got), tt.wantOffset, tt.want)
@@ -234,7 +234,7 @@ func TestRunMatchesLabelSelectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := names(Run(store, q, protocol.Sort{}, 0, 100)); !slices.Equal(got, tt.want) {
+			if got := names(Run(store, q, nil, protocol.Sort{}, 0, 100)); !slices.Equal(got, tt.want) {
 				t.Errorf("rows = %v, want %v", got, tt.want)
 			}
 		})
@@ -268,7 +268,7 @@ func ptr[T any](v T) *T { return &v }
 // null.
 func TestRunEncodesEmptyRowsAsArray(t *testing.T) {
 	q, _ := Compile(ptr(in(protocol.FieldName, "no-such-resource")))
-	raw, err := json.Marshal(Run(testStore(), q, protocol.Sort{}, 0, 10))
+	raw, err := json.Marshal(Run(testStore(), q, nil, protocol.Sort{}, 0, 10))
 	if err != nil {
 		t.Fatal(err)
 	}

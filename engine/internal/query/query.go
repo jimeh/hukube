@@ -175,9 +175,21 @@ func scanTypes(e protocol.Expr) []protocol.TypeKey {
 	return nil
 }
 
+// Table gives Run the Columns of the one Resource Type a Query selects, and
+// the cells of its Resources.
+type Table interface {
+	// Read calls fn with the type's Columns and a function that returns the
+	// cells of the Resource with the given index key, one per Column, or nil
+	// when there are none. Run keeps the slices it is given, so they must not
+	// change afterwards.
+	Read(fn func(columns []protocol.Column, cells func(key string) []any))
+}
+
 // Run evaluates a compiled query against a Store and returns one sorted
-// window of the matching Resources.
-func Run(store *index.Store, q *Compiled, sort protocol.Sort, offset, limit int) protocol.QueryResult {
+// window of the matching Resources. With a Table it adds the Table's Columns
+// and each Row's cells, and can sort by a Column. Every Row must then be of
+// the Table's type.
+func Run(store *index.Store, q *Compiled, table Table, sort protocol.Sort, offset, limit int) protocol.QueryResult {
 	// Non-nil so an empty window encodes as [] rather than null.
 	rows := []protocol.Row{}
 	store.Each(q.types, func(t protocol.TypeKey, m index.Meta) {
@@ -192,26 +204,87 @@ func Run(store *index.Store, q *Compiled, sort protocol.Sort, offset, limit int)
 		}
 	})
 
-	slices.SortFunc(rows, comparator(sort))
-
 	total := len(rows)
 	offset = min(max(offset, 0), total)
 	end := min(offset+min(max(limit, 0), MaxLimit), total)
-	return protocol.QueryResult{
-		Total:  total,
-		Offset: offset,
-		Rows:   slices.Clip(rows[offset:end]),
+	result := protocol.QueryResult{Total: total, Offset: offset}
+	attach := func(rows []protocol.Row) func([]protocol.Column, func(string) []any) {
+		return func(columns []protocol.Column, cells func(string) []any) {
+			result.Columns = columns
+			for i := range rows {
+				rows[i].Cells = cells(index.Key(rows[i].Namespace, rows[i].Name))
+			}
+		}
 	}
+
+	// Sorting by a Column needs the cells of every match. Any other order
+	// only needs those of the window, which is read after it is cut.
+	column := -1
+	if table != nil && sort.Field == protocol.SortFieldColumn {
+		table.Read(func(columns []protocol.Column, cells func(string) []any) {
+			column = slices.IndexFunc(columns, func(c protocol.Column) bool { return c.Name == sort.Column })
+			if column >= 0 {
+				attach(rows)(columns, cells)
+			}
+		})
+	}
+	if column >= 0 {
+		result.Rows = columnWindow(rows, column, sort.Desc, offset, end)
+		return result
+	}
+	slices.SortFunc(rows, comparator(sort))
+	result.Rows = slices.Clip(rows[offset:end])
+	if table != nil {
+		table.Read(attach(result.Rows))
+	}
+	return result
+}
+
+// columnWindow returns rows[offset:end] of rows ordered by one of their
+// cells. Rows without a value in that cell come last, whichever way the rest
+// are sorted.
+func columnWindow(rows []protocol.Row, column int, desc bool, offset, end int) []protocol.Row {
+	// A cell's key is worked out once instead of in every comparison, and the
+	// Rows are ordered through their positions, which are cheaper to move.
+	keys := make([]sortKey, len(rows))
+	order := make([]int32, len(rows))
+	for i := range rows {
+		if column < len(rows[i].Cells) {
+			keys[i] = cellKey(rows[i].Cells[column])
+		}
+		order[i] = int32(i)
+	}
+	slices.SortFunc(order, func(a, b int32) int {
+		switch aAbsent, bAbsent := keys[a].kind == kindAbsent, keys[b].kind == kindAbsent; {
+		case aAbsent && !bAbsent:
+			return 1
+		case bAbsent && !aAbsent:
+			return -1
+		}
+		c := cmp.Or(compareKeys(keys[a], keys[b]), compareIdentity(rows[a], rows[b]))
+		if desc {
+			return -c
+		}
+		return c
+	})
+	window := make([]protocol.Row, 0, end-offset)
+	for _, i := range order[offset:end] {
+		window = append(window, rows[i])
+	}
+	return window
+}
+
+// compareIdentity orders Rows by what identifies them, so that Rows that are
+// otherwise equal always come out in the same order.
+func compareIdentity(a, b protocol.Row) int {
+	return cmp.Or(
+		cmp.Compare(a.Name, b.Name),
+		cmp.Compare(a.Namespace, b.Namespace),
+		cmp.Compare(a.Type, b.Type),
+	)
 }
 
 func comparator(s protocol.Sort) func(a, b protocol.Row) int {
-	tiebreak := func(a, b protocol.Row) int {
-		return cmp.Or(
-			cmp.Compare(a.Name, b.Name),
-			cmp.Compare(a.Namespace, b.Namespace),
-			cmp.Compare(a.Type, b.Type),
-		)
-	}
 	var primary func(a, b protocol.Row) int
 	switch s.Field {
 	case protocol.SortFieldNamespace:
@@ -223,7 +296,7 @@ func comparator(s protocol.Sort) func(a, b protocol.Row) int {
 		primary = func(protocol.Row, protocol.Row) int { return 0 }
 	}
 	return func(a, b protocol.Row) int {
-		c := cmp.Or(primary(a, b), tiebreak(a, b))
+		c := cmp.Or(primary(a, b), compareIdentity(a, b))
 		if s.Desc {
 			return -c
 		}

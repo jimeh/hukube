@@ -256,6 +256,84 @@ func TestQuerySubscriptionFollowsTheCluster(t *testing.T) {
 	})
 }
 
+// A list asks for its type's Columns. They arrive once the Engine has fetched
+// the type's Table, which nothing in the index announces, and follow changes
+// to the Resources from then on.
+func TestQuerySubscriptionServesColumns(t *testing.T) {
+	c := mustDial(t, newTestServer(t))
+	cs := kubernetes.NewForConfigOrDie(cfg)
+	ctx := context.Background()
+	ns, err := cs.CoreV1().Namespaces().Create(ctx,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "columns-"}}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha, err := cs.CoreV1().ConfigMaps(ns.Name).Create(ctx,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}, Data: map[string]string{"a": "1"}}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CoreV1().ConfigMaps(ns.Name).Create(ctx,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "beta"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	query := protocol.QueryParams{
+		Cluster: testenv.ClusterID,
+		Where: &protocol.Expr{Op: protocol.ExprOpAnd, Args: []protocol.Expr{
+			{Op: protocol.ExprOpIn, Field: protocol.FieldType, Values: []string{"configmaps"}},
+			{Op: protocol.ExprOpIn, Field: protocol.FieldNamespace, Values: []string{ns.Name}},
+		}},
+		Limit: 10,
+	}
+	// rows describes a result as "name=cells" in order, such as "alpha=[1]".
+	rows := func(data json.RawMessage) string {
+		var r protocol.QueryResult
+		_ = json.Unmarshal(data, &r)
+		out := fmt.Sprintf("%+v", r.Columns)
+		for _, row := range r.Rows {
+			out += fmt.Sprintf(" %s=%v", row.Name, row.Cells)
+		}
+		return out
+	}
+	awaitRows := func(id uint64, want string) {
+		t.Helper()
+		c.await(id, func(_ protocol.ServerMessage, data json.RawMessage) bool { return rows(data) == want })
+	}
+
+	// Wait until both are indexed, so that only the Table is still missing
+	// when the next subscription starts.
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+	awaitRows(1, "[] alpha=[] beta=[]")
+
+	query.Columns = true
+	c.send(protocol.ClientMessage{ID: 2, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+	awaitRows(2, "[{Name:Data Type:string Priority:0}] alpha=[1] beta=[0]")
+
+	alpha.Data["b"] = "2"
+	if _, err := cs.CoreV1().ConfigMaps(ns.Name).Update(ctx, alpha, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	awaitRows(2, "[{Name:Data Type:string Priority:0}] alpha=[2] beta=[0]")
+
+	query.Sort = protocol.Sort{Field: protocol.SortFieldColumn, Column: "Data"}
+	c.send(protocol.ClientMessage{ID: 2, Type: protocol.ClientTypeUpdate, Params: params(query)})
+	awaitRows(2, "[{Name:Data Type:string Priority:0}] beta=[0] alpha=[2]")
+
+	// Columns belong to one Resource Type, so a Query of any other number of
+	// types cannot have them.
+	for id, where := range map[uint64]*protocol.Expr{
+		3: {Op: protocol.ExprOpIn, Field: protocol.FieldType, Values: []string{"configmaps", "secrets"}},
+		4: nil,
+	} {
+		query.Where = where
+		c.send(protocol.ClientMessage{ID: id, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+		c.await(id, func(m protocol.ServerMessage, _ json.RawMessage) bool {
+			return m.Type == protocol.ServerTypeError && m.Error.Code == protocol.ErrorCodeBadRequest
+		})
+	}
+}
+
 func TestOutboxKeepsOnlyLatestSubscriptionData(t *testing.T) {
 	o := newOutbox()
 	o.push(protocol.ServerMessage{ID: 1, Type: protocol.ServerTypeResult})
