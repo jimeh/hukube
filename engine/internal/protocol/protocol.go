@@ -206,12 +206,18 @@ const (
 	SortFieldName      SortField = "name"
 	SortFieldNamespace SortField = "namespace"
 	SortFieldAge       SortField = "age"
+	// SortFieldColumn sorts by the cells of the Column named by Sort.Column.
+	SortFieldColumn SortField = "column"
 )
 
 // Sort orders a query result.
 type Sort struct {
 	Field SortField `json:"field"`
-	Desc  bool      `json:"desc,omitempty"`
+	// Column names the Column to sort by when Field is SortFieldColumn. Rows
+	// without a value for it sort last in both directions, and a name the
+	// result has no Column for leaves the rows in name order.
+	Column string `json:"column,omitempty"`
+	Desc   bool   `json:"desc,omitempty"`
 }
 
 // QueryParams subscribes to one window of the Resources matching a Query.
@@ -222,6 +228,25 @@ type QueryParams struct {
 	Sort    Sort   `json:"sort"`
 	Offset  int    `json:"offset"`
 	Limit   int    `json:"limit"`
+	// Columns asks for the Columns of the one Resource Type the Query selects,
+	// and for each Row's cells. A Query that can match any other number of
+	// types is a bad request.
+	Columns bool `json:"columns,omitempty"`
+}
+
+// Column describes one column of a Resource Type's list, as the Cluster
+// defines it for `kubectl get`. The name and age columns are left out, because
+// every Row already carries a name and a creation time.
+type Column struct {
+	Name string `json:"name"`
+	// Type is the OpenAPI type the Cluster declares for the column's cells:
+	// string, integer, number, boolean, or date. It is a hint, not a promise:
+	// built-in types declare some columns of numbers as string. A date cell
+	// holds a duration the Cluster rendered, such as "5m", not a timestamp.
+	Type string `json:"type"`
+	// Priority is 0 for the columns `kubectl get` shows by default, and higher
+	// for the ones it only shows with `-o wide`.
+	Priority int `json:"priority"`
 }
 
 // QueryResult is one window of a query's matching Resources.
@@ -229,6 +254,9 @@ type QueryResult struct {
 	Total  int   `json:"total"`
 	Offset int   `json:"offset"`
 	Rows   []Row `json:"rows"`
+	// Columns is absent when QueryParams.Columns is unset, and until the
+	// Engine has fetched them.
+	Columns []Column `json:"columns,omitempty"`
 }
 
 // Row summarizes one Resource in a query result.
@@ -238,6 +266,9 @@ type Row struct {
 	Namespace string    `json:"namespace,omitempty"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"createdAt" tstype:"string"`
+	// Cells holds one value per QueryResult.Columns entry. It is absent while
+	// the Engine has no cells for the Resource.
+	Cells []any `json:"cells,omitempty" tstype:"unknown[]"`
 }
 
 // FindParams subscribes to the Resources, among those Where selects, whose
