@@ -24,11 +24,15 @@ type Meta struct {
 }
 
 // Key returns the Resource's namespace/name key, unique within its type.
-func (m Meta) Key() string {
-	if m.Namespace == "" {
-		return m.Name
+func (m Meta) Key() string { return Key(m.Namespace, m.Name) }
+
+// Key returns the key of the Resource with the given Namespace and name.
+// Namespace is empty for cluster-scoped Resources.
+func Key(namespace, name string) string {
+	if namespace == "" {
+		return name
 	}
-	return m.Namespace + "/" + m.Name
+	return namespace + "/" + name
 }
 
 // ChangeKind is the kind of an observed Change.
