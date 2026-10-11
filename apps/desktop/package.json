@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@hukube/host": "workspace:*",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "electron": "^44.5.0",
     "electron-builder": "^26.15.3"
   }
