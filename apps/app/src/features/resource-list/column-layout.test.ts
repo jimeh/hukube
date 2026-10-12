@@ -41,12 +41,24 @@ const ids = (value: StoredColumnLayout) => value.columns.map(columnId);
 const shown = (value: ReturnType<typeof resolve>) => value.shown.map((c) => c.id);
 
 describe("readColumnLayout", () => {
-  it.each([null, {}, { version: 2, columns: [] }, { version: 1, columns: {} }])(
-    "ignores an unreadable value %j",
-    (value) => {
-      expect(readColumnLayout(value)).toBeNull();
-    },
-  );
+  // A stored setting outlives the build that wrote it, and any client may
+  // write one, so a value of the wrong shape reads as no stored layout.
+  it.each([
+    null,
+    "columns",
+    7,
+    true,
+    [],
+    [{ source: "name" }],
+    {},
+    { version: 1 },
+    { version: 2, columns: [] },
+    { version: "1", columns: [] },
+    { version: 1, columns: {} },
+    { version: 1, columns: "name" },
+  ])("ignores an unreadable value %j", (value) => {
+    expect(readColumnLayout(value)).toBeNull();
+  });
   it("discards malformed and repeated entries without dropping valid ones", () => {
     expect(
       readColumnLayout({
@@ -54,7 +66,10 @@ describe("readColumnLayout", () => {
         columns: [
           null,
           1,
+          "Name",
+          ["name"],
           {},
+          { source: ["name"] },
           { source: "cell" },
           { source: "cell", name: 4 },
           { source: "name", name: "Name" },
