@@ -9,8 +9,11 @@ export interface ListColumn {
   numeric: boolean;
 }
 
-/** Column widths in characters, by column name. */
-export type ColumnWidths = Readonly<Record<string, number>>;
+/**
+ * Column widths in characters, by column name. A Cluster chooses the names, so
+ * this is a Map: an object would answer for `constructor` or `__proto__`.
+ */
+export type ColumnWidths = ReadonlyMap<string, number>;
 
 /** What a cell without a value shows, as in `kubectl get`. */
 export const noValue = "<none>";
@@ -56,17 +59,17 @@ export function cellText(value: unknown): string {
  * Returns the given widths when nothing grew.
  */
 export function growWidths(widths: ColumnWidths, columns: ListColumn[], rows: Row[]): ColumnWidths {
-  let grown: Record<string, number> | undefined;
+  let grown: Map<string, number> | undefined;
   for (const column of columns) {
-    let width = Math.max(widths[column.name] ?? 0, column.name.length + headerExtraChars);
+    let width = Math.max(widths.get(column.name) ?? 0, column.name.length + headerExtraChars);
     for (const row of rows) {
       if (width >= maxChars) break;
       if (row.cells) width = Math.max(width, cellText(row.cells[column.index]).length);
     }
     width = Math.min(width, maxChars);
-    if (width !== widths[column.name]) {
-      grown ??= { ...widths };
-      grown[column.name] = width;
+    if (width !== widths.get(column.name)) {
+      grown ??= new Map(widths);
+      grown.set(column.name, width);
     }
   }
   return grown ?? widths;
@@ -86,7 +89,7 @@ export function gridLayout(
   const tracks: [min: string, max: string][] = [["12rem", "2fr"]];
   if (showNamespace) tracks.push(["8rem", "1fr"]);
   for (const column of columns) {
-    const width = `${widths[column.name] ?? column.name.length + headerExtraChars}ch`;
+    const width = `${widths.get(column.name) ?? column.name.length + headerExtraChars}ch`;
     tracks.push([width, width]);
   }
   tracks.push(["5rem", "5rem"]);

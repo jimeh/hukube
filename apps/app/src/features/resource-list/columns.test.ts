@@ -1,7 +1,10 @@
 import type { Column, Row } from "@hukube/engine-client";
 import { describe, expect, it } from "vitest";
 
-import { cellText, gridLayout, growWidths, listColumns } from "./columns.ts";
+import { cellText, gridLayout, growWidths, listColumns, type ColumnWidths } from "./columns.ts";
+
+const none: ColumnWidths = new Map();
+const widthsOf = (widths: ColumnWidths) => Object.fromEntries(widths);
 
 const row = (name: string, cells?: unknown[]): Row => ({
   uid: name,
@@ -65,38 +68,52 @@ describe("growWidths", () => {
 
   it("fits the header and the widest cell, up to a limit", () => {
     const rows = [row("a", ["ContainerCreating", "x".repeat(200)]), row("b", ["Running", "ok"])];
-    expect(growWidths({}, columns, rows)).toEqual({ Status: 17, Message: 48 });
+    expect(widthsOf(growWidths(none, columns, rows))).toEqual({ Status: 17, Message: 48 });
   });
 
   it("makes room for the header when cells are short or missing", () => {
-    expect(growWidths({}, columns, [row("a", ["Ok", null]), row("b")])).toEqual({
+    expect(widthsOf(growWidths(none, columns, [row("a", ["Ok", null]), row("b")]))).toEqual({
       Status: 9,
       Message: 10,
     });
   });
 
   it("never shrinks, and returns the same widths when nothing grew", () => {
-    const wide = growWidths({}, columns, [row("a", ["ContainerCreating", "pulling image"])]);
+    const wide = growWidths(none, columns, [row("a", ["ContainerCreating", "pulling image"])]);
     expect(growWidths(wide, columns, [row("b", ["Running", "ok"])])).toBe(wide);
-    expect(growWidths(wide, columns, [row("c", ["Running", "back-off restarting"])])).toEqual({
-      Status: 17,
-      Message: 19,
-    });
+    expect(
+      widthsOf(growWidths(wide, columns, [row("c", ["Running", "back-off restarting"])])),
+    ).toEqual({ Status: 17, Message: 19 });
   });
+
+  // A list sets the grown widths while it renders, so widths that never
+  // settle make it render without end.
+  it.each(["constructor", "toString", "__proto__"])(
+    "settles for a column a Cluster named %s",
+    (name) => {
+      const named = listColumns([{ name, type: "string", priority: 0 }], []);
+      const first = growWidths(none, named, [row("a", ["Running"])]);
+      expect(first.get(name)).toBe(name.length + 3);
+      expect(growWidths(first, named, [row("a", ["Running"])])).toBe(first);
+      expect(gridLayout(false, named, first).template).toBe(
+        `minmax(12rem, 2fr) ${name.length + 3}ch 5rem`,
+      );
+    },
+  );
 });
 
 describe("gridLayout", () => {
   const columns = listColumns([{ name: "Status", type: "string", priority: 0 }], []);
 
   it("puts the columns between the Namespace and the age", () => {
-    expect(gridLayout(true, columns, { Status: 17 })).toEqual({
+    expect(gridLayout(true, columns, new Map([["Status", 17]]))).toEqual({
       template: "minmax(12rem, 2fr) minmax(8rem, 1fr) 17ch 5rem",
       minWidth: "calc(12rem + 8rem + 17ch + 5rem + 3.75rem)",
     });
   });
 
   it("leaves out the Namespace, and sizes a column without cells by its header", () => {
-    expect(gridLayout(false, columns, {})).toEqual({
+    expect(gridLayout(false, columns, none)).toEqual({
       template: "minmax(12rem, 2fr) 9ch 5rem",
       minWidth: "calc(12rem + 9ch + 5rem + 3rem)",
     });

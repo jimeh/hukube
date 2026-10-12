@@ -102,7 +102,7 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
 
   const showNamespace = (info?.namespaced ?? false) && namespace === allNamespaces;
   const columns = useMemo(() => listColumns(data?.columns, data?.rows ?? []), [data]);
-  const [widths, setWidths] = useState<ColumnWidths>({});
+  const [widths, setWidths] = useState<ColumnWidths>(() => new Map());
   const grown = growWidths(widths, columns, data?.rows ?? []);
   if (grown !== widths) setWidths(grown);
   const layout = gridLayout(showNamespace, columns, grown);
