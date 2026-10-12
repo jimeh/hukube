@@ -405,7 +405,9 @@ func TestTableWatchRestartsWithItsType(t *testing.T) {
 				replaced.Store(true)
 				end()
 				synctest.Wait()
-				if !watcher.IsStopped() {
+				// A failed watch has stopped already, so this only says something
+				// about one that was running.
+				if !tc.betweenAttempts && !watcher.IsStopped() {
 					t.Error("the watch of the type's old client was not stopped")
 				}
 				if lists, _, _ := after.calls(); len(lists) != 1 {
@@ -426,6 +428,37 @@ func TestTableWatchRestartsWithItsType(t *testing.T) {
 			})
 		})
 	}
+}
+
+// While the type stays as it is, failed attempts must leave the Table alone,
+// so a list keeps its cells while the Cluster is briefly out of reach.
+func TestTableKeepsItsCellsWhileRetrying(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		timing := testTiming()
+		fake := &fakeTables{
+			defs: configMapDefs, version: "10", pageSize: 2,
+			rows: []metav1.TableRow{tableRow("default", "a", "1", "a", int64(1), "5m")},
+		}
+		table := &Table{}
+		go runTable(ctx, table, fake.source(context.Background()), timing, slog.New(slog.DiscardHandler))
+
+		synctest.Wait()
+		_, _, watcher := fake.calls()
+		fake.mu.Lock()
+		fake.listErr = apierrors.NewServiceUnavailable("out of reach")
+		fake.mu.Unlock()
+		failWatch(watcher)
+		time.Sleep(timing.RetryMax)
+		synctest.Wait()
+		if lists, _, _ := fake.calls(); len(lists) < 2 {
+			t.Fatalf("%d lists, want the first and at least one failed retry", len(lists))
+		}
+		if columns, cells := snapshot(t, table); len(columns) != 1 || cells["default/a"] != "[1]" {
+			t.Errorf("after failed retries: columns %+v and cells %v, want them kept", columns, cells)
+		}
+	})
 }
 
 // A type the Cluster stops indexing, because it was removed or refused, has
