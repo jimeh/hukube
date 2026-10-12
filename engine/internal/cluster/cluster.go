@@ -45,6 +45,9 @@ type Timing struct {
 	HealthPeriod    time.Duration
 	HealthTimeout   time.Duration
 	ObjectRetry     time.Duration
+	// TableLinger is how long a type's Table stays watched after its last
+	// caller releases it.
+	TableLinger time.Duration
 }
 
 // DefaultTiming is the Timing used by NewManager.
@@ -56,6 +59,7 @@ var DefaultTiming = Timing{
 	HealthPeriod:    30 * time.Second,
 	HealthTimeout:   10 * time.Second,
 	ObjectRetry:     2 * time.Second,
+	TableLinger:     30 * time.Second,
 }
 
 // ErrUnknownType is returned for a TypeKey the Cluster does not serve.
@@ -94,7 +98,7 @@ func (m *Manager) Get(id string) (*Cluster, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := newCluster(id, cfg, m.log.With("cluster", id), m.timing)
+	c, err := newCluster(m.ctx, id, cfg, m.log.With("cluster", id), m.timing)
 	if err != nil {
 		return nil, err
 	}
@@ -114,9 +118,12 @@ type Cluster struct {
 	probe discovery.DiscoveryInterface
 	meta  metadata.Interface
 	dyn   dynamic.Interface
+	table rest.Interface
 
 	// Index holds metadata for every Resource of every indexed type.
 	Index *index.Store
+	// tables holds the Tables callers currently hold (see Table).
+	tables *tables
 
 	mu            sync.Mutex
 	status        protocol.ClusterStatus
@@ -131,13 +138,17 @@ type Cluster struct {
 // older generation can tell they are stale by pointer identity.
 type indexedType struct {
 	// key never changes, so it may be read without holding Cluster.mu.
-	key    protocol.TypeKey
-	info   protocol.ResourceType
-	gvr    schema.GroupVersionResource
+	key  protocol.TypeKey
+	info protocol.ResourceType
+	gvr  schema.GroupVersionResource
+	// ctx ends when the generation stops being indexed: when discovery
+	// replaces or removes it, or the Cluster refuses to serve it.
+	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func newCluster(id string, cfg *rest.Config, log *slog.Logger, timing Timing) (*Cluster, error) {
+// newCluster returns a Cluster whose Table watches live no longer than ctx.
+func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logger, timing Timing) (*Cluster, error) {
 	cfg = rest.CopyConfig(cfg)
 	cfg.QPS = 100
 	cfg.Burst = 200
@@ -162,7 +173,11 @@ func newCluster(id string, cfg *rest.Config, log *slog.Logger, timing Timing) (*
 	if err != nil {
 		return nil, fmt.Errorf("dynamic client: %w", err)
 	}
-	return &Cluster{
+	table, err := newTableClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("table client: %w", err)
+	}
+	c := &Cluster{
 		id:         id,
 		log:        log,
 		timing:     timing,
@@ -170,11 +185,16 @@ func newCluster(id string, cfg *rest.Config, log *slog.Logger, timing Timing) (*
 		probe:      probe,
 		meta:       meta,
 		dyn:        dyn,
+		table:      table,
 		Index:      index.New(),
 		status:     protocol.ClusterStatus{Phase: protocol.ClusterPhaseConnecting},
 		types:      make(map[protocol.TypeKey]*indexedType),
 		rediscover: make(chan struct{}, 1),
-	}, nil
+	}
+	c.tables = newTables(ctx, timing.TableLinger, func(ctx context.Context, key protocol.TypeKey, t *Table) {
+		runTable(ctx, t, c.tableSource(key, t), timing, log.With("type", key))
+	})
+	return c, nil
 }
 
 // Status returns the current connection status.
@@ -421,7 +441,7 @@ func withState(info protocol.ResourceType, state protocol.TypeState) protocol.Re
 // startType starts indexing one type. It must be called with c.mu held.
 func (c *Cluster) startType(ctx context.Context, t *indexedType) {
 	tctx, cancel := context.WithCancel(ctx)
-	t.cancel = cancel
+	t.ctx, t.cancel = tctx, cancel
 	client := c.meta.Resource(t.gvr)
 
 	lw := &cache.ListWatch{
