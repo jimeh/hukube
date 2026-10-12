@@ -115,3 +115,105 @@ test("goes to a Resource and a Resource Type from the palette", async ({ page })
   await page.keyboard.press("Enter");
   await expect(page.getByRole("grid", { name: "ConfigMap resources" })).toBeVisible();
 });
+
+test("edits a Resource Type's columns and keeps the layout after reload", async ({ page }) => {
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  const sidebar = page.getByRole("complementary", { name: "Resource types" });
+  await sidebar.getByRole("button", { name: /^Pod \d+$/ }).click();
+  const headers = page.getByRole("columnheader");
+  const columns = page.getByRole("button", { name: "Columns", exact: true });
+  const defaults = ["Name", "Namespace", "Ready", "Status", "Restarts", "Node", "Age"];
+  // Read through another client so optimistic rendering cannot stand in for
+  // persistence, including when resetting before the page closes.
+  const expectSaved = async (expected: string[], resetToDefault = false) => {
+    const other = await page.context().newPage();
+    try {
+      await other.goto(`${page.url()}#token=${engineToken}`);
+      await other
+        .getByRole("complementary", { name: "Resource types" })
+        .getByRole("button", { name: /^Pod \d+$/ })
+        .click();
+      await expect(other.getByRole("columnheader")).toHaveText(expected);
+      if (resetToDefault) {
+        await other.getByRole("button", { name: "Columns", exact: true }).click();
+        await expect(other.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
+      }
+    } finally {
+      await other.close();
+    }
+  };
+  const reset = async () => {
+    await page.keyboard.press("Escape");
+    await columns.click();
+    const item = page.getByRole("menuitem", { name: "Reset to default" });
+    if (await item.isEnabled()) await item.click();
+    else await page.keyboard.press("Escape");
+    await expect(headers).toHaveText(defaults);
+    await expectSaved(defaults, true);
+  };
+  // This type's setting survives between runs, so leave it at the default.
+  await reset();
+  try {
+    await headers.first().focus();
+    await headers.first().press("Alt+ArrowLeft");
+    await columns.click();
+    await expect(page.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+
+    await columns.click();
+    await page.getByRole("menuitemcheckbox", { name: "Namespace", exact: true }).click();
+    await expect(
+      page.getByRole("menuitemcheckbox", { name: "Namespace", exact: true }),
+    ).toHaveAttribute("aria-checked", "false");
+    await expect(headers).toHaveText(["Name", "Ready", "Status", "Restarts", "Node", "Age"]);
+    await page.keyboard.press("Escape");
+
+    const node = page.getByRole("columnheader", { name: "Node", exact: true });
+    const ready = page.getByRole("columnheader", { name: "Ready", exact: true });
+    const start = (await node.boundingBox())!;
+    const destination = (await ready.boundingBox())!;
+    await node.click();
+    await expect(node).toHaveAttribute("aria-sort", "ascending");
+    await page.getByRole("columnheader", { name: "Name", exact: true }).click();
+
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(destination.x + 2, destination.y + destination.height / 2);
+    await expect(page.locator("[data-column-drop-marker]")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-column-drop-marker]")).toHaveCount(0);
+    await page.mouse.up();
+    await expect(headers).toHaveText(["Name", "Ready", "Status", "Restarts", "Node", "Age"]);
+    await expect(node).toHaveAttribute("aria-sort", "none");
+
+    await node.focus();
+    await node.press("Enter");
+    await expect(node).toHaveAttribute("aria-sort", "ascending");
+    await page.getByRole("columnheader", { name: "Name", exact: true }).click();
+    await expect(node).toHaveAttribute("aria-sort", "none");
+
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(destination.x + 2, destination.y + destination.height / 2);
+    await expect(page.locator("[data-column-drop-marker]")).toBeVisible();
+    await page.mouse.up();
+    await expect(headers).toHaveText(["Name", "Node", "Ready", "Status", "Restarts", "Age"]);
+    await expect(node).toHaveAttribute("aria-sort", "none");
+
+    const age = page.getByRole("columnheader", { name: "Age", exact: true });
+    await age.focus();
+    await age.press("Alt+ArrowLeft");
+    await expect(age).toBeFocused();
+    await age.press("Alt+ArrowLeft");
+    const edited = ["Name", "Node", "Ready", "Age", "Status", "Restarts"];
+    await expect(headers).toHaveText(edited);
+    await expect(age).toBeFocused();
+
+    await expectSaved(edited);
+    await page.reload();
+    await expect(headers).toHaveText(edited);
+  } finally {
+    await reset();
+  }
+});
