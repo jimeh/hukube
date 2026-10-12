@@ -261,10 +261,17 @@ func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
 	timing := testTiming()
 	timing.DiscoveryPeriod = time.Second
 	c := connectAs(t, testenv.User(t, "limited"), timing)
+	// A Table held for a refused type waits for the type, and must notice
+	// when it is granted.
+	table, release := c.Table("configmaps")
+	defer release()
 	eventually(t, func() (bool, string) {
 		rt, ok := typeState(c, "configmaps")
 		return ok && rt.State == protocol.TypeStateForbidden, fmt.Sprintf("%+v", rt)
 	})
+	if columns, cells := snapshot(t, table); len(columns) != 0 || len(cells) != 0 {
+		t.Errorf("a forbidden type's Table has columns %+v and cells %v", columns, cells)
+	}
 
 	ctx := context.Background()
 	rbac := kubernetes.NewForConfigOrDie(cfg).RbacV1()
@@ -297,6 +304,10 @@ func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
 	if rt, _ := typeState(c, "secrets"); rt.State != protocol.TypeStateForbidden {
 		t.Errorf("secrets state = %q, want forbidden", rt.State)
 	}
+	eventually(t, func() (bool, string) {
+		columns, cells := snapshot(t, table)
+		return len(columns) > 0 && len(cells) > 0, fmt.Sprintf("columns %+v, %d rows", columns, len(cells))
+	})
 }
 
 // After the first connection, losing and regaining the API server shows in

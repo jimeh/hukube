@@ -200,7 +200,9 @@ var errTableRelist = errors.New("table must be listed again")
 
 // runTable keeps t current with a type's Table until ctx ends. It asks source
 // for a client on every attempt, so it follows a type that changes its
-// preferred API version or is removed and added again. A failed attempt is
+// preferred API version or is removed and added again, and it empties t when
+// a client goes out of date, because what that client fetched may no longer
+// describe the type. A failed attempt is
 // logged and retried after Timing.ObjectRetry, doubling up to Timing.RetryMax
 // while the type's Table cannot be listed at all, which is how a type that
 // has no Table form shows up.
@@ -223,6 +225,7 @@ func runTable(ctx context.Context, t *Table, source tableSource, timing Timing, 
 			return
 		case live.Err() != nil:
 			// The source waits for the type to be listable again.
+			t.reset()
 			continue
 		case listed:
 			delay = timing.ObjectRetry
@@ -456,8 +459,8 @@ func (c *Cluster) Table(key protocol.TypeKey) (*Table, func()) {
 
 // tableSource returns the source for one type's Table. It waits while the
 // type is not being indexed, because the index decides which Resources a
-// Query returns, and empties t meanwhile.
-func (c *Cluster) tableSource(key protocol.TypeKey, t *Table) tableSource {
+// Query returns.
+func (c *Cluster) tableSource(key protocol.TypeKey) tableSource {
 	return func(ctx context.Context) (tableClient, context.Context, error) {
 		// Subscribe before checking, so no change is missed in between.
 		typesChanged, stop := c.typesChanged.Subscribe()
@@ -470,7 +473,6 @@ func (c *Cluster) tableSource(key protocol.TypeKey, t *Table) tableSource {
 			if ok && it.ctx.Err() == nil {
 				return &restTableClient{client: c.table, gvr: it.gvr}, it.ctx, nil
 			}
-			t.reset()
 			select {
 			case <-ctx.Done():
 				return nil, nil, ctx.Err()

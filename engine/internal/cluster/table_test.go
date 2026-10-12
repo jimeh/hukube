@@ -350,30 +350,57 @@ func TestTableBacksOffWhileListsFail(t *testing.T) {
 	})
 }
 
-// When discovery restarts a type, the Table watch must ask for a client
-// again instead of following the version it started with.
+// When discovery restarts a type, the Table watch must stop following the
+// client it started with and ask for another. What the old client fetched
+// must not outlive it, even when the new one cannot list the type's Table.
 func TestTableWatchRestartsWithItsType(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		fake := &fakeTables{defs: configMapDefs, version: "10", pageSize: 2}
+		timing := testTiming()
+		rows := []metav1.TableRow{tableRow("default", "a", "1", "a", int64(1), "5m")}
+		before := &fakeTables{defs: configMapDefs, version: "10", pageSize: 2, rows: rows}
+		after := &fakeTables{
+			defs: configMapDefs, version: "20", pageSize: 2, rows: rows,
+			listErr: apierrors.NewGenericServerResponse(406, "GET", schema.GroupResource{}, "", "no table", 0, false),
+		}
 		live, restart := context.WithCancel(context.Background())
 		var asked atomic.Int32
 		source := func(context.Context) (tableClient, context.Context, error) {
 			if asked.Add(1) == 1 {
-				return fake, live, nil
+				return before, live, nil
 			}
-			return fake, context.Background(), nil
+			return after, context.Background(), nil
 		}
-		go runTable(ctx, &Table{}, source, testTiming(), slog.New(slog.DiscardHandler))
+		table := &Table{}
+		go runTable(ctx, table, source, timing, slog.New(slog.DiscardHandler))
 
 		synctest.Wait()
+		if _, cells := snapshot(t, table); cells["default/a"] != "[1]" {
+			t.Fatalf("cells before the type restarted = %v, want default/a", cells)
+		}
+		_, _, watcher := before.calls()
+
 		restart()
 		synctest.Wait()
-		lists, watches, _ := fake.calls()
-		if asked.Load() != 2 || len(lists) != 2 || len(watches) != 2 {
-			t.Errorf("after the type restarted: asked %d times, %d lists, %d watches; want 2 of each",
-				asked.Load(), len(lists), len(watches))
+		if !watcher.IsStopped() {
+			t.Error("the watch of the type's old client was not stopped")
+		}
+		if lists, _, _ := after.calls(); asked.Load() != 2 || len(lists) != 1 {
+			t.Errorf("after the type restarted: asked %d times, %d lists of the new client; want 2 and 1",
+				asked.Load(), len(lists))
+		}
+		if columns, cells := snapshot(t, table); len(columns) != 0 || len(cells) != 0 {
+			t.Errorf("the old client's columns %+v and cells %v outlived it", columns, cells)
+		}
+
+		after.mu.Lock()
+		after.listErr = nil
+		after.mu.Unlock()
+		time.Sleep(timing.ObjectRetry)
+		synctest.Wait()
+		if _, cells := snapshot(t, table); cells["default/a"] != "[1]" {
+			t.Errorf("cells once the new client could list = %v, want default/a", cells)
 		}
 	})
 }
