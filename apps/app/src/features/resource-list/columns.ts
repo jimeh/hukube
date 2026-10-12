@@ -1,16 +1,18 @@
 import type { Column, Row } from "@hukube/engine-client";
 
-/** A column a list shows between a Resource's name and its age. */
+/** An available column, from the list itself or the Cluster's Table. */
 export interface ListColumn {
+  id: string;
+  source: "name" | "namespace" | "age" | "cell";
   name: string;
   /** The position of the column's value in each Row's cells. */
-  index: number;
+  index?: number;
   /** Whether the column holds numbers, which align right. */
   numeric: boolean;
 }
 
 /**
- * Column widths in characters, by column name. A Cluster chooses the names, so
+ * Column widths in characters, by column identity. A Cluster chooses the names, so
  * this is a Map: an object would answer for `constructor` or `__proto__`.
  */
 export type ColumnWidths = ReadonlyMap<string, number>;
@@ -24,15 +26,17 @@ const maxChars = 48;
 const headerExtraChars = 3;
 
 /**
- * The columns a list shows: the ones `kubectl get` shows without `-o wide`.
+ * Every distinct column a Cluster serves, keeping the first cell of a name.
  * A column is numeric when the Cluster declares it so or, because built-in
  * types declare columns of numbers as strings, when every value in rows is a
  * number.
  */
 export function listColumns(columns: Column[] | undefined, rows: Row[]): ListColumn[] {
   const shown: ListColumn[] = [];
+  const seen = new Set<string>();
   for (const [index, column] of (columns ?? []).entries()) {
-    if (column.priority > 0) continue;
+    if (seen.has(column.name)) continue;
+    seen.add(column.name);
     const values = rows
       .map((row) => row.cells?.[index])
       .filter((v) => v !== null && v !== undefined);
@@ -40,7 +44,7 @@ export function listColumns(columns: Column[] | undefined, rows: Row[]): ListCol
       column.type === "integer" ||
       column.type === "number" ||
       (values.length > 0 && values.every((v) => typeof v === "number"));
-    shown.push({ name: column.name, index, numeric });
+    shown.push({ id: `cell:${column.name}`, source: "cell", name: column.name, index, numeric });
   }
   return shown;
 }
@@ -61,15 +65,21 @@ export function cellText(value: unknown): string {
 export function growWidths(widths: ColumnWidths, columns: ListColumn[], rows: Row[]): ColumnWidths {
   let grown: Map<string, number> | undefined;
   for (const column of columns) {
-    let width = Math.max(widths.get(column.name) ?? 0, column.name.length + headerExtraChars);
+    let width = Math.max(widths.get(column.id) ?? 0, column.name.length + headerExtraChars);
     for (const row of rows) {
       if (width >= maxChars) break;
-      if (row.cells) width = Math.max(width, cellText(row.cells[column.index]).length);
+      const value =
+        column.source === "name"
+          ? row.name
+          : column.index !== undefined && row.cells
+            ? cellText(row.cells[column.index])
+            : "";
+      width = Math.max(width, value.length);
     }
     width = Math.min(width, maxChars);
-    if (width !== widths.get(column.name)) {
+    if (width !== widths.get(column.id)) {
       grown ??= new Map(widths);
-      grown.set(column.name, width);
+      grown.set(column.id, width);
     }
   }
   return grown ?? widths;
@@ -81,21 +91,21 @@ export function growWidths(widths: ColumnWidths, columns: ListColumn[], rows: Ro
  * cells' monospace font.
  */
 export function gridLayout(
-  showNamespace: boolean,
   columns: ListColumn[],
   widths: ColumnWidths,
+  spare: string | undefined,
 ): { template: string; minWidth: string } {
   // Each track is [what it shrinks to, what it grows to].
-  const tracks: [min: string, max: string][] = [["12rem", "2fr"]];
-  if (showNamespace) tracks.push(["8rem", "1fr"]);
-  for (const column of columns) {
-    const width = `${widths.get(column.name) ?? column.name.length + headerExtraChars}ch`;
-    tracks.push([width, width]);
-  }
-  tracks.push(["5rem", "5rem"]);
+  const tracks: [min: string, max: string][] = columns.map((column) => {
+    if (column.id === spare) return ["12rem", "2fr"];
+    if (column.source === "namespace") return ["8rem", "1fr"];
+    if (column.source === "age") return ["5rem", "5rem"];
+    const width = `${widths.get(column.id) ?? column.name.length + headerExtraChars}ch`;
+    return [width, width];
+  });
   return {
     template: tracks.map(([min, max]) => (min === max ? min : `minmax(${min}, ${max})`)).join(" "),
     // The tracks, the gaps between them, and the padding at both ends.
-    minWidth: `calc(${tracks.map(([min]) => min).join(" + ")} + ${(tracks.length + 1) * 0.75}rem)`,
+    minWidth: `calc(${tracks.length ? tracks.map(([min]) => min).join(" + ") : "0px"} + ${(tracks.length + 1) * 0.75}rem)`,
   };
 }

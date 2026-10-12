@@ -1,9 +1,19 @@
 // Virtualized rows must be absolutely positioned, so the list uses divs with
 // the ARIA grid pattern instead of a table; the grid handles the keyboard.
 /* oxlint-disable jsx-a11y/prefer-tag-over-role, jsx-a11y/click-events-have-key-events */
-import type { Row, Sort } from "@hukube/engine-client";
+import type { Column, Row, Sort } from "@hukube/engine-client";
 import { useSubscription } from "@hukube/engine-client/react";
 import { formatAge, type TypeKey } from "@hukube/k8s";
+import { Button } from "@hukube/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@hukube/ui/components/dropdown-menu";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@hukube/ui/components/input-group";
 import {
@@ -16,12 +26,7 @@ import {
 } from "@hukube/ui/components/select";
 import { Skeleton } from "@hukube/ui/components/skeleton";
 import { cn } from "@hukube/ui/lib/utils";
-import {
-  ArrowDown01Icon,
-  ArrowUp01Icon,
-  Search01Icon,
-  Tag01Icon,
-} from "@hugeicons/core-free-icons";
+import { Search01Icon, Tag01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -37,16 +42,18 @@ import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
+import { ColumnHeader } from "./column-header.tsx";
+import { resolveColumnLayout, showColumn, shownSort } from "./column-layout.ts";
 import {
   cellText,
   gridLayout,
   growWidths,
-  listColumns,
   noValue,
   type ColumnWidths,
   type ListColumn,
 } from "./columns.ts";
 import { listQuery, rowAt, windowFor } from "./query-window.ts";
+import { useColumnLayout } from "./use-column-layout.ts";
 
 const rowHeight = 26;
 // The header scrolls sideways with the rows and stays at the top, so the rows
@@ -92,20 +99,37 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
     [type, namespace, deferredName, deferredSelector],
   );
   const filtered = Boolean(namespace || deferredName.trim() || deferredSelector.trim());
+  const { stored, put } = useColumnLayout(type);
+  // Query data supplies the available cells; keep it while a derived sort changes.
+  const [columnData, setColumnData] = useState<{ columns?: Column[]; rows: Row[] }>({ rows: [] });
+  const resolved = useMemo(
+    () =>
+      resolveColumnLayout({
+        type,
+        namespaced: info?.namespaced ?? false,
+        allNamespaces: namespace === allNamespaces,
+        columns: columnData.columns,
+        rows: columnData.rows,
+        stored: stored ?? null,
+      }),
+    [type, info?.namespaced, namespace, columnData, stored],
+  );
+  const columns = stored === undefined ? [] : resolved.shown;
+  const effectiveSort = shownSort(sort, columns);
   const { data, error } = useSubscription(
     "resources.query",
     info && info.state !== "forbidden"
-      ? { cluster, where, sort, columns: true, ...window }
+      ? { cluster, where, sort: effectiveSort, columns: true, ...window }
       : undefined,
   );
   if (data && data.total !== total) setTotal(data.total);
 
-  const showNamespace = (info?.namespaced ?? false) && namespace === allNamespaces;
-  const columns = useMemo(() => listColumns(data?.columns, data?.rows ?? []), [data]);
+  if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
+    setColumnData({ columns: data.columns, rows: data.rows });
   const [widths, setWidths] = useState<ColumnWidths>(() => new Map());
   const grown = growWidths(widths, columns, data?.rows ?? []);
   if (grown !== widths) setWidths(grown);
-  const layout = gridLayout(showNamespace, columns, grown);
+  const layout = gridLayout(columns, grown, resolved.spare);
   const gridColumns: CSSProperties = { gridTemplateColumns: layout.template };
 
   const open = (row: Row | undefined, preview: boolean) => {
@@ -157,6 +181,48 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
           {data ? data.total : ""}
         </span>
         <div className="ml-auto flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="outline" size="sm" disabled={stored === undefined} />}
+            >
+              Columns
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-48">
+              <DropdownMenuGroup>
+                {resolved.available.map((column) => {
+                  const shown = columns.some((c) => c.id === column.id);
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={column.id}
+                      checked={shown}
+                      closeOnClick={false}
+                      disabled={
+                        (shown && columns.length === 1) ||
+                        (column.source === "namespace" && namespace !== allNamespaces)
+                      }
+                      onCheckedChange={(checked) => {
+                        onInteract();
+                        const value = showColumn(resolved, column.id, checked);
+                        if (value !== undefined) void put(value);
+                      }}
+                    >
+                      {column.name}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={stored == null}
+                onClick={() => {
+                  onInteract();
+                  void put(null);
+                }}
+              >
+                Reset to default
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {info?.namespaced && (
             <NamespaceSelect cluster={cluster} value={namespace} onChange={setNamespace} />
           )}
@@ -201,26 +267,19 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
               className="sticky top-0 z-10 grid h-7 shrink-0 gap-x-3 border-b bg-background px-3 text-muted-foreground"
               style={gridColumns}
             >
-              <SortHeader by={{ field: "name" }} label="Name" sort={sort} onSort={setSort} />
-              {showNamespace && (
-                <SortHeader
-                  by={{ field: "namespace" }}
-                  label="Namespace"
-                  sort={sort}
-                  onSort={setSort}
-                />
-              )}
               {columns.map((column) => (
-                <SortHeader
-                  key={column.index}
-                  by={{ field: "column", column: column.name }}
-                  label={column.name}
-                  alignRight={column.numeric}
-                  sort={sort}
+                <ColumnHeader
+                  key={column.id}
+                  column={column}
+                  layout={resolved}
+                  sort={effectiveSort}
                   onSort={setSort}
+                  onEdit={(value) => {
+                    onInteract();
+                    void put(value);
+                  }}
                 />
               ))}
-              <SortHeader by={{ field: "age" }} label="Age" sort={sort} onSort={setSort} />
             </div>
 
             <div
@@ -236,11 +295,10 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
               {items.map((item) => (
                 <ListRow
                   key={item.key}
-                  row={rowAt(data, item.index)}
+                  row={stored === undefined ? undefined : rowAt(data, item.index)}
                   top={item.start - headerHeight}
                   gridColumns={gridColumns}
                   columns={columns}
-                  showNamespace={showNamespace}
                   selected={item.index === selected}
                   onClick={() => {
                     setSelected(item.index);
@@ -275,7 +333,6 @@ interface ListRowProps {
   top: number;
   gridColumns: CSSProperties;
   columns: ListColumn[];
-  showNamespace: boolean;
   selected: boolean;
   onClick: () => void;
   onDoubleClick: () => void;
@@ -286,7 +343,6 @@ function ListRow({
   top,
   gridColumns,
   columns,
-  showNamespace,
   selected,
   onClick,
   onDoubleClick,
@@ -305,26 +361,28 @@ function ListRow({
       )}
     >
       {row ? (
-        <>
-          <span role="gridcell" className="truncate font-mono">
-            {row.name}
-          </span>
-          {showNamespace && (
-            <span role="gridcell" className="truncate font-mono text-muted-foreground">
-              {row.namespace}
+        columns.map((column) => {
+          if (column.source === "cell")
+            return <ListCell key={column.id} column={column} cells={row.cells} />;
+          return (
+            <span
+              key={column.id}
+              role="gridcell"
+              className={cn(
+                "truncate font-mono",
+                column.source !== "name" && "text-muted-foreground",
+                column.source === "age" && "tabular-nums",
+              )}
+              title={column.source === "age" ? row.createdAt : undefined}
+            >
+              {column.source === "name"
+                ? row.name
+                : column.source === "namespace"
+                  ? row.namespace
+                  : formatAge(new Date(row.createdAt), new Date(now))}
             </span>
-          )}
-          {columns.map((column) => (
-            <ListCell key={column.index} column={column} cells={row.cells} />
-          ))}
-          <span
-            role="gridcell"
-            className="font-mono text-muted-foreground tabular-nums"
-            title={row.createdAt}
-          >
-            {formatAge(new Date(row.createdAt), new Date(now))}
-          </span>
-        </>
+          );
+        })
       ) : (
         <Skeleton className="h-3 w-48" />
       )}
@@ -334,7 +392,7 @@ function ListRow({
 
 /** One cell of a Row. A Row has no cells until the Engine has fetched them. */
 function ListCell({ column, cells }: { column: ListColumn; cells: unknown[] | undefined }) {
-  const text = cells ? cellText(cells[column.index]) : "";
+  const text = cells && column.index !== undefined ? cellText(cells[column.index]) : "";
   return (
     <span
       role="gridcell"
@@ -347,44 +405,6 @@ function ListCell({ column, cells }: { column: ListColumn; cells: unknown[] | un
     >
       {text}
     </span>
-  );
-}
-
-function SortHeader({
-  by,
-  label,
-  alignRight = false,
-  sort,
-  onSort,
-}: {
-  /** The order this header sorts by, ascending. */
-  by: Sort;
-  label: string;
-  alignRight?: boolean;
-  sort: Sort;
-  onSort: (s: Sort) => void;
-}) {
-  const active = sort.field === by.field && sort.column === by.column;
-  return (
-    <button
-      type="button"
-      role="columnheader"
-      aria-sort={active ? (sort.desc ? "descending" : "ascending") : "none"}
-      onClick={() => onSort({ ...by, desc: active ? !sort.desc : false })}
-      className={cn(
-        "flex h-full min-w-0 items-center gap-1 text-left font-sans text-xs outline-none hover:text-foreground focus-visible:text-foreground",
-        alignRight && "justify-end",
-      )}
-    >
-      <span className="truncate">{label}</span>
-      {active && (
-        <HugeiconsIcon
-          icon={sort.desc ? ArrowDown01Icon : ArrowUp01Icon}
-          strokeWidth={2}
-          className="size-3"
-        />
-      )}
-    </button>
   );
 }
 
