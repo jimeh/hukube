@@ -3,6 +3,7 @@
 package settings
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -98,7 +99,12 @@ func (s *Store) signal(key string) *notify.Signal {
 }
 
 func (s *Store) path(key string) string {
-	return filepath.Join(s.dir, url.PathEscape(key)+".json")
+	name := url.PathEscape(key) + ".json"
+	if len(name) > 255 {
+		// %sha256- cannot occur in an escaped key, so short keys cannot collide.
+		name = fmt.Sprintf("%%sha256-%x.json", sha256.Sum256([]byte(key)))
+	}
+	return filepath.Join(s.dir, name)
 }
 
 func writeAtomic(path string, data []byte) error {
