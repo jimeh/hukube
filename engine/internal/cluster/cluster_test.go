@@ -269,9 +269,6 @@ func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
 		rt, ok := typeState(c, "configmaps")
 		return ok && rt.State == protocol.TypeStateForbidden, fmt.Sprintf("%+v", rt)
 	})
-	if columns, cells := snapshot(t, table); len(columns) != 0 || len(cells) != 0 {
-		t.Errorf("a forbidden type's Table has columns %+v and cells %v", columns, cells)
-	}
 
 	ctx := context.Background()
 	rbac := kubernetes.NewForConfigOrDie(cfg).RbacV1()

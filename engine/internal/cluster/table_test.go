@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -350,57 +351,135 @@ func TestTableBacksOffWhileListsFail(t *testing.T) {
 	})
 }
 
-// When discovery restarts a type, the Table watch must stop following the
+// failWatch ends a fake watch with an error that listing again does not fix.
+func failWatch(w *watch.FakeWatcher) {
+	w.Error(&apierrors.NewInternalError(errors.New("watch failed")).ErrStatus)
+}
+
+// When discovery replaces a type, the Table watch must stop following the
 // client it started with and ask for another. What the old client fetched
-// must not outlive it, even when the new one cannot list the type's Table.
+// must not outlive it, even when the new one cannot list the type's Table,
+// and whether the type is replaced during a watch or between two attempts.
 func TestTableWatchRestartsWithItsType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// betweenAttempts replaces the type while the Table waits to retry
+		// after a failed watch, instead of while a watch runs.
+		betweenAttempts bool
+	}{
+		{name: "replaced during a watch"},
+		{name: "replaced between attempts", betweenAttempts: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				timing := testTiming()
+				rows := []metav1.TableRow{tableRow("default", "a", "1", "a", int64(1), "5m")}
+				before := &fakeTables{defs: configMapDefs, version: "10", pageSize: 2, rows: rows}
+				after := &fakeTables{
+					defs: configMapDefs, version: "20", pageSize: 2, rows: rows,
+					listErr: apierrors.NewGenericServerResponse(406, "GET", schema.GroupResource{}, "", "no table", 0, false),
+				}
+				live, end := context.WithCancel(context.Background())
+				var replaced atomic.Bool
+				source := func(context.Context) (tableClient, context.Context, error) {
+					if replaced.Load() {
+						return after, context.Background(), nil
+					}
+					return before, live, nil
+				}
+				table := &Table{}
+				go runTable(ctx, table, source, timing, slog.New(slog.DiscardHandler))
+
+				synctest.Wait()
+				_, _, watcher := before.calls()
+				if tc.betweenAttempts {
+					failWatch(watcher)
+					synctest.Wait()
+				}
+				if _, cells := snapshot(t, table); cells["default/a"] != "[1]" {
+					t.Fatalf("cells before the type was replaced = %v, want default/a", cells)
+				}
+
+				replaced.Store(true)
+				end()
+				synctest.Wait()
+				if !watcher.IsStopped() {
+					t.Error("the watch of the type's old client was not stopped")
+				}
+				if lists, _, _ := after.calls(); len(lists) != 1 {
+					t.Errorf("the new client was asked for %d lists at once, want 1", len(lists))
+				}
+				if columns, cells := snapshot(t, table); len(columns) != 0 || len(cells) != 0 {
+					t.Errorf("the old client's columns %+v and cells %v outlived it", columns, cells)
+				}
+
+				after.mu.Lock()
+				after.listErr = nil
+				after.mu.Unlock()
+				time.Sleep(timing.RetryMax)
+				synctest.Wait()
+				if _, cells := snapshot(t, table); cells["default/a"] != "[1]" {
+					t.Errorf("cells once the new client could list = %v, want default/a", cells)
+				}
+			})
+		})
+	}
+}
+
+// A type the Cluster stops indexing, because it was removed or refused, has
+// no Resources in the index, so its Table must empty and wait, even when
+// indexing stops between two attempts. It must fill again once the type is
+// indexed again.
+func TestTableEmptiesWhileItsTypeIsNotIndexed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		timing := testTiming()
-		rows := []metav1.TableRow{tableRow("default", "a", "1", "a", int64(1), "5m")}
-		before := &fakeTables{defs: configMapDefs, version: "10", pageSize: 2, rows: rows}
-		after := &fakeTables{
-			defs: configMapDefs, version: "20", pageSize: 2, rows: rows,
-			listErr: apierrors.NewGenericServerResponse(406, "GET", schema.GroupResource{}, "", "no table", 0, false),
-		}
-		live, restart := context.WithCancel(context.Background())
-		var asked atomic.Int32
-		source := func(context.Context) (tableClient, context.Context, error) {
-			if asked.Add(1) == 1 {
-				return before, live, nil
-			}
-			return after, context.Background(), nil
+		const key = protocol.TypeKey("configmaps")
+		indexed, stopIndexing := context.WithCancel(context.Background())
+		c := &Cluster{types: map[protocol.TypeKey]*indexedType{
+			key: {key: key, ctx: indexed, cancel: stopIndexing},
+		}}
+		fake := &fakeTables{
+			defs: configMapDefs, version: "10", pageSize: 2,
+			rows: []metav1.TableRow{tableRow("default", "a", "1", "a", int64(1), "5m")},
 		}
 		table := &Table{}
-		go runTable(ctx, table, source, timing, slog.New(slog.DiscardHandler))
+		// The Cluster decides when the type can be listed, and the fake serves it.
+		fromCluster := c.tableSource(key, table)
+		source := func(ctx context.Context) (tableClient, context.Context, error) {
+			_, live, err := fromCluster(ctx)
+			return fake, live, err
+		}
+		go runTable(ctx, table, source, testTiming(), slog.New(slog.DiscardHandler))
 
+		synctest.Wait()
+		_, _, watcher := fake.calls()
+		failWatch(watcher)
 		synctest.Wait()
 		if _, cells := snapshot(t, table); cells["default/a"] != "[1]" {
-			t.Fatalf("cells before the type restarted = %v, want default/a", cells)
+			t.Fatalf("cells while the type is indexed = %v, want default/a", cells)
 		}
-		_, _, watcher := before.calls()
 
-		restart()
+		// As when the Cluster refuses the type: it stays known but is not indexed.
+		stopIndexing()
+		c.typesChanged.Notify()
 		synctest.Wait()
-		if !watcher.IsStopped() {
-			t.Error("the watch of the type's old client was not stopped")
-		}
-		if lists, _, _ := after.calls(); asked.Load() != 2 || len(lists) != 1 {
-			t.Errorf("after the type restarted: asked %d times, %d lists of the new client; want 2 and 1",
-				asked.Load(), len(lists))
-		}
 		if columns, cells := snapshot(t, table); len(columns) != 0 || len(cells) != 0 {
-			t.Errorf("the old client's columns %+v and cells %v outlived it", columns, cells)
+			t.Errorf("columns %+v and cells %v outlived the type's indexing", columns, cells)
+		}
+		if lists, _, _ := fake.calls(); len(lists) != 1 {
+			t.Errorf("%d lists while the type is not indexed, want only the first", len(lists))
 		}
 
-		after.mu.Lock()
-		after.listErr = nil
-		after.mu.Unlock()
-		time.Sleep(timing.ObjectRetry)
+		c.mu.Lock()
+		c.types[key] = &indexedType{key: key, ctx: context.Background(), cancel: func() {}}
+		c.mu.Unlock()
+		c.typesChanged.Notify()
 		synctest.Wait()
 		if _, cells := snapshot(t, table); cells["default/a"] != "[1]" {
-			t.Errorf("cells once the new client could list = %v, want default/a", cells)
+			t.Errorf("cells once the type is indexed again = %v, want default/a", cells)
 		}
 	})
 }

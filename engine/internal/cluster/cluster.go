@@ -192,7 +192,7 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 		rediscover: make(chan struct{}, 1),
 	}
 	c.tables = newTables(ctx, timing.TableLinger, func(ctx context.Context, key protocol.TypeKey, t *Table) {
-		runTable(ctx, t, c.tableSource(key), timing, log.With("type", key))
+		runTable(ctx, t, c.tableSource(key, t), timing, log.With("type", key))
 	})
 	return c, nil
 }
