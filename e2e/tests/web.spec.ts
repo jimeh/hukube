@@ -157,8 +157,14 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
   // Keep this type at the default before and after the test.
   await reset();
   try {
-    await headers.first().focus();
-    await headers.first().press("Alt+ArrowLeft");
+    // A drag that ends where it started stores nothing.
+    const name = (await headers.first().boundingBox())!;
+    await page.mouse.move(name.x + name.width / 2, name.y + name.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(name.x + name.width / 2 + 20, name.y + name.height / 2);
+    await expect(panel.locator("[data-column-drop-marker]")).toBeVisible();
+    await page.mouse.up();
+    await expect(headers).toHaveText(defaults);
     await columns.click();
     await expect(page.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
     await page.keyboard.press("Escape");
@@ -219,13 +225,13 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     await expect(node).toHaveAttribute("aria-sort", "none");
 
     const age = panel.getByRole("columnheader", { name: "Age", exact: true });
-    await age.focus();
-    await age.press("Alt+ArrowLeft");
-    await expect(age).toBeFocused();
-    await age.press("Alt+ArrowLeft");
+    await age.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Move left" }).click();
+    await expect(headers).toHaveText(["Name", "Node", "Ready", "Status", "Age", "Restarts"]);
+    await age.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Move left" }).click();
     const edited = ["Name", "Node", "Ready", "Age", "Status", "Restarts"];
     await expect(headers).toHaveText(edited);
-    await expect(age).toBeFocused();
 
     await expectSaved(edited);
     await page.reload();
