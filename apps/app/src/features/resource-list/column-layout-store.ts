@@ -33,14 +33,39 @@ export function createColumnLayoutStore(
   let stored: StoredColumnLayout | null | undefined;
   let optimistic: StoredColumnLayout | null | undefined;
   let snapshot: StoredColumnLayout | null | undefined;
-  let writes = 0;
-  let differentValue = false;
-  let revision = 0;
+  let write: Promise<void> | undefined;
+  let waiting: StoredColumnLayout | null | undefined;
+  const sent: (StoredColumnLayout | null)[] = [];
+  let externalValue = false;
   const listeners = new Set<() => void>();
   let watch: { close: () => void } | undefined;
   const notify = () => {
     snapshot = optimistic === undefined ? stored : optimistic;
     for (const listener of listeners) listener();
+  };
+  const send = (value: StoredColumnLayout | null) => {
+    sent.push(readColumnLayout(value));
+    let failed = false;
+    write = client
+      .request("settings.put", { key, value })
+      .then(() => {})
+      .catch((error: unknown) => {
+        console.warn("Could not save the column layout", error);
+        failed = true;
+      })
+      .finally(() => {
+        write = undefined;
+        if (waiting !== undefined) {
+          const next = waiting;
+          waiting = undefined;
+          void send(next);
+        } else {
+          sent.length = 0;
+          if (failed || externalValue) optimistic = undefined;
+        }
+        notify();
+      });
+    return write;
   };
   return {
     getSnapshot: () => snapshot,
@@ -54,9 +79,9 @@ export function createColumnLayoutStore(
             const incoming = readColumnLayout(value);
             stored = incoming;
             if (optimistic !== undefined) {
-              if (sameLayout(incoming, readColumnLayout(optimistic)) || writes === 0)
-                optimistic = undefined;
-              else differentValue = true;
+              if (write === undefined) optimistic = undefined;
+              else if (!sent.some((sentValue) => sameLayout(incoming, sentValue)))
+                externalValue = true;
             }
             notify();
           },
@@ -77,24 +102,12 @@ export function createColumnLayoutStore(
       };
     },
     put: (value: StoredColumnLayout | null) => {
-      const current = ++revision;
       optimistic = value;
-      differentValue = false;
-      writes++;
+      externalValue = false;
       notify();
-      return client
-        .request("settings.put", { key, value })
-        .catch((error: unknown) => {
-          console.warn("Could not save the column layout", error);
-          if (current === revision) {
-            optimistic = undefined;
-          }
-        })
-        .finally(() => {
-          writes--;
-          if (writes === 0 && differentValue) optimistic = undefined;
-          notify();
-        });
+      if (write === undefined) return send(value);
+      waiting = value;
+      return write.then(() => write);
     },
   };
 }

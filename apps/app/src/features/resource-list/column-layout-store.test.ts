@@ -71,61 +71,85 @@ describe("column layout store", () => {
     expect(s.store.getSnapshot()).toBeNull();
     expect(warn).toHaveBeenCalledWith("Could not read the column layout", expect.anything());
   });
-  it("shows an edit immediately, ignores earlier values during its write, and accepts its echo", async () => {
+  it("shows an edit immediately and keeps it through its echo and settlement", async () => {
     const s = setup();
     s.deliver(null);
     const pending = s.store.put(layout());
     expect(s.store.getSnapshot()).toEqual(layout());
     expect(s.writes[0]?.params).toEqual({ key: "columns/pods", value: layout() });
-    s.deliver(null);
-    expect(s.store.getSnapshot()).toEqual(layout());
     s.deliver(layout());
+    expect(s.store.getSnapshot()).toEqual(layout());
     s.writes[0]!.resolve();
     await pending;
     expect(s.store.getSnapshot()).toEqual(layout());
-    s.deliver(layout(true));
-    expect(s.store.getSnapshot()).toEqual(layout(true));
   });
-  it("accepts another client's value after the write settles even without an echo", async () => {
-    const s = setup();
-    s.deliver(null);
-    const pending = s.store.put(layout());
-    s.writes[0]!.resolve();
-    await pending;
-    s.deliver(layout(true));
-    expect(s.store.getSnapshot()).toEqual(layout(true));
-  });
-  it("keeps the latest quick edit through older echoes and an older failed write", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("waits for the write in flight and replaces the second waiting edit with the third", async () => {
     const s = setup();
     s.deliver(null);
     const first = s.store.put(layout());
     const second = s.store.put(layout(true));
-    s.deliver(layout());
-    expect(s.store.getSnapshot()).toEqual(layout(true));
-    s.writes[0]!.reject(new Error("failed"));
+    const third = s.store.put(null);
+    expect(s.writes).toHaveLength(1);
+    expect(s.store.getSnapshot()).toBeNull();
+    s.writes[0]!.resolve();
     await first;
-    expect(s.store.getSnapshot()).toEqual(layout(true));
-    s.deliver(layout(true));
+    expect(s.writes.map((write) => write.params.value)).toEqual([layout(), null]);
+    expect(s.store.getSnapshot()).toBeNull();
     s.writes[1]!.resolve();
-    await second;
-    expect(s.store.getSnapshot()).toEqual(layout(true));
-  });
-  it("accepts another client's value after the latest echo while writes are still in flight", async () => {
-    const s = setup();
-    s.deliver(null);
-    const first = s.store.put(layout());
-    const second = s.store.put(layout(true));
-    s.deliver(layout(true));
-    s.deliver(layout());
-    expect(s.store.getSnapshot()).toEqual(layout());
-    s.writes[0]!.resolve();
-    s.writes[1]!.resolve();
-    await Promise.all([first, second]);
-    s.deliver(null);
+    await Promise.all([second, third]);
     expect(s.store.getSnapshot()).toBeNull();
   });
-  it("shows another client's value received during a write once it settles without an echo", async () => {
+  it("keeps edit 2 through edit 1's settlement, its delayed echo, edit 2's settlement and echo", async () => {
+    const s = setup();
+    s.deliver(null);
+    const first = s.store.put(layout());
+    const second = s.store.put(layout(true));
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    const snapshots: unknown[] = [];
+    const stop = s.store.subscribe(() => snapshots.push(s.store.getSnapshot()));
+    s.writes[0]!.resolve();
+    await first;
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    expect(s.writes).toHaveLength(2);
+    s.deliver(layout());
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    s.writes[1]!.resolve();
+    await second;
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    s.deliver(layout(true));
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    for (const snapshot of snapshots) expect(snapshot).toEqual(layout(true));
+    stop();
+  });
+  it("lets a value arriving while idle win over a lingering optimistic edit", async () => {
+    const s = setup();
+    s.deliver(null);
+    const pending = s.store.put(layout());
+    s.writes[0]!.resolve();
+    await pending;
+    expect(s.store.getSnapshot()).toEqual(layout());
+    s.deliver(layout(true));
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+  });
+  it("sends the waiting edit after a failed write and keeps showing it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    s.deliver(null);
+    const first = s.store.put(layout());
+    const second = s.store.put(layout(true));
+    expect(s.writes).toHaveLength(1);
+    s.writes[0]!.reject(new Error("failed"));
+    await first;
+    expect(warn).toHaveBeenCalledWith("Could not save the column layout", expect.any(Error));
+    expect(s.writes[1]?.params.value).toEqual(layout(true));
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    s.writes[1]!.resolve();
+    await second;
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    s.deliver(layout(true));
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+  });
+  it("shows another client's value received during a write once it settles with nothing following", async () => {
     const s = setup();
     s.deliver(null);
     const pending = s.store.put(layout());
@@ -135,33 +159,29 @@ describe("column layout store", () => {
     await pending;
     expect(s.store.getSnapshot()).toEqual(layout(true));
   });
-  it("keeps the later edit through an earlier echo, settlement, and the later echo", async () => {
+  it("clears an earlier external value when another local edit is made", async () => {
     const s = setup();
     s.deliver(null);
-    const snapshots: unknown[] = [];
     const first = s.store.put(layout());
-    const second = s.store.put(layout(true));
-    const stop = s.store.subscribe(() => snapshots.push(s.store.getSnapshot()));
-    s.deliver(layout());
-    expect(s.store.getSnapshot()).toEqual(layout(true));
     s.deliver(layout(true));
-    s.writes[1]!.resolve();
-    await second;
+    const second = s.store.put(null);
     s.writes[0]!.resolve();
     await first;
-    expect(s.store.getSnapshot()).toEqual(layout(true));
-    expect(snapshots).not.toContainEqual(layout());
-    stop();
+    s.writes[1]!.resolve();
+    await second;
+    expect(s.store.getSnapshot()).toBeNull();
   });
   it("recognizes an echo regardless of key order and an explicit hidden false", async () => {
     const s = setup();
     s.deliver(null);
-    const pending = s.store.put({ version: 1, columns: [{ source: "name" }] });
-    s.deliver({ columns: [{ hidden: false, source: "name" }], version: 1 });
-    s.deliver(layout(true));
-    expect(s.store.getSnapshot()).toEqual(layout(true));
+    const first = s.store.put({ version: 1, columns: [{ source: "name" }] });
+    const second = s.store.put(layout(true));
     s.writes[0]!.resolve();
-    await pending;
+    await first;
+    s.deliver({ columns: [{ hidden: false, source: "name" }], version: 1 });
+    expect(s.store.getSnapshot()).toEqual(layout(true));
+    s.writes[1]!.resolve();
+    await second;
     expect(s.store.getSnapshot()).toEqual(layout(true));
   });
   it("uses the default if a watch fails after an optimistic edit", async () => {
@@ -190,9 +210,8 @@ describe("column layout store", () => {
     const pending = s.store.put(null);
     expect(s.store.getSnapshot()).toBeNull();
     expect(s.writes[0]?.params).toEqual({ key: "columns/pods", value: null });
-    s.deliver(layout());
-    expect(s.store.getSnapshot()).toBeNull();
     s.deliver(null);
+    expect(s.store.getSnapshot()).toBeNull();
     s.writes[0]!.resolve();
     await pending;
     expect(s.store.getSnapshot()).toBeNull();
