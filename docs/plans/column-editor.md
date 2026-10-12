@@ -181,11 +181,14 @@ edge with Move left and Move right.
 
 ### Keyboard
 
-Chromium on macOS has no key that opens a context menu, so the context menu
-alone is not a keyboard path there. The Columns menu, which is an ordinary
-menu button, shows and hides columns from the keyboard. A focused header
-moves with `Alt+ArrowLeft` and `Alt+ArrowRight`, keeps focus afterwards, and
-the context menu shows the two shortcuts beside Move left and Move right.
+The Columns menu is an ordinary menu button, so it shows and hides columns
+from the keyboard. Moving a column from the keyboard goes through the
+header's context menu, where the browser has a key that opens one. That
+path has not been tried on Windows or Linux.
+
+Chromium on macOS has no such key, so there a column can only be moved with
+the pointer. A header shortcut for moving was built to cover that and then
+dropped (see "What changed while building").
 
 ## Steps
 
@@ -197,8 +200,7 @@ The work ships as one PR, in commits that each pass `mise run check`.
 2. Add the store that watches and writes a type's setting, and its hook.
 3. Render the list from a resolved layout: the generalized header and cells,
    widths keyed by column, the spare-width column, and the derived sort.
-4. Add the Columns menu, the header context menu, the keyboard moves, and
-   header dragging.
+4. Add the Columns menu, the header context menu, and header dragging.
 5. Add the Playwright test, check the Event and Pod lists by hand on
    `mise run dev:verify`, and mark this plan as shipped.
 
@@ -215,7 +217,7 @@ The work ships as one PR, in commits that each pass `mise run check`.
 | The spare width goes to the wrong column                     | Vitest for `gridLayout`: Message for Events, Name elsewhere, and the fallback when that column is hidden.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | An edit flickers back, or another window's edit is lost      | Vitest for the store against a fake client: an edit shows before its write resolves, an edit made during a write waits and the latest one replaces it, a value that arrives during a write is not shown whether it is the list's own or another client's, a late echo on a replaced watch is dropped, the first value of the new watch is shown, a value that arrives while idle is shown, and a failed write with and without an edit waiting. Playwright: a second page open on the same list follows an edit without a reload. |
 | A long type key cannot be stored                             | Go tests for the settings store: a 250-byte key survives reopening the store, two long keys with a shared prefix stay apart, and a short key keeps its file name.                                                                                                                                                                                                                                                                                                                                                                 |
-| Editing does not work end to end, or does not survive reload | Playwright: hide a column from the Columns menu, move one by dragging its header and one from the keyboard, reload, and find the layout kept. It also covers a drag cancelled with Escape, a press that only sorts, and a move that changes nothing. It resets the type's layout before and after.                                                                                                                                                                                                                                |
+| Editing does not work end to end, or does not survive reload | Playwright: hide a column from the Columns menu, move one by dragging its header and one from its header's context menu, reload, and find the layout kept. It also covers a drag cancelled with Escape, a press that only sorts, and a drag that ends where it started. It resets the type's layout before and after.                                                                                                                                                                                                             |
 
 How the Event and Pod lists look at 1280 px is checked by hand on
 `mise run dev:verify`, as is that dragging a header starts no dockview drag.
@@ -241,6 +243,12 @@ How the Event and Pod lists look at 1280 px is checked by hand on
 
 ## What changed while building
 
+- **No header shortcut for moving a column.** `Alt+ArrowLeft` and
+  `Alt+ArrowRight` on a focused header were built, because Chromium on macOS
+  cannot open a context menu from the keyboard. Jim dropped them in review:
+  they are not a convention for moving columns, they only worked while a
+  header had focus, and those keys are better kept for something else. Moving
+  a column from the keyboard on macOS is an open gap.
 - **The sync rule was replaced.** The plan first had a list tell its own
   echoes from another client's values by comparing them with what it had
   written. Every version of that rule had an order of messages that fooled
