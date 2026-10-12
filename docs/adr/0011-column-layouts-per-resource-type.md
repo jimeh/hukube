@@ -31,4 +31,5 @@ users who have edited that type, but an order has no natural difference form.
   window shows in the others. Two clients editing at once still follow
   ADR-0009: the last write wins.
 - A default sort, column widths, and other per-type list preferences can join
-  the same setting later.
+  the same setting later. A client writes the whole setting, so an edit from
+  an older client drops any field a later version adds.

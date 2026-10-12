@@ -20,7 +20,9 @@ After this work:
   Message takes the spare width. Pods also show Node. Every other type looks
   as it did.
 
-The Engine and the protocol do not change.
+The protocol does not change. The Engine changes in one place: its settings
+store can now hold a key too long to be a file name (see "What changed while
+building").
 
 ## Current state
 
@@ -146,15 +148,22 @@ whatever arrives, so an edit in one window reaches the others. It does not
 render columns before the first value arrives, so a stored layout never
 flashes the default.
 
-An edit shows at once and is then written. The list keeps showing the edit
-until the Engine sends the same value back. A different value that arrives
-while a write is in flight does not replace the edit, because it is usually
-an earlier edit of this list's own, but it is kept: when the last write
-settles and the edit has still not come back, the list shows the latest value
-it received. When no write is in flight, an arriving value always wins. A
-failed write logs a warning and returns the list to the stored layout. Two
-clients editing at once follow ADR-0009: the last write wins, for the whole
-layout.
+An edit shows at once and is then written. A list writes one edit at a time,
+because the Engine may apply two writes that are in flight in either order.
+An edit made during a write waits for it, and only the latest waiting edit is
+sent.
+
+The list keeps showing its latest edit while it is writing. A value that
+arrives meanwhile is kept, and is one of two things:
+
+- A value this list wrote since it was last idle is an echo of its own
+  earlier edit, and changes nothing.
+- Any other value is another client's. When the list's writes have all
+  settled, it shows the latest value it received in place of its own edit.
+
+When the list is not writing, an arriving value always wins. A failed write
+logs a warning and returns the list to the stored layout. Two clients editing
+at once follow ADR-0009: the last write wins, for the whole layout.
 
 ### Drag headers with pointer events
 
@@ -194,17 +203,18 @@ The work ships as one PR, in commits that each pass `mise run check`.
 
 ## Testing strategy
 
-| Risk                                                         | Evidence                                                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A layout resolves wrongly                                    | Vitest: the default alone; a stored layout; a served column the stored layout does not know, at the start, middle, and end; a stored column the Cluster does not serve, kept through an edit.                                                                                                      |
-| A Cluster's column names break the list                      | Vitest: columns named `constructor`, `__proto__`, and `toString`; a served column named `Name`; two served columns with one name.                                                                                                                                                                  |
-| A stored value of the wrong shape breaks the list            | Vitest for the reader: `null`, another version, a non-array, entries of the wrong shape, and repeated entries.                                                                                                                                                                                     |
-| The tuned defaults are wrong, or hide everything             | Vitest: the Pod and Event defaults against their real columns, both Event type keys, an Event list before its columns arrive, and a layout that shows nothing.                                                                                                                                     |
-| A move lands in the wrong place                              | Vitest: moves across hidden and unserved entries, at both ends, and with the Namespace column not shown.                                                                                                                                                                                           |
-| The sort outlives its column                                 | Vitest for the function that derives the sort from the shown columns.                                                                                                                                                                                                                              |
-| The spare width goes to the wrong column                     | Vitest for `gridLayout`: Message for Events, Name elsewhere, and the fallback when that column is hidden.                                                                                                                                                                                          |
-| An edit flickers back, or another window's edit is lost      | Vitest for the store against a fake client: an edit shows before its write resolves, an earlier edit arriving during a later write does not show, another client's value that arrives during a write shows once the write settles, a later value wins, and a failed write.                         |
-| Editing does not work end to end, or does not survive reload | Playwright: hide a column from the Columns menu, move one by dragging its header and one from the keyboard, reload, and find the layout kept. It also covers a drag cancelled with Escape, a press that only sorts, and a move that changes nothing. It resets the type's layout before and after. |
+| Risk                                                         | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A layout resolves wrongly                                    | Vitest: the default alone; a stored layout; a served column the stored layout does not know, at the start, middle, and end; a stored column the Cluster does not serve, kept through an edit.                                                                                                                                                                                                                                                                                       |
+| A Cluster's column names break the list                      | Vitest: columns named `constructor`, `__proto__`, and `toString`; a served column named `Name`; two served columns with one name.                                                                                                                                                                                                                                                                                                                                                   |
+| A stored value of the wrong shape breaks the list            | Vitest for the reader: `null`, another version, a non-array, entries of the wrong shape, and repeated entries.                                                                                                                                                                                                                                                                                                                                                                      |
+| The tuned defaults are wrong, or hide everything             | Vitest: the Pod and Event defaults against their real columns, both Event type keys, an Event list before its columns arrive, and a layout that shows nothing.                                                                                                                                                                                                                                                                                                                      |
+| A move lands in the wrong place                              | Vitest: moves across hidden and unserved entries, at both ends, and with the Namespace column not shown.                                                                                                                                                                                                                                                                                                                                                                            |
+| The sort outlives its column                                 | Vitest for the function that derives the sort from the shown columns.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| The spare width goes to the wrong column                     | Vitest for `gridLayout`: Message for Events, Name elsewhere, and the fallback when that column is hidden.                                                                                                                                                                                                                                                                                                                                                                           |
+| An edit flickers back, or another window's edit is lost      | Vitest for the store against a fake client: an edit shows before its write resolves, an edit made during a write waits and the latest one replaces it, an echo of an earlier edit during a later write does not show, another client's value that arrives during a write shows once the write settles, a value that arrives while idle wins, and a failed write with and without an edit waiting. Playwright: a second page open on the same list follows an edit without a reload. |
+| A long type key cannot be stored                             | Go tests for the settings store: a 250-byte key survives reopening the store, two long keys with a shared prefix stay apart, and a short key keeps its file name.                                                                                                                                                                                                                                                                                                                   |
+| Editing does not work end to end, or does not survive reload | Playwright: hide a column from the Columns menu, move one by dragging its header and one from the keyboard, reload, and find the layout kept. It also covers a drag cancelled with Escape, a press that only sorts, and a move that changes nothing. It resets the type's layout before and after.                                                                                                                                                                                  |
 
 How the Event and Pod lists look at 1280 px is checked by hand on
 `mise run dev:verify`, as is that dragging a header starts no dockview drag.
@@ -216,9 +226,6 @@ How the Event and Pod lists look at 1280 px is checked by hand on
 - **Wide Event cells.** Object can grow to 48 characters, which with a long
   Reason leaves Message its least width or forces sideways scrolling in a
   narrow Pane. Resizing columns is a non-goal here.
-- **Very long type keys.** The settings store names a file after the key, and
-  a type key near the 253-character limit of a CRD name makes a file name over
-  255 bytes. That type's layout would fail to save, with a warning.
 - **Stored columns accumulate.** A layout keeps every column name it has seen
   across Clusters until it is reset. The count is bounded by the columns that
   versions of one type declare.
@@ -233,10 +240,24 @@ How the Event and Pod lists look at 1280 px is checked by hand on
 
 ## What changed while building
 
-- **The sync rule keeps every value it receives.** The plan first had a list
-  ignore values that arrived during a write. A value another client wrote
-  just after this list's own would then never show, because the Engine sends
-  nothing further. The rule under "Stay in sync" replaces it.
+- **The sync rule changed twice.** The plan first had a list ignore values
+  that arrived during a write. A value another client wrote just after this
+  list's own would then never show, because the Engine sends nothing further.
+  Review then found that edits written at the same time could be applied out
+  of order, and that an echo of an earlier edit could be taken for another
+  client's value and briefly replace a later edit. The rule under "Stay in
+  sync" is the result.
+- **One Engine change: long setting keys.** The settings store names a file
+  after the key, and a type key can be up to 253 bytes, so the file name of
+  `columns/<type key>` could pass the 255-byte limit and that type's layout
+  would fail to save. A Workspace key built from a long kubeconfig context
+  name had the same problem. The store now names such a file after a SHA-256
+  of the key. Shorter keys keep their file names, so stored settings stay
+  readable. The fix is in the store, not in the list, because the limit is
+  the store's and applies to every key.
+- **`mise run e2e` starts from an empty Engine data directory**, as CI does.
+  The new Playwright test first passed locally and failed in CI, because a
+  Workspace layout kept from earlier runs hid a second open list.
 - **An edit that changes nothing stores nothing.** A move past either end, a
   drag dropped where it started, and hiding the last shown column leave the
   setting alone, so they do not turn a default into a stored layout.
