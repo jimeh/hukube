@@ -6,7 +6,6 @@ import {
   ContextMenuContent,
   ContextMenuGroup,
   ContextMenuItem,
-  ContextMenuShortcut,
   ContextMenuTrigger,
 } from "@hukube/ui/components/context-menu";
 import { cn } from "@hukube/ui/lib/utils";
@@ -24,7 +23,7 @@ import {
 } from "./column-layout.ts";
 import type { ListColumn } from "./columns.ts";
 
-/** A sortable header with visibility, keyboard moves, and pointer dragging. */
+/** A sortable header that can be dragged, with a menu to hide or move its column. */
 export function ColumnHeader({
   column,
   layout,
@@ -128,12 +127,6 @@ export function ColumnHeader({
               }
               onSort({ ...by, desc: active ? !sort.desc : false });
             }}
-            onKeyDown={(event) => {
-              if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-                event.preventDefault();
-                move(event.key === "ArrowLeft" ? -1 : 1);
-              }
-            }}
             onPointerDown={(pressEvent) => {
               if (
                 pressEvent.button !== 0 ||
@@ -206,10 +199,10 @@ export function ColumnHeader({
             Hide
           </ContextMenuItem>
           <ContextMenuItem disabled={index === 0} onClick={() => move(-1)}>
-            Move left <ContextMenuShortcut>Alt+←</ContextMenuShortcut>
+            Move left
           </ContextMenuItem>
           <ContextMenuItem disabled={index === layout.shown.length - 1} onClick={() => move(1)}>
-            Move right <ContextMenuShortcut>Alt+→</ContextMenuShortcut>
+            Move right
           </ContextMenuItem>
         </ContextMenuGroup>
       </ContextMenuContent>
