@@ -47,7 +47,7 @@ export function createColumnLayoutStore(
       { key },
       {
         data: ({ value }) => {
-          // A replaced watch can still deliver a value that was in flight.
+          // Do not rely on the client to drop a late value for a watch it closed.
           if (watch === opened && !writing) show(readColumnLayout(value));
         },
         error: (error) => {

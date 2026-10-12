@@ -40,8 +40,10 @@ function setup(type = "pods") {
       new Promise<void>((resolve, reject) => writes.push({ params, resolve, reject })),
   } as unknown as Parameters<typeof createColumnLayoutStore>[0];
   const store = createColumnLayoutStore(client, type);
-  const stop = store.subscribe(() => {});
-  return { store, watches, writes, stop, shown: () => store.getSnapshot() };
+  // What a list would show: the snapshot as of the store's last notification.
+  let shown = store.getSnapshot();
+  const stop = store.subscribe(() => (shown = store.getSnapshot()));
+  return { store, watches, writes, stop, shown: () => shown };
 }
 afterEach(() => vi.restoreAllMocks());
 
@@ -70,6 +72,23 @@ describe("column layout store", () => {
     s.watches[0]!.fail();
     expect(s.shown()).toBeNull();
     expect(warn).toHaveBeenCalledWith("Could not read the column layout", expect.anything());
+  });
+
+  it("keeps an edit on show when the watch fails during its write", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    s.watches[0]!.deliver(null);
+    const saved = s.store.put(layout());
+    s.watches[0]!.fail();
+    expect(s.shown()).toEqual(layout());
+    s.writes[0]!.resolve();
+    await saved;
+
+    // The watch it replaced no longer counts, whatever it reports.
+    warn.mockClear();
+    s.watches[0]!.fail();
+    expect(warn).not.toHaveBeenCalled();
+    expect(s.shown()).toEqual(layout());
   });
 
   it("follows another client's value while it is not writing", () => {
@@ -227,10 +246,11 @@ describe("column layout store", () => {
     await saved;
     expect(s.watches).toHaveLength(1);
 
-    const stop = s.store.subscribe(() => {});
+    let seen: unknown;
+    const stop = s.store.subscribe(() => (seen = s.store.getSnapshot()));
     expect(s.watches).toHaveLength(2);
     s.watches[1]!.deliver(layout(true));
-    expect(s.shown()).toEqual(layout(true));
+    expect(seen).toEqual(layout(true));
     stop();
   });
 });
