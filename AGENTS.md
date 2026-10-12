@@ -76,6 +76,9 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   `--args --no-sandbox`.
 - **Test clusters:** the e2e k3d cluster's kubeconfig is written to
   `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
+- **End-to-end lists:** tests share one Engine and one Workspace within a run,
+  so a test finds lists earlier tests opened. Scope each list's locators to its
+  tab panel.
 - **envtest:** without `KUBEBUILDER_ASSETS`, `go test` reports `ok` for the
   `cluster` and `server` packages without running any of their tests, unit
   tests included; use `mise run test:engine`.

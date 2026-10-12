@@ -380,6 +380,8 @@ depends = ["e2e:cluster", "e2e:browsers", "build"]
 dir = "e2e"
 # Electron needs a display; use a virtual one on headless Linux.
 run = '''
+# Stored Workspace layouts and settings from an earlier run change what a test sees.
+rm -rf ../.data/e2e/engine
 if [ "$(uname)" = Linux ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   xvfb-run -a bunx playwright test
 else
