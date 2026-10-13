@@ -11,7 +11,10 @@ type Request[P, R any] struct{ Name Method }
 // Topic names a subscription topic with params P and data D.
 type Topic[P, D any] struct{ Name Method }
 
-// MethodKind distinguishes requests from subscription topics.
+// Stream names a stream with params P and events E.
+type Stream[P, E any] struct{ Name Method }
+
+// MethodKind distinguishes requests, subscription topics, and streams.
 type MethodKind string
 
 const (
@@ -19,9 +22,11 @@ const (
 	MethodKindRequest MethodKind = "request"
 	// MethodKindTopic identifies a subscription topic.
 	MethodKindTopic MethodKind = "topic"
+	// MethodKindStream identifies a stream, which has its own socket.
+	MethodKindStream MethodKind = "stream"
 )
 
-// MethodDefinition describes one declared request or subscription topic.
+// MethodDefinition describes one declared method.
 type MethodDefinition struct {
 	Name   Method
 	Kind   MethodKind
@@ -52,13 +57,21 @@ func DeclareTopic[P, D any](name Method) Topic[P, D] {
 	return Topic[P, D]{Name: name}
 }
 
+// DeclareStream records a stream with params P and events E.
+func DeclareStream[P, E any](name Method) Stream[P, E] {
+	declare[P, E](name, MethodKindStream)
+	return Stream[P, E]{Name: name}
+}
+
 // Methods returns the methods in declaration order.
 func Methods() []MethodDefinition { return append([]MethodDefinition(nil), methods...) }
 
-// This is the one place each request or topic is declared. The Engine's handlers
+// This is the one place each method is declared. The Engine's handlers
 // register against these values, and mise run gen generates the TypeScript method
 // map from them.
 var (
+	StreamResourceLogs = DeclareStream[LogStreamParams, LogStreamStatus]("resource.logs")
+
 	RequestClustersList = DeclareRequest[None, []Cluster]("clusters.list")
 	RequestSettingsPut  = DeclareRequest[Setting, None]("settings.put")
 
