@@ -29,7 +29,7 @@ export function OutOfDateNotice() {
         <p>
           {web
             ? "The Engine was updated after this page loaded, so live data has stopped. Reload to continue."
-            : "It does not match the Engine it is connected to, so live data has stopped. Quit and reopen hukube to continue."}
+            : "hukube was updated while it was running, so live data has stopped. Quit and reopen hukube to continue."}
           {import.meta.env.DEV && " In development, rebuild and restart the Engine if this stays."}
         </p>
       </div>

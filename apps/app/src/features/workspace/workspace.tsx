@@ -38,7 +38,8 @@ const tabComponents = { tab: PanelTab };
 
 /**
  * The Panes and Tabs for one Cluster, tinted with the Cluster's color. Hidden
- * Workspaces stay mounted, so active says whether this one is shown.
+ * Workspaces stay mounted, so active says whether this one is shown and the
+ * window is not out of date.
  */
 export function Workspace({ cluster, active }: { cluster: string; active: boolean }) {
   const { data: status } = useSubscription("cluster.status", { cluster });
