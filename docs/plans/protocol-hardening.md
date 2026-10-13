@@ -1,6 +1,7 @@
 # Plan: protocol hardening
 
-Status: planned.
+Status: implemented, not merged yet. "What changed while building" lists where
+the result differs from the text below.
 
 The evidence for this work is `docs/research/engine-protocol-tooling.md`. The
 decision to keep the protocol and to check for an exact build is recorded in
@@ -282,7 +283,7 @@ rendered by the root layout. It concerns the whole window and every Cluster
 in it, so it does not belong in a Workspace's status bar, which is in one
 Cluster's color and describes that Cluster. It pushes the content down
 instead of covering it. Both Hosts use the native title bar, so nothing sits
-above the tabs to collide with.
+above the tabs to collide with. A warning icon leads the bar.
 
 **Which pattern.** A persistent bar at the top of the window with one action
 is how web applications report that the page is older than its server, and
@@ -293,10 +294,10 @@ be missed and goes away.
 
 **What it says.**
 
-| Host    | Title                      | Text                                                                                                           | Action          |
-| ------- | -------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------- |
-| Web     | This page is out of date   | The Engine was updated after this page loaded, so live data has stopped. Reload to continue.                   | Reload (button) |
-| Desktop | This window is out of date | It does not match the Engine it is connected to, so live data has stopped. Quit and reopen hukube to continue. | none            |
+| Host    | Title                      | Text                                                                                                   | Action          |
+| ------- | -------------------------- | ------------------------------------------------------------------------------------------------------ | --------------- |
+| Web     | This page is out of date   | The Engine was updated after this page loaded, so live data has stopped. Reload to continue.           | Reload (button) |
+| Desktop | This window is out of date | hukube was updated while it was running, so live data has stopped. Quit and reopen hukube to continue. | none            |
 
 In a development build (`import.meta.env.DEV`) both end with one more
 sentence: "In development, rebuild and restart the Engine if this stays."
@@ -308,20 +309,27 @@ title, and stays. While it shows, the status bar's connection text reads "Out
 of date" instead of a reconnecting message, and the Cluster picker does not
 show its "Connecting to the Engine" spinner.
 
-**Pointer and keyboard.** Reload is a standard `Button`, first in the
-window's tab order because the bar is first in the document. The bar has
-`role="alert"`, so a screen reader announces it when it appears. It does not
-take focus, because the user may be typing. It adds no key binding. Reload
-calls `window.location.reload()`: the Engine serves `index.html` with
-`no-cache`, so the page fetches the UI that matches it. The token survives in
-session storage.
+**Pointer and keyboard.** Reload is a standard `Button`. The bar has
+`role="alert"`, so a screen reader announces it when it appears. When it
+appears the bar itself takes focus, so one Tab reaches Reload. The bar is
+focused and not the button, so a key pressed while typing cannot reload the
+page. It adds no key binding. Reload calls `window.location.reload()`. The
+Engine serves `index.html` with `no-cache` and without validators, so the
+page always fetches the UI that matches it. The token survives in session
+storage.
 
 **States.** The notice is absent in every other connection state and has one
 state of its own. It cannot be dismissed, because the window cannot recover
-without the action. The content below stays readable and is not dimmed, so a
-user can still read or copy what was on screen. If a reload does not help,
-which happens only in development, the notice appears again within
-milliseconds of the page loading.
+without the action. If a reload does not help, which happens only in
+development, the notice appears again within milliseconds of the page
+loading.
+
+**The rest of the window.** Everything below the bar is frozen while it
+shows: the root layout marks it `inert` and dims it, and the Go to Resource
+palette, which renders outside it, does not open. The content stays readable
+but cannot be clicked, focused, or selected. The connection is dead, so
+anything a user opened would be empty or wrong, and each feature would
+otherwise need an out-of-date state of its own.
 
 **Width and themes.** At a narrow width the text wraps and the button stays
 on the first line at the right. Colors come from the existing `warning`,
@@ -394,6 +402,7 @@ ADR-0012 and the wording of ADR-0003 and ADR-0004 are written with this plan.
 | A value crosses an update at the Worker boundary                     | Vitest on `WorkerEngineClient` with a fake Worker: a `data` stamped with an earlier count is dropped after `update`.                                                                                                                                                                                                   |
 | The palette opens a Resource from earlier input                      | Vitest for `resourceItems` with `stale`, and the existing Playwright palette test, which types at a human pace and presses Enter.                                                                                                                                                                                      |
 | The change breaks a feature                                          | The existing unit, envtest, and end-to-end suites for both Hosts.                                                                                                                                                                                                                                                      |
+| Reload fetches the old UI                                            | `server` test: a conditional request for `index.html`, at the root and at a client-side route, returns 200 with no validators.                                                                                                                                                                                         |
 | The notice is missing, unclear, or does not clear                    | By hand, then by the experience review: open the web Host, replace its Engine with one built from a changed protocol definition on the same address, see the notice, reload, and see it gone. Both themes, 1280 px and a narrow width.                                                                                 |
 
 The notice has no automated end-to-end test. Producing a mismatch needs a
@@ -430,6 +439,38 @@ opens. The client tests cover the state, and the hand check covers the bar.
   under it.
 - A restart button in the desktop Host. It needs a new IPC call and is not
   needed to tell the user what to do.
+
+## What changed while building
+
+- **The window freezes while it is out of date.** The plan left the content
+  below the notice usable so a user could still copy from it. The experience
+  review showed what that meant: a click replaced the list being read with an
+  empty one, and opening a Cluster showed "No resource types match." The
+  content is now inert and dimmed, and the notice takes focus when it
+  appears, because inert content drops the focus it held.
+- **`index.html` is served without validators.** The Engine sent
+  `Last-Modified` and answered `304 Not Modified` when its file was not newer
+  than the browser's copy, as after a rollback. Reload then loaded the old UI
+  again. The Engine now ignores conditional requests for `index.html`.
+- **The desktop text names no Engine.** A desktop user never starts or sees
+  one, so the text says hukube was updated while it was running.
+- **The notice has a warning icon,** because the bar's tint alone is quiet
+  in the dark theme.
+- **`stale` has a render test.** It needed a DOM, so `jsdom` and
+  `@testing-library/react` joined the development dependencies. Both are the
+  established packages for this, and the repository had no way to render a
+  hook in a test.
+- **A duplicate handler registration panics** at start instead of replacing
+  the earlier handler.
+
+## Follow-ups
+
+- A restart button in the desktop Host's notice. It needs an IPC call from
+  the UI to the main process.
+- In the Go to Resource palette, Enter does nothing when pressed before the
+  results for the current text arrive. This layer did not change that.
+- A menu or tooltip that is open at the moment the window goes out of date
+  renders outside the frozen content and stays usable until it closes.
 
 ## A possible addition: refusing a stale `settings.put`
 
