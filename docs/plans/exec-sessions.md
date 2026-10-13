@@ -1,7 +1,7 @@
 # Plan: Exec Sessions
 
-Status: planned. The key bindings in "Keys" are a proposal until Jim approves
-them.
+Status: being built. The Windows and Linux rows of "Keys" await Jim's
+confirmation.
 
 ## Outcome
 
@@ -360,8 +360,11 @@ xterm.js.
 
 ## Keys
 
-Proposed, pending Jim's approval. While a live session's terminal has focus
-it takes every key, except:
+The coordinator approved this table to build on. The macOS column is
+settled. The Windows and Linux column awaits Jim's confirmation, on the four
+points listed below it.
+
+While a live session's terminal has focus it takes every key, except:
 
 | Key                | macOS                  | Windows and Linux                                                                                                           |
 | ------------------ | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -373,18 +376,40 @@ it takes every key, except:
 | `Mod+J`            | not handled            | not handled, so the shell does not get `Ctrl+J`                                                                             |
 
 The rule on Windows and Linux is the one their terminals use: the
-application's version of `Ctrl+<key>` is `Ctrl+Shift+<key>`. `Ctrl+V` is the
-exception, because a web page that does not paste on `Ctrl+V` reads as
-broken; `vi` users have `Ctrl+Q` for the same command.
-
-`Ctrl+Shift+K` is the one new binding, and it exists only while a session has
-focus. The alternative is VS Code's: the app keeps `Ctrl+K` everywhere and the
-shell loses it, which breaks cutting a line in `nano` and killing one in a
+application's version of `Ctrl+<key>` is `Ctrl+Shift+<key>`. macOS has no
+conflict: every `Cmd` key stays the app's and every `Ctrl` key goes to the
 shell.
 
 `Tab` goes to the shell. The keyboard leaves a live terminal through Go to
 Resource. A "Tab moves focus" switch, as VS Code has, would need a binding of
 its own and is a follow-up.
+
+Awaiting Jim's confirmation, each with the recommendation built:
+
+1. **`Ctrl+Shift+K` is one new binding,** and it exists only while a session
+   has focus on Windows and Linux. Recommended. The alternative is VS Code's:
+   the app keeps `Ctrl+K` everywhere and the shell never receives it. That
+   keeps "`Mod+K` always opens Go to Resource" as one rule, and costs shell
+   users kill-to-end-of-line and `nano` users cut-line, which is a standing
+   complaint about VS Code's terminal. Without either, a keyboard user on
+   Windows or Linux has no way out of a focused terminal.
+2. **Find is `Ctrl+Shift+F` on Windows and Linux,** not `Ctrl+F`, so `vi` and
+   `less` keep page-forward. Recommended; GNOME Terminal, Konsole, and Windows
+   Terminal do the same. VS Code takes `Ctrl+F`, which would match the
+   editors here.
+3. **`Ctrl+V` pastes on Linux too,** where VS Code and desktop terminals
+   leave it to the shell. Recommended, because a web page that does not paste
+   on `Ctrl+V` reads as broken; `vi` users have `Ctrl+Q` for the same command.
+4. **`Ctrl+J` is withheld from the shell** on Windows and Linux, to keep
+   `Mod+J` unhandled everywhere. Recommended. It costs the shell a duplicate
+   of Enter.
+
+Firefox lets a page take `Ctrl+Shift+C` and `Ctrl+Shift+K` from its developer
+tools. Its key listener skips an event whose default was prevented, and the
+developer-tools keys are not marked reserved (`GlobalKeyListener.cpp` and
+`DevToolsStartup.sys.mjs`). This was read from source, not tried in a running
+Firefox. A user who has set the site's "Override Keyboard Shortcuts"
+permission to block keeps the browser's keys.
 
 `features/exec/keys.ts` is one pure function from a key event and a platform
 to what happens, so the table above is its test.
@@ -602,9 +627,9 @@ Cluster stopped mid-session, and a Tab restored after a reload.
   only a hidden window.
 - **xterm.js 6.0.0's resize bug** (issue 6063). The terminal wrapper catches
   an error from `fit` and tries again on the next resize.
-- **Firefox may keep `Ctrl+Shift+C` and `Ctrl+Shift+K`** for its developer
-  tools. `Ctrl+C` with a selection, `Ctrl+V`, and the context menu still work
-  there.
+- **Firefox's handling of `Ctrl+Shift+C` and `Ctrl+Shift+K`** was read from
+  its source, not tried. If a page cannot take them after all, `Ctrl+C` with
+  a selection, `Ctrl+V`, and the context menu still work there.
 - **Electron's menu accelerators** could take `Ctrl+C` before the terminal
   does. The desktop test covers it.
 
@@ -620,4 +645,4 @@ Cluster stopped mid-session, and a Tab restored after a reload.
 
 ## Unresolved questions
 
-1. The key bindings in "Keys", which need Jim's approval.
+1. Jim's confirmation of the four points under "Keys".
