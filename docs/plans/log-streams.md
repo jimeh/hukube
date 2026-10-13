@@ -339,8 +339,13 @@ The Pods come from the index and the graph, for every target:
   type is syncing, or the Cluster is not ready, the stream waits and sends a
   status with no sources. A type in state `forbidden` ends the stream with
   `error` and code `forbidden`. A type in state `failed` ends it with
-  `error` and code `internal`. A target that is missing, or whose UID is not
-  `params.UID`, ends it with `deleted`.
+  `error` and code `internal`.
+- **A target that is gone.** The UI learns of a Resource from its own watch
+  of the manifest, which can be ahead of the index. Until the index has
+  shown the target with `params.UID` once, a missing target or another UID
+  means "not yet", and the stream waits up to 10 seconds for it. After that,
+  or once it has been seen, a missing target or another UID ends the stream
+  with `deleted`.
 - **The limit is 20 Pods.** The first set is the 20 newest by creation time,
   then name. A followed Pod stays while it is still owned. A free place goes
   to the newest Pod that is not followed. `Pods` and `Followed` carry the
@@ -629,9 +634,9 @@ and the label `Log Stream`. From the start of the row:
   how it is shown and sit at the end, with search last, where VS Code and
   browsers put it.
 - **Keyboard.** Each control is a tab stop, in row order, before the editor.
-  Toggles answer Space and Enter. No key binding is added by hukube. Whether
-  Ctrl or Cmd+F opens search while the viewer has focus is an open question
-  below.
+  Toggles answer Space and Enter. Ctrl or Cmd+F opens search while the
+  viewer has focus, which is the editor's own binding ("Resolved questions"
+  has its conditions). hukube adds no other key binding.
 - **Timestamps and wrap are shared.** One in-memory setting for the window,
   so a choice holds for the next Logs Facet opened, including each Pod of a
   list moved through with a Preview Tab. It is not stored across reloads.
@@ -920,11 +925,19 @@ experience review does the same.
 - Separating standard output from standard error.
 - Structured errors and cancelling requests on the control socket.
 
-## Unresolved questions
+## Resolved questions
 
-1. **Ctrl or Cmd+F.** Should it open search while the log viewer has focus?
-   Monaco binds it when its find feature is loaded, and the same import
-   would give the YAML Facet's editor search for the first time. In a
-   browser the key otherwise opens the browser's own find, which cannot see
-   lines that are not rendered. Recommended: yes for both editors. Until it
-   is answered, the binding is removed and search opens from the button.
+1. **Ctrl or Cmd+F opens search while an editor has focus,** in the log
+   viewer and in the YAML Facet, which gains search with it. The coordinator
+   approved it on 2026-10-13 and Jim can reverse it. Conditions:
+   - It fires only while an editor has focus. Elsewhere the key does what it
+     does today, including the browser's own find in the web Host.
+   - Escape closes the find widget and returns focus to the editor. The
+     toolbar's Search button stays as the visible way in.
+   - Only the bindings that are about find are kept: find, next and previous
+     match, the widget's own toggles, and close. Anything else the find
+     feature binds is removed. "What changed while building" lists the
+     bindings kept.
+   - The editors do not take keys the app uses or will use. Ctrl or Cmd+K
+     still opens the Go to Resource palette from inside both editors, and
+     nothing in them answers Ctrl or Cmd+J.

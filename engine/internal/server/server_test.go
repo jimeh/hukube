@@ -36,6 +36,8 @@ var cfg *rest.Config
 
 func TestMain(m *testing.M) {
 	minEmitInterval = 10 * time.Millisecond
+	defaultStreamLimits.open = 100 * time.Millisecond
+	defaultStreamLimits.drain = 100 * time.Millisecond
 	os.Exit(testenv.Run(m, &cfg))
 }
 

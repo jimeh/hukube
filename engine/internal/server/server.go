@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /ws", s.serveControl)
+	mux.HandleFunc("GET /ws/stream", s.serveStream)
 	if s.cfg.UIDir != "" {
 		mux.Handle("GET /", spaHandler(s.cfg.UIDir))
 	}

@@ -1,5 +1,5 @@
-# Sample Resources for checking UI changes with `mise run dev:verify`: two
-# labeled apps in one Namespace, a same-named ConfigMap in a second Namespace,
+# Sample Resources for checking UI changes with `mise run dev:verify`:
+# quiet and logging workloads, a same-named ConfigMap in a second Namespace,
 # and a custom Resource.
 apiVersion: v1
 kind: Namespace
@@ -178,3 +178,110 @@ metadata:
       kind: Gadget
       name: retired-gadget
       uid: 00000000-0000-0000-0000-000000000002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clock
+  namespace: sample-shop
+  labels: { app: clock }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: clock }
+  template:
+    metadata:
+      labels: { app: clock }
+    spec:
+      initContainers:
+        - name: setup
+          image: busybox:1.36
+          command: [sh, -c]
+          args:
+            - |
+              printf 'Preparing clock\nLoading configuration\nSetup complete\n'
+      containers:
+        - name: clock
+          image: busybox:1.36
+          command: [sh, -c]
+          args:
+            - |
+              i=0
+              long=$(printf '%3000s' '' | tr ' ' x)
+              while true; do
+                i=$((i + 1))
+                if [ $((i % 13)) -eq 0 ]; then
+                  printf '\033[1;31mERROR\033[0m clock tick %d \033[2mfailed to sync\033[0m\n' "$i"
+                elif [ $((i % 7)) -eq 0 ]; then
+                  printf '\033[33mWARN\033[0m clock tick %d \033[4mslow\033[0m\n' "$i"
+                else
+                  printf '\033[32mINFO\033[0m clock tick %d\n' "$i"
+                fi
+                if [ $((i % 30)) -eq 0 ]; then
+                  printf 'long line: %s\n' "$long"
+                  printf 'progress 0%%\rprogress 50%%\rprogress 100%%\n'
+                  printf 'invalid UTF-8: \377\376 controls: \001\007\177\n'
+                fi
+                sleep 1
+              done
+        - name: ticker
+          image: busybox:1.36
+          command: [sh, -c]
+          args:
+            - |
+              i=0
+              while true; do
+                i=$((i + 1))
+                printf 'ticker %d\n' "$i"
+                sleep 5
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: firehose
+  namespace: sample-shop
+  labels: { app: firehose }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: firehose }
+  template:
+    metadata:
+      labels: { app: firehose }
+    spec:
+      containers:
+        - name: firehose
+          image: busybox:1.36
+          command: [sh, -c]
+          args:
+            - |
+              while true; do
+                awk 'BEGIN { for (i = 1; i <= 300000; i++) printf "%06d firehose abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz\n", i }'
+                sleep 30
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crasher
+  namespace: sample-shop
+  labels: { app: crasher }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crasher }
+  template:
+    metadata:
+      labels: { app: crasher }
+    spec:
+      containers:
+        - name: crasher
+          image: busybox:1.36
+          command: [sh, -c]
+          args:
+            - |
+              printf 'Starting crasher\nLoading jobs\nProcessing job 42\n'
+              sleep 20
+              printf 'ERROR: job failed\n  at processJob (worker.go:42)\n  at main (main.go:17)\n'
+              exit 1

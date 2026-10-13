@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "92fc69aef0e40943";
+export const Hash = "18a0113fc2f7813b";
 
 //////////
 // source: protocol.go
@@ -532,3 +532,242 @@ export const RelatedStatusForbidden = "forbidden";
 export const RelatedStatusSyncing = "syncing";
 export const RelatedStatusFailed = "failed";
 export type RelatedStatus = typeof RelatedStatusFound | typeof RelatedStatusSelf | typeof RelatedStatusMore | typeof RelatedStatusMissing | typeof RelatedStatusUnserved | typeof RelatedStatusForbidden | typeof RelatedStatusSyncing | typeof RelatedStatusFailed;
+
+//////////
+// source: streams.go
+
+/**
+ * StreamSubprotocol is the WebSocket subprotocol a client must offer on a
+ * stream socket, with the token subprotocol the control socket uses.
+ */
+export const StreamSubprotocol = "hukube.stream.v1";
+export const StreamChannelStdin = 0;
+export const StreamChannelStdout = 1;
+export const StreamChannelStderr = 2;
+/**
+ * The first byte of a binary frame on a stream socket is its channel, numbered
+ * as Kubernetes numbers the channels of an exec session. The rest of the frame
+ * is defined by the stream's method.
+ */
+export type StreamChannelStd = typeof StreamChannelStdin | typeof StreamChannelStdout | typeof StreamChannelStderr;
+/**
+ * LogRecordHeaderSize is the size of a record without its content.
+ */
+export const LogRecordHeaderSize = 15;
+/**
+ * LogRecordFlagCut marks a line longer than the Engine keeps. The content
+ * is its beginning.
+ */
+export const LogRecordFlagCut = 1;
+/**
+ * LogRecordFlagGap marks a place where lines of the source may be missing.
+ * It has no content.
+ */
+export const LogRecordFlagGap = 2;
+/**
+ * LogRecordFlagExited marks the end of a container's run. The content is
+ * the reason and exit code as text.
+ */
+export const LogRecordFlagExited = 4;
+/**
+ * A Log Stream's frame holds records after its channel byte. Each record is a
+ * source (2 bytes, a LogSource.ID), flags (1 byte), a time (8 bytes, signed
+ * Unix nanoseconds, 0 for a line without a timestamp), the content's length
+ * (4 bytes), and the content. Integers are big-endian.
+ */
+export type LogRecord = typeof LogRecordHeaderSize | typeof LogRecordFlagCut | typeof LogRecordFlagGap | typeof LogRecordFlagExited;
+/**
+ * StreamClientType identifies a text message a client sends on a stream socket.
+ */
+/**
+ * StreamClientTypeOpen names the stream's method and params. It is the
+ * client's first message, sent once.
+ */
+export const StreamClientTypeOpen = "open";
+/**
+ * StreamClientTypeAck reports how much data the client has consumed.
+ */
+export const StreamClientTypeAck = "ack";
+export type StreamClientType = typeof StreamClientTypeOpen | typeof StreamClientTypeAck;
+/**
+ * StreamClientMessage is a text message from a client on a stream socket.
+ */
+export interface StreamClientMessage {
+  type: StreamClientType;
+  method?: Method;
+  params?: unknown;
+  /**
+   * Bytes is the total length of the binary frames the client has consumed
+   * since the stream opened.
+   */
+  bytes?: number /* uint64 */;
+}
+/**
+ * StreamServerType identifies a text message the Engine sends on a stream socket.
+ */
+/**
+ * StreamServerTypeHello is the first message on a stream socket.
+ */
+export const StreamServerTypeHello = "hello";
+/**
+ * StreamServerTypeEvent carries a value typed by the stream's method.
+ */
+export const StreamServerTypeEvent = "event";
+/**
+ * StreamServerTypeGap stands where the Engine dropped data.
+ */
+export const StreamServerTypeGap = "gap";
+/**
+ * StreamServerTypeEnd is the last message of a stream.
+ */
+export const StreamServerTypeEnd = "end";
+export type StreamServerType = typeof StreamServerTypeHello | typeof StreamServerTypeEvent | typeof StreamServerTypeGap | typeof StreamServerTypeEnd;
+/**
+ * StreamServerMessage is a text message from the Engine on a stream socket.
+ */
+export interface StreamServerMessage {
+  type: StreamServerType;
+  hello?: Hello;
+  event?: unknown;
+  gap?: StreamGap;
+  end?: StreamEnd;
+}
+/**
+ * StreamGap counts the data the Engine dropped because the client fell behind.
+ */
+export interface StreamGap {
+  bytes: number /* uint64 */;
+  /**
+   * Records counts what the frames held, as the method defines it: lines
+   * for a Log Stream.
+   */
+  records: number /* uint64 */;
+}
+/**
+ * StreamEndReason says why a stream ended.
+ */
+/**
+ * StreamEndReasonComplete means the stream delivered everything it had.
+ */
+export const StreamEndReasonComplete = "complete";
+/**
+ * StreamEndReasonDeleted means the Resource the stream was about is gone.
+ */
+export const StreamEndReasonDeleted = "deleted";
+/**
+ * StreamEndReasonError means the stream failed, with Error saying how.
+ */
+export const StreamEndReasonError = "error";
+export type StreamEndReason = typeof StreamEndReasonComplete | typeof StreamEndReasonDeleted | typeof StreamEndReasonError;
+/**
+ * StreamEnd is the Engine's last message on a stream. A socket that closes
+ * without one was lost.
+ */
+export interface StreamEnd {
+  reason: StreamEndReason;
+  error?: ErrorDetail;
+}
+/**
+ * LogStreamParams opens a Log Stream on a Pod, or on the Pods a Resource owns.
+ */
+export interface LogStreamParams {
+  cluster: string;
+  type: TypeKey;
+  namespace?: string;
+  name: string;
+  /**
+   * UID is the incarnation to read. The stream ends when it is gone.
+   */
+  uid: string;
+  /**
+   * Container names the container to read in every Pod. Empty reads all.
+   */
+  container?: string;
+  /**
+   * Previous reads the previous run of each container and then ends.
+   */
+  previous?: boolean;
+  /**
+   * Resume holds what the client already has, when it opens a stream again.
+   */
+  resume?: LogCursor[];
+}
+/**
+ * LogCursor is the newest line a client holds from one container.
+ */
+export interface LogCursor {
+  podUid: string;
+  container: string;
+  /**
+   * Instance is the container ID the line came from.
+   */
+  instance: string;
+  /**
+   * Time is the line's timestamp in Unix nanoseconds, in decimal.
+   */
+  time: string;
+}
+/**
+ * LogStreamStatus is what a Log Stream reads right now.
+ */
+export interface LogStreamStatus {
+  sources: LogSource[];
+  containers: LogContainer[];
+  /**
+   * Pods counts the Pods the Resource owns, and Followed those being read.
+   */
+  pods: number /* int */;
+  followed: number /* int */;
+}
+/**
+ * LogContainerKind is the list of a Pod's spec that holds a container.
+ */
+export const LogContainerKindContainer = "container";
+export const LogContainerKindInit = "init";
+export const LogContainerKindEphemeral = "ephemeral";
+export type LogContainerKind = typeof LogContainerKindContainer | typeof LogContainerKindInit | typeof LogContainerKindEphemeral;
+/**
+ * LogContainer is a container name a Log Stream can be narrowed to.
+ */
+export interface LogContainer {
+  name: string;
+  kind: LogContainerKind;
+}
+/**
+ * LogSourceState is a container's state, from its Pod's status.
+ */
+export const LogSourceStateWaiting = "waiting";
+export const LogSourceStateRunning = "running";
+export const LogSourceStateTerminated = "terminated";
+export type LogSourceState = typeof LogSourceStateWaiting | typeof LogSourceStateRunning | typeof LogSourceStateTerminated;
+/**
+ * LogSource is one container a Log Stream reads.
+ */
+export interface LogSource {
+  /**
+   * ID is what a record's source field refers to.
+   */
+  id: number /* int */;
+  pod: string;
+  podUid: string;
+  container: string;
+  /**
+   * Instance is the container ID being read, empty before the first run.
+   */
+  instance?: string;
+  state: LogSourceState;
+  /**
+   * Reason, Message, and ExitCode come from the container's status.
+   */
+  reason?: string;
+  message?: string;
+  exitCode?: number /* int32 */;
+  /**
+   * Previous reports that an earlier run exists.
+   */
+  previous?: boolean;
+  /**
+   * Error is set while the container's logs cannot be read.
+   */
+  error?: string;
+}

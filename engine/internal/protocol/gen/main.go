@@ -39,10 +39,13 @@ func typeName(t reflect.Type) (string, error) {
 func methodMap() ([]byte, error) {
 	var body bytes.Buffer
 	imports := make(map[string]bool)
-	for _, kind := range []protocol.MethodKind{protocol.MethodKindRequest, protocol.MethodKindTopic} {
+	for _, kind := range []protocol.MethodKind{protocol.MethodKindRequest, protocol.MethodKindTopic, protocol.MethodKindStream} {
 		name, result := "Requests", "result"
 		if kind == protocol.MethodKindTopic {
 			name, result = "Topics", "data"
+		}
+		if kind == protocol.MethodKindStream {
+			name, result = "Streams", "event"
 		}
 		fmt.Fprintf(&body, "export interface %s {\n", name)
 		for _, m := range protocol.Methods() {
@@ -78,7 +81,7 @@ func methodMap() ([]byte, error) {
 	}
 	output.WriteString("} from \"./protocol.gen.ts\";\n\n")
 	output.Write(body.Bytes())
-	output.WriteString("export type RequestMethod = keyof Requests;\nexport type TopicMethod = keyof Topics;\n")
+	output.WriteString("export type RequestMethod = keyof Requests;\nexport type TopicMethod = keyof Topics;\nexport type StreamMethod = keyof Streams;\n")
 	return output.Bytes(), nil
 }
 
