@@ -1,6 +1,7 @@
 # Plan: Log Streams, the stream socket, and the Logs Facet
 
-Status: planned.
+Status: implemented, not merged yet. "What changed while building" lists where
+the result differs from the text below.
 
 ## Outcome
 
@@ -946,3 +947,124 @@ experience review does the same.
    - The editors do not take keys the app uses or will use. Ctrl or Cmd+K
      still opens the Go to Resource palette from inside both editors, and
      nothing in them answers Ctrl or Cmd+J.
+
+## What changed while building
+
+**Engine**
+
+- **A status says when it is ready.** A status with no sources meant both
+  "not looked up yet" and "owns no Pods". `LogStreamStatus` gained `ready`.
+- **A target the index has not shown yet is waited for,** for up to 10
+  seconds. The UI learns of a new Resource from its manifest before the
+  index holds it, and the first version ended such a stream as `deleted`.
+- **A response that ends while the status says running is always read
+  again.** The first version marked the run as exited when the status
+  changed during the wait, which skipped whatever a cut response had not
+  delivered. The cost is one more request when a container exits before its
+  status says so.
+- **Opening a stuck follow again is not an error,** and happens at once.
+- **The kubelet's error text is cut at 512 bytes** before it becomes a
+  source's `Error`.
+- **A previous run ends with an `exited` record too,** and ignores `resume`,
+  because it is sent whole each time.
+- **A refused log request ends the stream with hukube's own words:** `Your
+credentials cannot read Pod logs in the <Namespace> Namespace.`
+- **The first batch is also sent when it reaches 256 KiB,** so a large
+  history does not wait for the slowest container.
+
+**Client**
+
+- **The codec drops a repeated `exited` record** for a run it has already
+  passed one for, which a resume can produce, and forgets the cursor of a
+  container that a ready status no longer lists.
+- **A stream that is retrying keeps its place among the 8.**
+
+**Logs Facet**
+
+- **The viewer keeps the lines itself, and the editor shows them.** The plan
+  had the editor's model as the only copy. A document of formatted rows
+  outside Monaco made the states testable without an editor and made the
+  two fixes below possible. Turning timestamps on builds the model again
+  instead of editing each line.
+- **One edit a frame, and a model that is built again.** Monaco's text
+  buffer keeps every character an edit adds (ADR-0018). With an edit for
+  every frame of lines, a 30 MB burst took the page's heap to 840 MB, and
+  each burst left 30 MB more behind. The editor now applies what arrived
+  once per animation frame and builds its model again from the rows after
+  edits have added 8 million characters.
+- **Following ignores Monaco's own re-measuring.** A scroll event that comes
+  with a new content height is not the user. Without this, a font that
+  finished loading stopped following on a short log.
+- **A Log Stream opens once its view has first been shown.** A Workspace
+  restored with Logs tabs behind other tabs opened a stream for each.
+- **The editor theme waits for its element to be attached.** dockview can
+  run a panel's effects first, and a detached element resolved every color
+  to black, in the YAML Facet as well.
+- **Origins on a Pod's own tab are colored by container,** since the Pod is
+  the same for all of them.
+- **An init container that completed is not "not running".**
+- **A stream that ended stops reporting what its containers were doing.**
+
+**Key bindings**
+
+Loading Monaco's find and clipboard features binds more than search. These
+are kept, in both editors, and only while an editor has focus:
+
+| Command                                                                                      | Keys                                                        |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `actions.find`                                                                               | Ctrl or Cmd+F                                               |
+| `editor.action.nextMatchFindAction`                                                          | Enter in the find box, F3, Cmd+G on macOS                   |
+| `editor.action.previousMatchFindAction`                                                      | Shift+Enter in the find box, Shift+F3, Shift+Cmd+G on macOS |
+| `toggleFindCaseSensitive`, `toggleFindWholeWord`, `toggleFindRegex`, `toggleFindInSelection` | Alt+C, Alt+W, Alt+R, Alt+L, with Cmd on macOS               |
+| `closeFindWidget`                                                                            | Escape, Shift+Escape                                        |
+
+Every binding of these commands is removed: `actions.findWithSelection`
+(Cmd+E), `editor.action.nextSelectionMatchFindAction` and
+`previousSelectionMatchFindAction` (Ctrl or Cmd+F3, with Shift),
+`editor.action.startFindReplaceAction` (Ctrl+H, Cmd+Alt+F),
+`togglePreserveCase`, `editor.action.replaceOne`, `editor.action.replaceAll`,
+`editor.action.selectAllMatches` (Alt+Enter), `history.showPrevious` and
+`history.showNext` (Up and Down in the find box), `leaveEditorMessage`, and
+the cut, copy, and paste commands, whose keys the browser handles itself.
+Copy still works.
+
+The end-to-end test checks, in both editors, that Ctrl or Cmd+K opens the Go
+to Resource palette, that nothing handles Ctrl or Cmd+J, that Escape returns
+focus to the editor, and that Ctrl or Cmd+F outside an editor is left to the
+browser.
+
+## Measurements
+
+Taken on an Apple M3 Max against the built app and the k3d test cluster, with
+the `firehose` sample, which prints 300,000 lines (about 30 MB) every 30
+seconds. Browsers are Playwright 1.63.0 builds.
+
+**Flow control in the app.** The main thread was blocked for 4 of every 5
+seconds, across two bursts:
+
+| Browser      | Lines dropped by the Engine  | Lines kept by the viewer | Browser memory, most                            | Engine memory     |
+| ------------ | ---------------------------- | ------------------------ | ----------------------------------------------- | ----------------- |
+| Chromium 153 | 248,600, shown as one marker | 50,000                   | +48 MiB                                         | 53 MiB throughout |
+| WebKit 26.6  | not counted                  | 50,000                   | +268 MiB at the first burst, +370 MiB after six | 48 to 55 MiB      |
+
+With the main thread busy 90% of the time in slices of 45 ms, Chromium
+dropped nothing: the viewer's document takes lines cheaply, so only a main
+thread that cannot take messages at all makes the Engine drop. Its memory
+grew by 92 MiB at most.
+
+WebKit's figure is the memory of its processes with no way to ask for a
+garbage collection, so it is not comparable to Chromium's, and why it rises
+by about 15 MiB a burst was not established. Chromium's heap after a
+collection did not rise (below).
+
+**The viewer's memory.** Chromium, no slowdown, the heap after a forced
+garbage collection every 10 seconds across four bursts:
+
+|                                                                | Heap after collection | Heap at its largest |
+| -------------------------------------------------------------- | --------------------- | ------------------- |
+| An edit for every frame of lines, as first built               | 88, 82, 171, 204 MiB  | 840 MiB             |
+| One edit a frame, model built again after 8 million characters | 37 to 41 MiB          | 129 MiB             |
+
+**The Engine.** A client that acknowledged once a second received gaps of
+7,676 and 96,842 lines during a burst, and the Engine's memory went from 35
+to 47 MiB.

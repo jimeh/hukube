@@ -99,11 +99,28 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   Chromium's sandbox uses. Pass `--no-sandbox` only to development and test
   launches, never in shipped code. agent-browser takes it as
   `--args --no-sandbox`.
+- **Stream sockets:** a Log Stream runs on its own socket at `/ws/stream`
+  (ADR-0016). The Engine sends data only while the client acknowledges it,
+  so a client that reads frames without sending `ack` stalls after 1 MiB.
+- **Pod logs:** envtest has no kubelet, so a log request cannot succeed
+  there. Tests replace the log opener (`openPodLogs` in `server`) or use the
+  fakes in `logstream`. A `rest.Config` with a `Timeout` ends a follow at
+  that duration, which is why log requests have their own client.
+- **Monaco:** `monaco-editor/editor/editor.api` has no find, clipboard, or
+  icon font. `apps/app/src/lib/monaco.ts` imports them and removes the key
+  bindings they add beyond find, so import Monaco from there. Its text
+  buffer keeps every character an edit adds, a lone `\r` in inserted text
+  starts a line, and the view moves when lines above it are deleted
+  (ADR-0018).
+- **Panels attach late:** dockview can run a panel's effects before it
+  attaches the panel's element, and a detached element resolves every CSS
+  custom property to nothing. Check `isConnected` before reading styles.
 - **Test clusters:** the e2e k3d cluster's kubeconfig is written to
   `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
 - **End-to-end lists:** tests share one Engine and one Workspace within a run,
   so a test finds lists earlier tests opened. Scope each list's locators to its
-  tab panel.
+  tab panel. A run's Namespace is deleted without waiting, so a second run
+  started within a minute can find the first run's Resources by name.
 - **envtest:** without `KUBEBUILDER_ASSETS`, `go test` reports `ok` for the
   `cluster` and `server` packages without running any of their tests, unit
   tests included; use `mise run test:engine`.
