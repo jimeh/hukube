@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "870544f4acae3e14";
+export const Hash = "92fc69aef0e40943";
 
 //////////
 // source: protocol.go
@@ -423,3 +423,102 @@ export interface Setting {
   key: string;
   value: unknown;
 }
+
+//////////
+// source: related.go
+
+/**
+ * RelatedParams selects the Resources related to one Resource.
+ */
+export interface RelatedParams {
+  cluster: string;
+  type: TypeKey;
+  namespace?: string;
+  name: string;
+  /**
+   * Cells asks for the list cells of each related Resource (ADR-0010).
+   */
+  cells?: boolean;
+}
+/**
+ * Related is what the Engine knows to be related to a Resource.
+ */
+export interface Related {
+  /**
+   * Found reports whether the index holds the Resource.
+   */
+  found: boolean;
+  sections: RelatedSection[];
+  /**
+   * Types holds the Columns of the types whose rows carry cells.
+   */
+  types: RelatedType[];
+  /**
+   * Total counts the related Resources of every section.
+   */
+  total: number /* int */;
+}
+/**
+ * RelatedSection holds the Resources at the other end of one kind of
+ * Relationship, in one direction.
+ */
+export interface RelatedSection {
+  relationship: RelationshipKind; // "owns"
+  /**
+   * Direction is "in" for the Resources the Relationship comes from, such
+   * as owners, and "out" for those it points to.
+   */
+  direction: RelatedDirection;
+  rows: RelatedRow[];
+  total: number /* int */;
+  truncated?: boolean;
+}
+export interface RelatedRow {
+  depth: number /* int */;
+  status: RelatedStatus;
+  kind: string;
+  /**
+   * APIVersion is set for a reference that did not resolve.
+   */
+  apiVersion?: string;
+  type?: TypeKey;
+  namespace?: string;
+  name?: string;
+  uid?: string;
+  createdAt?: string;
+  /**
+   * Cells holds one value per Column of the row's RelatedType.
+   */
+  cells?: unknown[];
+  /**
+   * More counts the Resources a row with status "more" stands for.
+   */
+  more?: number /* int */;
+}
+export interface RelatedType {
+  type: TypeKey;
+  columns: Column[];
+}
+/**
+ * RelationshipKind identifies a directed kind of Relationship.
+ */
+export type RelationshipKind = string;
+export const RelationshipKindOwns: RelationshipKind = "owns";
+/**
+ * RelatedDirection says whether a Relationship points into or out of a Resource.
+ */
+export const RelatedDirectionIn = "in";
+export const RelatedDirectionOut = "out";
+export type RelatedDirection = typeof RelatedDirectionIn | typeof RelatedDirectionOut;
+/**
+ * RelatedStatus reports whether a related Resource resolved.
+ */
+export const RelatedStatusFound = "found";
+export const RelatedStatusSelf = "self";
+export const RelatedStatusMore = "more";
+export const RelatedStatusMissing = "missing";
+export const RelatedStatusUnserved = "unserved";
+export const RelatedStatusForbidden = "forbidden";
+export const RelatedStatusSyncing = "syncing";
+export const RelatedStatusFailed = "failed";
+export type RelatedStatus = typeof RelatedStatusFound | typeof RelatedStatusSelf | typeof RelatedStatusMore | typeof RelatedStatusMissing | typeof RelatedStatusUnserved | typeof RelatedStatusForbidden | typeof RelatedStatusSyncing | typeof RelatedStatusFailed;

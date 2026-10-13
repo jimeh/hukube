@@ -21,6 +21,29 @@ type Meta struct {
 	ResourceVersion string
 	// Labels must not be modified; they may be shared with the informer.
 	Labels map[string]string
+	// Owners must not be modified after the Meta is stored.
+	Owners []OwnerRef
+}
+
+// OwnerRef is one of a Resource's owner references.
+type OwnerRef struct {
+	APIVersion string
+	Kind       string
+	Name       string
+	UID        string
+	Controller bool
+}
+
+// Ref identifies one indexed Resource within its Resource Type.
+type Ref struct {
+	Type protocol.TypeKey
+	Key  string
+}
+
+// Resource pairs stored metadata with its Resource Type.
+type Resource struct {
+	Type protocol.TypeKey
+	Meta Meta
 }
 
 // Key returns the Resource's namespace/name key, unique within its type.
@@ -58,12 +81,13 @@ type Change struct {
 type Store struct {
 	mu      sync.RWMutex
 	types   map[protocol.TypeKey]map[string]Meta
+	owned   map[string]map[Ref]struct{}
 	changed notify.Keyed[protocol.TypeKey]
 }
 
 // New returns an empty Store.
 func New() *Store {
-	return &Store{types: make(map[protocol.TypeKey]map[string]Meta)}
+	return &Store{types: make(map[protocol.TypeKey]map[string]Meta), owned: make(map[string]map[Ref]struct{})}
 }
 
 // Apply records a batch of Changes and notifies listeners once.
@@ -80,14 +104,49 @@ func (s *Store) Apply(changes []Change) {
 			metas = make(map[string]Meta)
 			s.types[c.Type] = metas
 		}
+		ref := Ref{Type: c.Type, Key: c.Meta.Key()}
+		s.removeOwners(ref, metas[ref.Key])
 		if c.Kind == Deleted {
 			delete(metas, c.Meta.Key())
 		} else {
 			metas[c.Meta.Key()] = c.Meta
+			for _, owner := range c.Meta.Owners {
+				if owner.UID == "" {
+					continue
+				}
+				if s.owned[owner.UID] == nil {
+					s.owned[owner.UID] = make(map[Ref]struct{})
+				}
+				s.owned[owner.UID][ref] = struct{}{}
+			}
 		}
 	}
 	s.mu.Unlock()
 	s.changed.Notify(slices.Collect(maps.Keys(touched))...)
+}
+
+// removeOwners must be called with s.mu held.
+func (s *Store) removeOwners(ref Ref, m Meta) {
+	for _, owner := range m.Owners {
+		set := s.owned[owner.UID]
+		delete(set, ref)
+		if len(set) == 0 {
+			delete(s.owned, owner.UID)
+		}
+	}
+}
+
+// OwnedBy returns the Resources whose references name uid, in no particular
+// order. The metadata is copied under the read lock; its labels and owners
+// must not be modified.
+func (s *Store) OwnedBy(uid string) []Resource {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	resources := make([]Resource, 0, len(s.owned[uid]))
+	for ref := range s.owned[uid] {
+		resources = append(resources, Resource{Type: ref.Type, Meta: s.types[ref.Type][ref.Key]})
+	}
+	return resources
 }
 
 // Diff returns the Changes that turn the stored Resources of a type into
@@ -131,6 +190,9 @@ func (s *Store) Get(t protocol.TypeKey, key string) (Meta, bool) {
 func (s *Store) RemoveType(t protocol.TypeKey) {
 	s.mu.Lock()
 	_, existed := s.types[t]
+	for key, m := range s.types[t] {
+		s.removeOwners(Ref{Type: t, Key: key}, m)
+	}
 	delete(s.types, t)
 	s.mu.Unlock()
 	if existed {
