@@ -796,7 +796,7 @@ func TestLogTargetStates(t *testing.T) {
 		timing.Appear = deadline
 		out, end, cancel := startTimed(t, f, g, targetParams(), timing)
 		// The first status proves the stream looked the target up and went on waiting.
-		out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Sources != nil })
+		out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Sources != nil && !s.Ready })
 		select {
 		case e := <-end:
 			t.Fatalf("ended before the target could appear: %+v", e)
@@ -806,7 +806,7 @@ func TestLogTargetStates(t *testing.T) {
 		g.found = true
 		g.mu.Unlock()
 		g.signal.Notify()
-		out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return len(s.Sources) == 1 })
+		out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Ready && len(s.Sources) == 1 })
 		// Once it has been seen, its absence means it was deleted.
 		g.mu.Lock()
 		g.found = false
@@ -816,6 +816,17 @@ func TestLogTargetStates(t *testing.T) {
 			t.Fatalf("end after the target left=%+v", e)
 		}
 		cancel()
+	})
+	t.Run("a Resource that owns no Pods", func(t *testing.T) {
+		f, g := newFake()
+		out, end, cancel := start(t, f, g, targetParams())
+		// Only Ready tells "owns no Pods" from "not looked up yet".
+		_, s := out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Ready })
+		if s.Pods != 0 || len(s.Sources) != 0 {
+			t.Fatalf("status of a Resource without Pods=%+v", s)
+		}
+		cancel()
+		awaitEnd(t, end)
 	})
 	f, g := newFake(pod("pod", "main"))
 	f.typeState = protocol.TypeStateSyncing
