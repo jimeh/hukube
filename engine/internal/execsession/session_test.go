@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ type fakeCluster struct {
 	err      error
 	access   protocol.Access
 	built    int
+	reads    atomic.Int32
 }
 
 func (c *fakeCluster) ExecAccess(context.Context, string, string) (protocol.Access, error) {
@@ -41,6 +43,7 @@ func (c *fakeCluster) ExecAccess(context.Context, string, string) (protocol.Acce
 }
 func (c *fakeCluster) Exec(protocol.ExecParams) (Executor, error) { c.built++; return c.executor, nil }
 func (c *fakeCluster) ReadPod(context.Context, string, string) (*corev1.Pod, error) {
+	c.reads.Add(1)
 	return c.pod, c.err
 }
 
@@ -256,9 +259,24 @@ func TestExecSurvivesAnEmptyIndex(t *testing.T) {
 	}()
 	// The session started although the index had no Pods.
 	receive(t, started)
-	// Another Pod's change wakes the session, which still finds its Pod on the Cluster.
+	// Another Pod's change wakes the session, which asks the Cluster about its
+	// own Pod again and carries on. The executor is released only after that
+	// read, so an end that came from the read could not be mistaken for it.
+	before := c.reads.Load()
 	idx.Apply([]index.Change{{Kind: index.Added, Type: "pods", Meta: index.Meta{Namespace: "ns", Name: "other", UID: "other"}}})
-	idx.RemoveType("pods")
+	deadline := time.Now().Add(time.Second)
+	for c.reads.Load() == before {
+		if time.Now().After(deadline) {
+			t.Fatal("the session did not ask the Cluster about its Pod")
+		}
+		timer := time.NewTimer(time.Millisecond)
+		<-timer.C
+	}
+	select {
+	case end := <-done:
+		t.Fatalf("the session ended on an empty index: %+v", end)
+	default:
+	}
 	close(release)
 	if end := receive(t, done); end.Reason != protocol.StreamEndReasonComplete || end.ExitCode == nil || *end.ExitCode != 0 {
 		t.Fatalf("end=%+v", end)

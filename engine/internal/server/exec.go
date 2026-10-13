@@ -85,7 +85,9 @@ type runningExec struct {
 	done   chan struct{}
 }
 
-// Shutdown hangs up every Exec Session and waits within ctx's deadline.
+// Shutdown hangs up every Exec Session and waits within ctx's deadline. It
+// then gives each session's socket until that deadline to deliver its end,
+// so a client is told the Engine shut down instead of finding its socket gone.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.execMu.Lock()
 	s.shuttingDown = true
@@ -93,6 +95,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for session := range s.execs {
 		running = append(running, session)
 		session.cancel()
+	}
+	sockets := make([]chan struct{}, 0, len(s.execSockets))
+	for socket := range s.execSockets {
+		sockets = append(sockets, socket)
 	}
 	s.execMu.Unlock()
 	for _, session := range running {
@@ -102,5 +108,31 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+	for _, socket := range sockets {
+		select {
+		case <-socket:
+		case <-ctx.Done():
+			// A client that does not read is no reason to fail a shutdown.
+			return nil
+		}
+	}
 	return nil
+}
+
+// trackExecSocket records a session's socket until the returned function is
+// called, which is when its stream has nothing left to send.
+func (s *Server) trackExecSocket() func() {
+	done := make(chan struct{})
+	s.execMu.Lock()
+	if s.execSockets == nil {
+		s.execSockets = make(map[chan struct{}]struct{})
+	}
+	s.execSockets[done] = struct{}{}
+	s.execMu.Unlock()
+	return func() {
+		s.execMu.Lock()
+		delete(s.execSockets, done)
+		s.execMu.Unlock()
+		close(done)
+	}
 }

@@ -37,6 +37,10 @@ export function createExecTerminal(): ExecTerminal {
     cursorBlink: true,
     // Programs choose colors for a dark screen. White text stays readable on a light one.
     minimumContrastRatio: 4.5,
+    // xterm.js turns an OSC 8 sequence into a link that opens after a native
+    // confirm. A process in a container must not get the user to open an
+    // address until the app has a rule for links in output.
+    linkHandler: { activate: () => {} },
   });
   const fit = new FitAddon();
   const search = new SearchAddon();

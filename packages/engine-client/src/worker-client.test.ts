@@ -171,13 +171,16 @@ it("transfers Exec input and resize to the Worker and defers byte acknowledgemen
         resolve = done;
       }),
   );
+  const inputDropped = vi.fn<(bytes: number) => void>();
   const stream = client.openStream(
     "pod.exec",
     { cluster: "c", namespace: "ns", pod: "p", uid: "u", container: "main", cols: 80, rows: 24 },
-    { data, event: () => {}, gap: () => {}, end: () => {} },
+    { data, event: () => {}, gap: () => {}, end: () => {}, inputDropped },
   );
   const opened = worker.sent[1]!;
   if (opened.kind !== "stream-open") throw new Error("missing stream");
+  worker.receive({ kind: "stream-input-dropped", id: opened.id, bytes: 1024 });
+  expect(inputDropped).toHaveBeenCalledExactlyOnceWith(1024);
   const input = new Uint8Array([255, 0, 42]);
   const buffer = input.buffer;
   stream.write(input);

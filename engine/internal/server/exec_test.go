@@ -245,6 +245,13 @@ func TestPodExecHangupAndShutdown(t *testing.T) {
 				if err := srv.Shutdown(ctx); err != nil {
 					t.Fatal(err)
 				}
+				// Shutdown returned only once the session's socket had sent its end.
+				srv.execMu.Lock()
+				open := len(srv.execSockets)
+				srv.execMu.Unlock()
+				if open != 0 {
+					t.Fatalf("%d session sockets still had something to send", open)
+				}
 			} else {
 				_ = c.conn.CloseNow()
 			}
@@ -326,7 +333,9 @@ func TestExecOutputStall(t *testing.T) {
 		t.Fatal("ack did not release output")
 	}
 	q.limits.stall = 15 * time.Millisecond
-	if _, err := q.write(ctx, []byte("abcdefgh")); err != nil {
+	// A write that never gives up would hang here, so it is awaited.
+	go func() { _, err := q.write(ctx, []byte("abcdefgh")); done <- err }()
+	if err := awaitExec(t, done); err != nil {
 		t.Fatal(err)
 	}
 	q.mu.Lock()
@@ -354,6 +363,64 @@ func TestExecOutputStall(t *testing.T) {
 	}
 	if err := awaitExec(t, done); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A client that acknowledges a little now and then keeps every write waiting
+// without ever being silent. That must not hold the producer past the stall.
+func TestExecOutputStallIgnoresATrickle(t *testing.T) {
+	for _, floor := range []int{1 << 20, 4} {
+		t.Run(fmt.Sprint(floor), func(t *testing.T) {
+			limits := defaultStreamLimits
+			limits.window = 5
+			limits.stall = 40 * time.Millisecond
+			limits.stallFloor = floor
+			q := newStreamQueue(limits)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stop := make(chan struct{})
+			defer close(stop)
+			// The client takes one frame per tick, slower than the producer
+			// writes, so every write after the first has to wait. The queue's
+			// stall rule is about elapsed time, so this test runs on the clock.
+			go func() {
+				tick := time.NewTicker(limits.stall / 8)
+				defer tick.Stop()
+				for {
+					select {
+					case <-stop:
+						return
+					case <-tick.C:
+					}
+					if item, ready, _, _ := q.next(); ready && item.data != nil {
+						q.mu.Lock()
+						sent := q.sent
+						q.mu.Unlock()
+						q.acknowledge(sent)
+					}
+				}
+			}()
+			deadline := time.Now().Add(4 * limits.stall)
+			for time.Now().Before(deadline) {
+				if _, err := q.write(ctx, []byte("1234")); err != nil {
+					t.Fatal(err)
+				}
+				q.mu.Lock()
+				dropping := q.dropping
+				q.mu.Unlock()
+				if dropping {
+					break
+				}
+			}
+			q.mu.Lock()
+			dropped := q.dropping
+			q.mu.Unlock()
+			// Below the floor the queue gives up after one stall. A client that
+			// takes the floor in each period is never dropped.
+			if want := floor > 4; dropped != want {
+				t.Fatalf("floor=%d dropping=%v want %v", floor, dropped, want)
+			}
+		})
 	}
 }
 

@@ -40,6 +40,11 @@ export interface StreamListener<M extends StreamMethod> {
   event: (event: Streams[M]["event"]) => void;
   data: (data: StreamData[M]) => void | Promise<void>;
   gap: (gap: StreamGap) => void;
+  /**
+   * Called when a write was not accepted, with its size, because too much
+   * input was already waiting for a process that is not reading.
+   */
+  inputDropped?: (bytes: number) => void;
   end: (end: StreamEnd) => void;
 }
 export interface EngineStream {

@@ -33,6 +33,8 @@ scope.onmessage = ({ data: msg }) => {
           event: (event) => scope.postMessage({ kind: "stream-event", id: msg.id, event }),
           data: () => {},
           gap: (gap) => scope.postMessage({ kind: "stream-gap", id: msg.id, gap }),
+          inputDropped: (bytes) =>
+            scope.postMessage({ kind: "stream-input-dropped", id: msg.id, bytes }),
           end: (end) => scope.postMessage({ kind: "stream-end", id: msg.id, end }),
         },
         (data, bytes, acknowledge) => {

@@ -80,15 +80,17 @@ built. `docs/plans/exec-sessions.md` has the measurements.
   terminal does to a process. The sketch expected that to last as long as it
   had to. It cannot: client-go's WebSocket executor reads the connection and
   writes output on one goroutine, and ends the session when that goroutine
-  has not read for 61 seconds. So after 30 seconds without an acknowledgement
-  the Engine stops waiting and drops output, leaving a gap, until the client
+  has not read a heartbeat for 61 seconds. So while output has to wait, the
+  client must take at least 4 MiB in each 30 seconds. When it does not, the
+  Engine stops waiting and drops output, leaving a gap, until the client
   acknowledges again.
 - **Input is acknowledged too.** The sketch left input to TCP, with the
   Engine as the reader. But the client's acknowledgements of output arrive on
   the same socket, so the Engine can never stop reading it, or a container
   that is neither reading nor being read stops everything. The Engine
   acknowledges input as it passes it to the Cluster, and the client sends at
-  most 256 KiB beyond that. The rest of a large paste waits in the Worker.
+  most 256 KiB beyond that. The rest of a large paste waits in the Worker, up
+  to 8 MiB. A write beyond that is refused and reported.
 - **A session's socket is not reopened.** A socket that closes without `end`
   ends the session (ADR-0021).
 - **A stream can be a mutation.** A stream method that changes a Cluster is
