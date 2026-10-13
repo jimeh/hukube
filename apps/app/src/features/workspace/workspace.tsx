@@ -97,7 +97,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         openPanel<ExecSessionParams>(api, {
           id: `exec:${params.sessionId}`,
           component: "exec",
-          title: params.pod,
+          title: `${params.container} in ${params.pod}`,
           params,
           preview: false,
           ...(options?.pane ? { pane: options.pane } : {}),

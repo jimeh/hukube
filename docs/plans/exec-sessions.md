@@ -684,10 +684,11 @@ Cluster stopped mid-session, and a Tab restored after a reload.
   later fits wait for 80 ms of quiet. The first build started every session
   at 80 by 24 and resized it, and busybox's shell prints its prompt again on
   a resize and drops what was typed until then.
-- **"Starting…" shows over the terminal,** not as a badge in the header. The
-  badge's coming and going rewrapped the header, which resized the terminal
-  just as its shell started. The header's other badges sit beside the Find
-  button, outside the part that wraps.
+- **The header always has a status badge,** in a slot of one width beside
+  the Find button: "Starting…", "Live", "Terminating", "Ended", "Waiting",
+  "Not started", or "Not running". The plan had a badge that came and went.
+  Its coming and going rewrapped the header, which resized the terminal just
+  as its shell started.
 - **A shell can still print its prompt twice.** A Cluster applies a
   session's first size after the process has started, as a resize. A shell
   that has already printed its prompt prints it again. `kubectl exec` shows
@@ -705,6 +706,50 @@ Cluster stopped mid-session, and a Tab restored after a reload.
   Pane. It was checked by dragging a live session's Tab to another Pane in
   Chromium and WebKit: one stream, no new process, and the shell kept its
   variables. The store's tests cover a panel that mounts again.
+
+### Experience-review corrections
+
+A reviewer with no history of the work used the running app in Chromium and
+WebKit. It found the terminal sound and these problems around it, which are
+fixed:
+
+- **A dead session looked live in the tab strip.** The muted style of an
+  ended session's Tab was the style of any Tab that is not active. A live
+  session's icon is now in the Cluster's color, an ended one's is dimmed and
+  its title struck through, in an active Tab or not, and the Tab's tooltip
+  says which.
+- **Sessions in one Pod could not be told apart.** A session's Tab is now
+  titled `<container> in <pod>`. This was a planned follow-up.
+- **A disabled Start again looked enabled.** It now dims and shows the
+  not-allowed cursor, as the header's buttons do.
+- **The keyboard was stuck in an ended terminal.** Focus moves to Start
+  again when a focused session ends, and an ended terminal gives its keys
+  back to the window, so `Tab` moves focus. This is one more argument to the
+  key function, and a case in its test.
+- **A new Tab could open out of sight** in a full tab strip. A Tab scrolls
+  into view when it becomes the active one. This applies to every Tab.
+- **Find went the wrong way.** It now starts at the newest match, `Enter`
+  finds the previous one and `Shift+Enter` the next, as in VS Code's
+  terminal, iTerm, and the Logs Facet. Asking for find again returns to its
+  field, an empty query reports nothing, the query is kept between openings,
+  and the current match is the strong one.
+- **A second window called a live session over.** A Tab restored from the
+  layout cannot know whether its session ended or runs in another window. It
+  now says "No session is running here: An Exec Session belongs to the window
+  that started it, and does not survive a reload."
+- **The keys could not be learned.** The context menu shows each key, has a
+  Go to Resource item, and the Find button's tooltip names its key.
+- **The Namespace was the first thing to truncate** in a narrow Pane. It is
+  now a part of its own, and wraps to its own line before it truncates.
+- **Starting again printed three prompts.** The session now sizes its
+  terminal to the changed layout before it opens the stream.
+- **Smaller:** the Cluster's message under the no-shell notice is a
+  left-aligned block, white text keeps a readable contrast in the light
+  theme (`minimumContrastRatio`), the terminal's text lines up with the
+  header's, and a dialog about one session says "session".
+
+Not changed, and listed under "Follow-ups": a second way in from a list row,
+a label on the header's button, and a warning before a multi-line paste.
 
 ## Measurements
 
@@ -726,8 +771,9 @@ On an Apple silicon laptop against the k3d cluster:
 - A "Tab moves focus" switch, so the keyboard can leave a live terminal
   without Go to Resource.
 - Starting a session from a list row.
-- Telling apart several sessions in one Pod from the tab strip: their Tabs
-  all carry the Pod's name.
+- A text label for the header's button, which is an icon among icons.
+- A warning before a paste of several lines into a shell that does not ask
+  for bracketed paste, as VS Code gives.
 - Tabs of sessions that ended with a reload stay until they are closed.
 - A name for `features/edit/unsaved-edits.ts` that covers sessions.
 - A live check of the Windows and Linux keys in Firefox.

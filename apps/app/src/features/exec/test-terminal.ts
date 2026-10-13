@@ -21,6 +21,7 @@ export function fakeTerminal() {
     setEnded: vi.fn<(ended: boolean) => void>(),
     focus: vi.fn<() => void>(),
     theme: vi.fn<() => void>(),
+    refit: vi.fn<() => Promise<void>>(async () => {}),
     attach: vi.fn<(body: HTMLElement, visible: boolean) => () => void>((body, _visible) => {
       body.append(element);
       return () => element.remove();
@@ -60,7 +61,7 @@ export function fakeTerminal() {
     paste: vi.fn<(text: string) => void>(),
     selectAll: vi.fn<() => void>(),
     clear: vi.fn<() => void>(),
-    find: vi.fn<(text: string, previous?: boolean, incremental?: boolean) => void>(),
+    find: vi.fn<(text: string, direction: "older" | "newer", incremental?: boolean) => void>(),
     clearSearch: vi.fn<() => void>(),
   } satisfies ExecTerminal;
   return {

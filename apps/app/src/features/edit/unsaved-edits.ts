@@ -81,7 +81,9 @@ export function guardWorkspace(cluster: string, proceed: () => void): void {
     title: sessions
       ? count
         ? `Close ${cluster}?`
-        : `End the Exec Sessions in ${cluster}?`
+        : sessions === 1
+          ? `End the Exec Session in ${cluster}?`
+          : `End the Exec Sessions in ${cluster}?`
       : `Discard unsaved edits in ${cluster}?`,
     description: [
       count
@@ -100,7 +102,12 @@ export function guardWorkspace(cluster: string, proceed: () => void): void {
       .filter(Boolean)
       .join(" "),
     cancel: "Cancel",
-    discard: sessions && !count ? "End sessions and close" : "Discard and close",
+    discard:
+      sessions && !count
+        ? sessions === 1
+          ? "End session and close"
+          : "End sessions and close"
+        : "Discard and close",
     proceed,
   });
 }

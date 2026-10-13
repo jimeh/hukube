@@ -28,9 +28,10 @@ The client does not open the stream again as it does for a Log Stream
 (ADR-0016), because that would start a second shell and present it as the
 first.
 
-A stored Workspace layout can hold a session's Tab. After a reload, that Tab
-shows that its session is over and offers to start a new one. It never starts
-one by itself.
+A stored Workspace layout can hold a session's Tab. After a reload, or in a
+second window on the same Workspace, that Tab has no session. It says so and
+offers to start a new one. It never starts one by itself, and it does not
+claim the session ended, which it cannot know.
 
 An ended session keeps its scrollback, dimmed and without a cursor, with the
 reason it ended. Starting again in the same Tab clears it.

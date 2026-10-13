@@ -28,7 +28,13 @@ it.each(["button", "middle click"])(
     session("id", { phase: "starting" });
     const close = vi.fn<() => void>();
     const props = {
-      api: { id: "exec:id", title: "web", close, onDidTitleChange: () => ({ dispose: () => {} }) },
+      api: {
+        id: "exec:id",
+        title: "web",
+        close,
+        onDidTitleChange: () => ({ dispose: () => {} }),
+        onDidActiveChange: () => ({ dispose: () => {} }),
+      },
       params: {},
     } as unknown as Parameters<typeof PanelTab>[0];
     const view = render(
@@ -63,7 +69,11 @@ it.each([1, 2])("counts %s Exec Sessions with the Cluster's exact close copy", a
   render(<UnsavedGuard />);
   const close = vi.fn<() => void>();
   act(() => guardWorkspace("c", close));
-  expect(await screen.findByText("End the Exec Sessions in c?")).toBeDefined();
+  expect(
+    await screen.findByText(
+      count === 1 ? "End the Exec Session in c?" : "End the Exec Sessions in c?",
+    ),
+  ).toBeDefined();
   expect(
     screen.getByText(
       `${count === 1 ? "1 Exec Session is" : "2 Exec Sessions are"} running. A command still running in the container may keep running.`,
@@ -72,7 +82,11 @@ it.each([1, 2])("counts %s Exec Sessions with the Cluster's exact close copy", a
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(close).not.toHaveBeenCalled();
   act(() => guardWorkspace("c", close));
-  fireEvent.click(screen.getByRole("button", { name: "End sessions and close" }));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: count === 1 ? "End session and close" : "End sessions and close",
+    }),
+  );
   expect(close).toHaveBeenCalledOnce();
 });
 it("uses one dialog to name edits and sessions together", async () => {
@@ -147,7 +161,13 @@ it.each(["button", "middle click"])("guards the Tab's %s close path", async (act
   const { PanelTab } = await import("../workspace/panel-tab.tsx");
   const close = vi.fn<() => void>();
   const props = {
-    api: { id: "tab", title: "web", close, onDidTitleChange: () => ({ dispose: () => {} }) },
+    api: {
+      id: "tab",
+      title: "web",
+      close,
+      onDidTitleChange: () => ({ dispose: () => {} }),
+      onDidActiveChange: () => ({ dispose: () => {} }),
+    },
     params: {},
   } as unknown as Parameters<typeof PanelTab>[0];
   useUnsavedEdits

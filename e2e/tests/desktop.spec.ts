@@ -79,7 +79,7 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
       .filter({ has: window.getByRole("button", { name: "Open an Exec Session" }) });
     await pod.getByRole("button", { name: "Open an Exec Session" }).click();
     const panel = window
-      .getByRole("tabpanel", { name: "e2e-exec-desktop", exact: true })
+      .getByRole("tabpanel", { name: "app in e2e-exec-desktop", exact: true })
       .filter({ has: window.getByRole("button", { name: "Find in scrollback" }) });
     const input = panel.getByRole("textbox", { name: "Exec Session in app of e2e-exec-desktop" });
     const screen = panel.locator(".xterm-rows");
