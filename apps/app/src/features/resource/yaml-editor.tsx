@@ -1,7 +1,7 @@
 import "monaco-editor/languages/definitions/yaml/register";
 
 import { monaco } from "@/lib/monaco.ts";
-import { useEffect, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 
 import { useTheme } from "@/lib/theme.ts";
 
@@ -10,10 +10,24 @@ import { applyEditorTheme } from "./editor-theme.ts";
 const monoFont = "JetBrains Mono Variable";
 
 /** A read-only Monaco view of YAML that keeps its scroll position across updates. */
-export default function YamlEditor({ value }: { value: string }) {
+export interface YamlEditorHandle {
+  search(): void;
+}
+
+export default function YamlEditor({ value, ref }: { value: string; ref?: Ref<YamlEditorHandle> }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const theme = useTheme();
+  useImperativeHandle(
+    ref,
+    () => ({
+      search: () => {
+        editorRef.current?.focus();
+        void editorRef.current?.getAction("actions.find")?.run();
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
