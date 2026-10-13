@@ -13,6 +13,8 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import type { DragEvent } from "react";
 
+import { guardCluster } from "../edit/unsaved-edits.ts";
+
 import { useHost } from "@/lib/host.tsx";
 import { setTheme, useTheme } from "@/lib/theme.ts";
 
@@ -27,8 +29,10 @@ export function ClusterTabs() {
   const host = useHost();
 
   const moveToNewWindow = (id: string) => {
-    host.openWindow(`/c/${encodeURIComponent(id)}`);
-    close(id);
+    guardCluster(id, () => {
+      host.openWindow(`/c/${encodeURIComponent(id)}`);
+      close(id);
+    });
   };
 
   // Dropping a tab outside the window moves its Cluster to a new window.
@@ -75,7 +79,7 @@ export function ClusterTabs() {
                 size="icon-xs"
                 aria-label={`Close ${id}`}
                 className="opacity-0 group-hover/tab:opacity-100 group-data-[active=true]/tab:opacity-100 focus-visible:opacity-100"
-                onClick={() => close(id)}
+                onClick={() => guardCluster(id, () => close(id))}
               >
                 <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
               </Button>
@@ -85,7 +89,9 @@ export function ClusterTabs() {
                 <ContextMenuItem onClick={() => moveToNewWindow(id)}>
                   Move to new window
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => close(id)}>Close</ContextMenuItem>
+                <ContextMenuItem onClick={() => guardCluster(id, () => close(id))}>
+                  Close
+                </ContextMenuItem>
               </ContextMenuGroup>
             </ContextMenuContent>
           </ContextMenu>

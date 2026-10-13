@@ -14,9 +14,16 @@ import type { DockviewPanelApi } from "dockview-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
+import { UnsavedGuard } from "../edit/unsaved-guard.tsx";
+import { guardResource, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { ResourcePanel } from "./resource-panel.tsx";
 
 const state = vi.hoisted(() => ({
+  client: {
+    request: () => Promise.resolve({ edit: { allowed: true }, delete: { allowed: true } }),
+    onStateChange: () => () => {},
+    getState: () => "open",
+  },
   manifest: { stale: false } as SubscriptionState<ResourceData>,
   events: { stale: false } as SubscriptionState<ResourceEvents>,
   related: { stale: false } as SubscriptionState<Related>,
@@ -24,12 +31,15 @@ const state = vi.hoisted(() => ({
   eventParams: [] as (ResourceEventsParams | undefined)[],
 }));
 vi.mock("@hukube/engine-client/react", () => ({
+  useEngine: () => state.client,
+  useConnectionState: () => "open",
   useSubscription: (method: string, params: ResourceEventsParams | undefined) => {
     if (method === "resource.get") return state.manifest;
     if (method === "resource.related") {
       state.relatedParams.push(params);
       return state.related;
     }
+    if (method !== "resource.events") return { stale: false };
     state.eventParams.push(params);
     return state.events;
   },
@@ -39,7 +49,28 @@ vi.mock("./logs-facet.tsx", () => ({
     <div data-testid="logs-visible">{String(visible)}</div>
   ),
 }));
-vi.mock("./yaml-editor.tsx", () => ({ default: () => <div>YAML editor</div> }));
+vi.mock("./yaml-editor.tsx", () => ({
+  default: ({
+    value,
+    editing,
+    onChange,
+  }: {
+    value: string;
+    editing?: boolean;
+    onChange?: (text: string) => void;
+  }) => (
+    <div>
+      YAML editor
+      {editing && (
+        <textarea
+          aria-label="Test YAML"
+          value={value}
+          onChange={(event) => onChange?.(event.target.value)}
+        />
+      )}
+    </div>
+  ),
+}));
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -54,6 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   cleanup();
+  useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
   state.manifest = { stale: false };
   state.events = { stale: false };
   state.eventParams = [];
@@ -521,4 +553,109 @@ it("keeps a custom Resource's Logs entry after Pod ownership disappears and pass
   expect(screen.getByTestId("logs-visible").textContent).toBe("false");
   view.rerender(panel(true, "yaml"));
   expect(screen.getByTestId("logs-visible").textContent).toBe("false");
+});
+
+it("pins Edit, preserves unsaved YAML across Facets and live changes, and guards close and deletion", async () => {
+  const api = {
+    id: "edit",
+    updateParameters: vi.fn<(params: object) => void>(),
+  } as unknown as DockviewPanelApi;
+  const workspace = {
+    cluster: "c",
+    active: true,
+    types: new Map(),
+    openList: vi.fn<() => void>(),
+    openResource: vi.fn<() => void>(),
+  };
+  const address = { cluster: "c", type: "configmaps", namespace: "ns", name: "web" };
+  const panel = (facet: "yaml" | "events" = "yaml") => (
+    <WorkspaceContext value={workspace}>
+      <ResourcePanel
+        api={api}
+        params={{ uri: formatResourceUri({ ...address, facet }), preview: true }}
+      />
+      <UnsavedGuard />
+    </WorkspaceContext>
+  );
+  const object = {
+    kind: "ConfigMap",
+    metadata: { name: "web", uid: "u", resourceVersion: "1" },
+    data: { greeting: "hello" },
+  };
+  state.manifest = { stale: false, data: { object } };
+  const view = render(panel());
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(api.updateParameters).toHaveBeenLastCalledWith({
+    uri: formatResourceUri({ ...address, facet: "yaml" }),
+    preview: false,
+  });
+  const text = await screen.findByRole("textbox", { name: "Test YAML" });
+  const mine = (text as HTMLTextAreaElement).value + "# mine\n";
+  fireEvent.change(text, { target: { value: mine } });
+  expect(useUnsavedEdits.getState().entries.get("edit")?.read()).toBe(mine);
+  view.rerender(panel("events"));
+  view.rerender(panel());
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Test YAML" }).value).toBe(mine);
+  state.manifest = { stale: false, data: { object: { ...object, data: { greeting: "cluster" } } } };
+  view.rerender(panel());
+  expect(screen.getByText(/changed on the Cluster while you were editing/)).toBeDefined();
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Test YAML" }).value).toBe(mine);
+  const close = vi.fn<() => void>();
+  act(() => guardResource("edit", close));
+  expect(await screen.findByRole("alertdialog")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(close).not.toHaveBeenCalled();
+  state.manifest = { stale: false, data: { deleted: true } };
+  view.rerender(panel());
+  expect(screen.getByText(/was deleted on the Cluster while you were editing/)).toBeDefined();
+  expect(screen.getByRole("button", { name: "Copy YAML" })).toBeDefined();
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Test YAML" }).value).toBe(mine);
+  expect(screen.getByRole("button", { name: "Review changes" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Discard edits" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Discard edits" }).at(-1)!);
+  expect(useUnsavedEdits.getState().entries.size).toBe(0);
+});
+
+it("updates a clean editor when the live editable Manifest changes", async () => {
+  const api = { id: "clean", updateParameters: vi.fn<() => void>() } as unknown as DockviewPanelApi;
+  const workspace = {
+    cluster: "c",
+    active: true,
+    types: new Map(),
+    openList: vi.fn<() => void>(),
+    openResource: vi.fn<() => void>(),
+  };
+  const panel = () => (
+    <WorkspaceContext value={workspace}>
+      <ResourcePanel
+        api={api}
+        params={{
+          uri: formatResourceUri({
+            cluster: "c",
+            type: "configmaps",
+            namespace: "ns",
+            name: "web",
+          }),
+        }}
+      />
+    </WorkspaceContext>
+  );
+  state.manifest = {
+    stale: false,
+    data: { object: { metadata: { uid: "u" }, data: { key: "first" } } },
+  };
+  const view = render(panel());
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  await screen.findByRole("textbox", { name: "Test YAML" });
+  state.manifest = {
+    stale: false,
+    data: { object: { metadata: { uid: "u" }, data: { key: "second" } } },
+  };
+  view.rerender(panel());
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Test YAML" }).value).toContain(
+    "second",
+  );
+  expect(useUnsavedEdits.getState().entries.size).toBe(0);
 });

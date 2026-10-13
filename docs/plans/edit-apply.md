@@ -1,6 +1,6 @@
 # Plan: edit, apply, and delete a Resource
 
-Status: Part 1 implemented; Part 2 planned. Decisions are recorded in ADR-0019 and ADR-0020.
+Status: Parts 1 and 2 implemented; parent browser review pending. Decisions are recorded in ADR-0019 and ADR-0020.
 
 ## Outcome
 
@@ -805,3 +805,79 @@ No material contradiction with the settled contract was found. Admission
 change coverage uses container defaulting; unsupported dry runs, repeated
 409s, warnings, and indeterminate access reviews use controlled HTTP boundaries.
 No MutatingAdmissionPolicy or real Cluster was needed.
+
+### Part 2
+
+Part 2 implements the UI contract. These details were left to the
+implementation:
+
+- The edit session stays in the YAML Facet, which ADR-0013 already keeps
+  mounted across Facet changes. Its pure session functions and the review
+  hook are exercised without Monaco. The Resource panel owns access and
+  Delete, so both remain available across Facets.
+- Review parses the current text immediately, even when the 200 ms marker
+  debounce has not fired. Parsing and rendering share `yamlOptions`, with
+  `resolveKnownTags: false` as well as the removed tags, so an explicit tag
+  cannot re-enable a removed type. Alias expansion has the package's limit
+  of 100; an expansion failure is reported at line 1.
+- Cause lookup walks YAML nodes, including list indices and literal dotted
+  label keys. Displayed field paths quote keys that cannot be written as
+  plain dot notation. Counts of owned kinds and unsaved tabs use Maps.
+- The unsaved-edits store belongs to the window. Resource and Cluster close
+  paths ask through one alert dialog; `beforeunload` supplies the web Host's
+  prompt and Electron's `will-prevent-unload` supplies Cancel and Discard.
+- Copy first uses the standard Clipboard API and falls back to a selected
+  textarea and `document.execCommand("copy")` on plain HTTP or permission
+  failure. The textarea is inside an open dialog's focus trap when needed.
+  Copy YAML reports a failure in the Facet; Copy unsaved edits reports one
+  in the out-of-date notice.
+- A review and access request are aborted when their owner goes away. A
+  write has no AbortSignal. Reconnection repeats the captured params, and
+  also checks the connection when entering the lost-connection state, to
+  cover a reconnect that finished before the rejection reached React.
+- Closing the connection-lost apply dialog lets editing continue. A later
+  successful result clears only the submitted text; newer edits remain.
+  Another review waits while that apply's outcome is pending.
+- Delete captures the UID when the confirmation opens, so a replacement
+  received while the confirmation is open cannot become its new target.
+  Repeated deletes keep that UID and every chosen option.
+- A Namespace count failure says the count is unavailable, and Delete still
+  does not wait. The dependents select displays the three user-facing
+  labels rather than the protocol's propagation values. A disconnected
+  Delete confirmation can be dismissed; its repeat remains owned by the
+  Resource panel.
+- The new samples are in `edit.yaml`, with their own `sample-edit` Namespace
+  and a separate disposable `sample-delete` Namespace. The seed task named
+  files explicitly, so it now includes `edit.yaml`. Existing sample
+  Resource definitions are unchanged.
+
+The only new shortcut is `hukube.edit.review`, Ctrl/Cmd+S. Monaco adds its
+editor ID to an action's precondition; the action also requires this
+editor's dirty context and `editorTextFocus`. The end-to-end test checks
+reading, clean editing, dirty editing, focus outside the editor, and focus
+in the review. S never applies.
+
+The diff editor registers three bindings removed in `lib/monaco.ts`:
+
+- `diffEditor.exitCompareMove`: Escape.
+- `editor.action.accessibleDiffViewer.next`: F7.
+- `editor.action.accessibleDiffViewer.prev`: Shift+F7.
+
+The live end-to-end resolver allow-list has only the new review command ID
+added. No material contradiction with the settled UI contract was found.
+Playwright's `keyboard.insertText` feeds multiline YAML through Monaco's
+_typing_ indentation and accumulates indentation. The new flow pastes its
+Manifest instead, using the same Clipboard permission setup as the existing
+Log Stream test. This is a test-input distinction, not a production API.
+
+Verification covers scalar parity and round trips, session/live updates,
+refusal markers' field locations, every review outcome, reviewed apply
+params, conflict re-review, reconnect repeats, access lifetime, close and
+unload guards, plain-HTTP copying, Delete options/identity, and the real
+edit/review/apply/overlap/delete flow. Representative perturbations changed
+YAML to 1.2, removed dirty-text protection, sent the session base on apply,
+skipped the reconnect apply and delete, dropped the delete UID, used the
+replacement UID, bypassed the close prompt and copy fallback, requested
+access before the Manifest, and removed S. Each failed at its intended assertion and was
+restored exactly. The parent still owns the two-browser, widths, and
+both-theme visual review described above.
