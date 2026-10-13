@@ -64,7 +64,16 @@ hears the result, the UI does not know whether it happened.
   means, and finding nothing to delete is success.
 - The UI never reports a mutation as failed when the connection was lost. It
   says the outcome is unknown, waits for the connection, and sends the same
-  request again.
+  request again while its owner still exists. A request rejected before an
+  open connection is `not_connected`: nothing was sent. `disconnected` is
+  reserved for a sent request whose answer was lost.
+- A pending apply belongs to the edit. Its notice stays visible after the
+  review closes. Ending or discarding the edit, closing its Tab, or unmounting
+  its Facet stops checking and drops the repeated request. The discard prompt
+  explains that the apply may already have reached the Cluster.
+- A pending delete belongs to its confirmation. Its warning explains the
+  unknown outcome, and Stop and close or Escape stops the resend. Ending
+  checking cannot undo a write that has already reached the Cluster.
 
 ## Considered Options
 

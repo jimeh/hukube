@@ -6,7 +6,15 @@ import {
   type ResourceEdit,
   type ApplyResult,
 } from "@hukube/engine-client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { editableManifest, metadataString, renderYaml } from "./yaml.ts";
 
 export type ReviewPhase =
@@ -24,6 +32,7 @@ export interface ReviewState {
   error?: EngineRequestError;
   changed?: boolean;
   result?: ApplyResult;
+  pending?: boolean;
 }
 export function requestError(error: unknown): EngineRequestError {
   return error instanceof EngineRequestError
@@ -32,7 +41,8 @@ export function requestError(error: unknown): EngineRequestError {
 }
 export function errorDetail(error: EngineRequestError): ErrorDetail {
   return {
-    code: error.code === "disconnected" ? "unavailable" : error.code,
+    code:
+      error.code === "disconnected" || error.code === "not_connected" ? "unavailable" : error.code,
     message: error.message,
     reason: error.reason,
     causes: error.causes,
@@ -47,6 +57,10 @@ export function useReview(
 ) {
   const [state, setState] = useState<ReviewState>();
   const [open, setOpen] = useState(false);
+  const connection = useSyncExternalStore(
+    (listener) => client.onStateChange(listener),
+    () => client.getState(),
+  );
   const source = useRef<ResourceEdit | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const applyParams = useRef<ResourceEdit | undefined>(undefined);
@@ -88,14 +102,25 @@ export function useReview(
     [client],
   );
   const sendApply = useCallback(async () => {
-    if (!applyParams.current) return;
+    const params = applyParams.current;
+    if (!params) return;
     setState((previous) => ({ ...previous, phase: "applying" }));
     try {
-      const result = await client.request("resource.apply", applyParams.current);
-      if (mounted.current) setState((previous) => ({ ...previous, phase: "applied", result }));
+      const result = await client.request("resource.apply", params);
+      if (mounted.current && applyParams.current === params)
+        setState((previous) => ({ ...previous, phase: "applied", result }));
     } catch (error) {
-      if (!mounted.current) return;
+      if (!mounted.current || applyParams.current !== params) return;
       const failure = requestError(error);
+      if (failure.code === "not_connected" && stateRef.current?.pending) {
+        setState((previous) => ({ ...previous, phase: "disconnected" }));
+        return;
+      }
+      if (failure.code === "not_connected") {
+        applyParams.current = undefined;
+        setState((previous) => ({ ...previous, phase: "ready", pending: false, error: failure }));
+        return;
+      }
       if (failure.code === "conflict") {
         await check(true);
         return;
@@ -111,14 +136,16 @@ export function useReview(
               ? "unavailable"
               : "refused",
         error: failure,
+        pending: failure.code === "disconnected",
       }));
     }
   }, [client, check]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       abort.current?.abort();
+      applyParams.current = undefined;
     };
   }, []);
   useEffect(
@@ -168,6 +195,7 @@ export function useReview(
     const finish = () => {
       setOpen(false);
       setState(undefined);
+      applyParams.current = undefined;
       applied.current();
     };
     if (version === state.result?.resourceVersion) {
@@ -177,9 +205,21 @@ export function useReview(
     const timer = setTimeout(finish, 2000);
     return () => clearTimeout(timer);
   }, [state?.phase, state?.result, version]);
+  const end = useCallback(() => {
+    applyParams.current = undefined;
+    source.current = undefined;
+    abort.current?.abort();
+    stateRef.current = undefined;
+    setState(undefined);
+    setOpen(false);
+  }, []);
+
   return {
     open,
     state,
+    connection,
+    pending: !!state?.pending,
+    end,
     begin: (edit: ResourceEdit) => {
       source.current = edit;
       setState(undefined);

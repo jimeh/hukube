@@ -1,4 +1,5 @@
 import "monaco-editor/features/find/register";
+import "monaco-editor/features/readOnlyMessage/register";
 import "monaco-editor/features/clipboard/register";
 import "monaco-editor/features/codicon/register";
 import "monaco-editor/features/contextmenu/register";

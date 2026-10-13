@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useImperativeHandle, useRef, type Ref } fro
 
 import { useTheme } from "@/lib/theme.ts";
 
+import { caretInEditableManifest } from "../edit/caret.ts";
 import type { YamlIssue } from "../edit/yaml.ts";
 
 import { applyEditorTheme } from "./editor-theme.ts";
@@ -103,15 +104,31 @@ export default function YamlEditor({
     };
   }, []);
 
+  const wasEditing = useRef(false);
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || editor.getValue() === value) return;
+    const starting = editing && !wasEditing.current;
+    wasEditing.current = editing;
+    if (!editor) return;
+    editor.updateOptions({ readOnly: !editing });
+    const position = starting
+      ? caretInEditableManifest(editor.getValue(), value, editor.getPosition())
+      : undefined;
+    if (editor.getValue() === value) {
+      if (starting) editor.focus();
+      return;
+    }
     const viewState = editor.saveViewState();
     setting.current = true;
     editor.setValue(value);
     setting.current = false;
     if (viewState) editor.restoreViewState(viewState);
-  }, [value]);
+    if (starting && position) {
+      editor.setPosition(position);
+      editor.revealLineInCenterIfOutsideViewport(position.lineNumber);
+      editor.focus();
+    }
+  }, [value, editing]);
 
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly: !editing });

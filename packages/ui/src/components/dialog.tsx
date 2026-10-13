@@ -1,13 +1,25 @@
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { cn } from "cn";
+import { useModalInert } from "@hukube/ui/hooks/use-modal-inert";
 
 import { Button } from "@hukube/ui/components/button";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 
-function Dialog({ ...props }: DialogPrimitive.Root.Props) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+function Dialog({ onOpenChange, ...props }: DialogPrimitive.Root.Props) {
+  const [open, setOpen] = React.useState(props.defaultOpen ?? false);
+  useModalInert(props.modal !== false && (props.open ?? open));
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      {...props}
+      onOpenChange={(value, details) => {
+        onOpenChange?.(value, details);
+        if (!details.isCanceled) setOpen(value);
+      }}
+    />
+  );
 }
 
 function DialogTrigger({ ...props }: DialogPrimitive.Trigger.Props) {

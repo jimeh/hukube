@@ -3,10 +3,14 @@
 import type { ConnectionState, EngineClient } from "@hukube/engine-client";
 import { EngineProvider } from "@hukube/engine-client/react";
 import type { Host } from "@hukube/host";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, render, screen, within, fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HostProvider } from "../../lib/host.tsx";
+import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
+vi.mock("../edit/clipboard.ts", () => ({
+  copyText: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+}));
 import { OutOfDateNotice } from "./out-of-date-notice.tsx";
 
 class FakeEngineClient implements EngineClient {
@@ -36,7 +40,11 @@ class FakeEngineClient implements EngineClient {
   close() {}
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useUnsavedEdits.setState({ entries: new Map() });
+  vi.useRealTimers();
+});
 
 function renderNotice(kind: Host["kind"], state: ConnectionState = "open") {
   const client = new FakeEngineClient();
@@ -89,4 +97,19 @@ describe("OutOfDateNotice", () => {
     act(() => client.setState("outdated"));
     expect(document.activeElement).toBe(screen.getByRole("alert"));
   });
+});
+
+it("announces Copied for two seconds for unsaved edits", async () => {
+  useUnsavedEdits
+    .getState()
+    .set("p", { cluster: "c", label: "ConfigMap web", read: () => "kind: ConfigMap" });
+  renderNotice("web", "outdated");
+  vi.useFakeTimers();
+  fireEvent.click(screen.getByRole("button", { name: "Copy unsaved edits" }));
+  await act(async () => {});
+  expect(
+    screen.getByRole("button", { name: "Copied" }).querySelector('[aria-live="polite"]'),
+  ).not.toBeNull();
+  await act(() => vi.advanceTimersByTime(2000));
+  expect(screen.getByRole("button", { name: "Copy unsaved edits" })).toBeDefined();
 });

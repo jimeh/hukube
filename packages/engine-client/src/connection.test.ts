@@ -157,7 +157,7 @@ describe("EngineConnection", () => {
   it("rejects requests while disconnected instead of queueing them", async () => {
     const conn = connect();
     await expect(conn.request("clusters.list", undefined)).rejects.toMatchObject({
-      code: "disconnected",
+      code: "not_connected",
     });
   });
 });
@@ -170,7 +170,7 @@ describe("hello verification", () => {
     expect(conn.getState()).toBe("connecting");
     expect(latest().sent).toEqual([]);
     await expect(conn.request("clusters.list", undefined)).rejects.toMatchObject({
-      code: "disconnected",
+      code: "not_connected",
     });
     latest().receive({ id: 0, type: "hello", hello: { protocol: Hash } });
     expect(conn.getState()).toBe("open");
@@ -199,7 +199,7 @@ describe("hello verification", () => {
       engine: message.type === "hello" && "hello" in message ? message.hello.protocol : undefined,
     });
     await expect(conn.request("clusters.list", undefined)).rejects.toMatchObject({
-      code: "disconnected",
+      code: "not_connected",
     });
     await vi.advanceTimersByTimeAsync(60000);
     expect(sockets).toHaveLength(1);
