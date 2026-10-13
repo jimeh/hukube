@@ -6,6 +6,8 @@ import (
 	"github.com/jimeh/hukube/engine/internal/protocol"
 )
 
+const execReadOnlyReason = "The Engine is running read-only. Exec Sessions are disabled."
+
 const readOnlyReason = "The Engine is running read-only. Editing and deleting Resources are disabled."
 
 func init() {
@@ -32,7 +34,7 @@ func init() {
 	})
 	handleRequest(protocol.RequestResourceAccess, func(ctx context.Context, srv *Server, p protocol.ResourceRef) (protocol.ResourceAccess, error) {
 		if srv.cfg.ReadOnly {
-			return protocol.ResourceAccess{Edit: protocol.Access{Reason: readOnlyReason}, Delete: protocol.Access{Reason: readOnlyReason}}, nil
+			return protocol.ResourceAccess{Edit: protocol.Access{Reason: readOnlyReason}, Delete: protocol.Access{Reason: readOnlyReason}, Exec: protocol.Access{Reason: execReadOnlyReason}}, nil
 		}
 		c, err := srv.cfg.Clusters.Get(p.Cluster)
 		if err != nil {

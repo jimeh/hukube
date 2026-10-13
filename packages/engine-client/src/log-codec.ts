@@ -24,6 +24,7 @@ export interface LogLine {
 
 /** Source identities and cursors belong to the stream, rather than a socket. */
 export class LogCodec {
+  readonly resumable = true;
   readonly #identities = new Map<string, number>();
   readonly #sources = new Map<number, LogSource>();
   readonly #cursors = new Map<number, LogCursor>();

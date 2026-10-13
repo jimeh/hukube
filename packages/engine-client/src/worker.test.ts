@@ -8,6 +8,7 @@ import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 class FakeSocket implements SocketLike {
   static latest: FakeSocket;
   sent: ClientMessage[] = [];
+  binary: Uint8Array[] = [];
   onopen: ((event: Event) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -15,7 +16,11 @@ class FakeSocket implements SocketLike {
   constructor() {
     FakeSocket.latest = this;
   }
-  send(data: string) {
+  send(data: string | Uint8Array<ArrayBuffer>) {
+    if (data instanceof Uint8Array) {
+      this.binary.push(data);
+      return;
+    }
     this.sent.push(JSON.parse(data) as ClientMessage);
   }
   close() {
@@ -32,7 +37,7 @@ class FakeSocket implements SocketLike {
 
 let scope: {
   onmessage: ((event: MessageEvent<ToWorker>) => void) | null;
-  postMessage: ReturnType<typeof vi.fn<(message: FromWorker) => void>>;
+  postMessage: ReturnType<typeof vi.fn<(message: FromWorker, transfer?: Transferable[]) => void>>;
 };
 
 function send(message: ToWorker) {
@@ -53,7 +58,10 @@ function subscribe() {
 
 beforeEach(async () => {
   vi.resetModules();
-  scope = { onmessage: null, postMessage: vi.fn<(message: FromWorker) => void>() };
+  scope = {
+    onmessage: null,
+    postMessage: vi.fn<(message: FromWorker, transfer?: Transferable[]) => void>(),
+  };
   vi.stubGlobal("self", scope);
   vi.stubGlobal("WebSocket", FakeSocket);
   await import("./worker.ts");
@@ -187,4 +195,51 @@ it("forwards not_connected before sending and disconnected after sending", async
     id: 9,
     error: expect.objectContaining({ code: "disconnected" }),
   });
+});
+
+it("relays input and resize and transfers Exec bytes without copying the output buffer", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  FakeSocket.latest.open();
+  send({
+    kind: "stream-open",
+    id: 10,
+    method: "pod.exec",
+    params: {
+      cluster: "c",
+      namespace: "ns",
+      pod: "p",
+      uid: "u",
+      container: "main",
+      cols: 80,
+      rows: 24,
+    },
+  });
+  await Promise.resolve();
+  const socket = FakeSocket.latest;
+  const receive = (data: unknown) => socket.onmessage?.(new MessageEvent("message", { data }));
+  socket.onopen?.(new Event("open"));
+  receive(JSON.stringify({ type: "hello", hello: { protocol: Hash } }));
+  send({ kind: "stream-write", id: 10, data: new Uint8Array([255, 0, 42]) });
+  send({ kind: "stream-resize", id: 10, cols: 132, rows: 43 });
+  expect(socket.binary).toEqual([new Uint8Array([0, 255, 0, 42])]);
+  expect(socket.sent.at(-1)).toEqual({ type: "resize", cols: 132, rows: 43 });
+  const buffer = new Uint8Array([1, 128, 255, 0]).buffer;
+  const messages: FromWorker[] = [];
+  scope.postMessage.mockImplementation((message, transfer) => {
+    messages.push(transfer ? structuredClone(message, { transfer }) : message);
+  });
+  receive(buffer);
+  const delivered = messages.find((message) => message.kind === "stream-data");
+  expect(delivered).toMatchObject({
+    kind: "stream-data",
+    id: 10,
+    data: new Uint8Array([128, 255, 0]),
+    bytes: 4,
+  });
+  expect(scope.postMessage.mock.calls.at(-1)?.[1]).toEqual([buffer]);
+  expect(buffer.byteLength).toBe(0);
+  expect(socket.sent).toHaveLength(2);
+  if (delivered?.kind !== "stream-data") throw new Error("missing stream bytes");
+  send({ kind: "stream-ack", id: 10, token: delivered.token, bytes: delivered.bytes });
+  expect(socket.sent.at(-1)).toEqual({ type: "ack", bytes: 4 });
 });

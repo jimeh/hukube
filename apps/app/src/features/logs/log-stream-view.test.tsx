@@ -93,10 +93,11 @@ const mount = (override: Partial<LogStreamViewProps> = {}) =>
 const latest = () => opened.at(-1)!;
 const event = (status = ready) => act(() => latest().listener.event(status));
 const line = (text = "hello") =>
-  act(() =>
-    latest().listener.data([
-      { source: 0, time: new Date(2026, 9, 13, 1, 2, 3, 4).getTime(), text },
-    ]),
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: new Date(2026, 9, 13, 1, 2, 3, 4).getTime(), text },
+      ]),
   );
 beforeEach(() => {
   opened = [];
@@ -370,12 +371,13 @@ it("renders ordered drop, join, leave and record markers with merged origins", (
   line();
   const other = { ...source, id: 1, pod: "web-b", podUid: "uid2" };
   event({ ...ready, sources: [source, other], pods: 2, followed: 2, loaded: 2 });
-  act(() =>
-    latest().listener.data([
-      { source: 1, time: 0, text: "next" },
-      { source: 0, time: 0, text: "", gap: true },
-      { source: 1, time: 0, text: "Error, exit code 1", exited: true },
-    ]),
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 1, time: 0, text: "next" },
+        { source: 0, time: 0, text: "", gap: true },
+        { source: 1, time: 0, text: "Error, exit code 1", exited: true },
+      ]),
   );
   act(() => latest().listener.gap({ bytes: 1_000_000, records: 12340 }));
   event({ ...ready, sources: [other] });

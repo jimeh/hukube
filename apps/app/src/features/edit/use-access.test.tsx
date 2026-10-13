@@ -9,6 +9,7 @@ const ref = { cluster: "c", type: "configmaps", namespace: "ns", name: "web" };
 afterEach(cleanup);
 it("asks once after the first Manifest and keeps the access reason", async () => {
   const access: ResourceAccess = {
+    exec: { allowed: false },
     edit: { allowed: false, reason: "The Engine is read-only." },
     delete: { allowed: false, reason: "Not permitted" },
   };

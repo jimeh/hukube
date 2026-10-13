@@ -6,7 +6,7 @@ import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<ToWorker>) => void) | null;
-  postMessage(message: FromWorker): void;
+  postMessage(message: FromWorker, transfer?: Transferable[]): void;
 };
 
 let connection: EngineConnection | undefined;
@@ -38,12 +38,20 @@ scope.onmessage = ({ data: msg }) => {
         (data, bytes, acknowledge) => {
           const token = nextToken++;
           acknowledgements.set(token, { id: msg.id, acknowledge });
-          scope.postMessage({ kind: "stream-data", id: msg.id, data, bytes, token });
+          const message: FromWorker = { kind: "stream-data", id: msg.id, data, bytes, token };
+          if (data instanceof Uint8Array) scope.postMessage(message, [data.buffer as ArrayBuffer]);
+          else scope.postMessage(message);
         },
       );
       if (stream) streams.set(msg.id, stream);
       break;
     }
+    case "stream-write":
+      streams.get(msg.id)?.write(msg.data);
+      break;
+    case "stream-resize":
+      streams.get(msg.id)?.resize(msg.cols, msg.rows);
+      break;
     case "stream-ack": {
       const pending = acknowledgements.get(msg.token);
       if (pending?.id === msg.id) {

@@ -66,10 +66,11 @@ type DeleteParams struct {
 	Immediate bool `json:"immediate,omitempty"`
 }
 
-// ResourceAccess reports whether editing and deleting are permitted.
+// ResourceAccess reports whether editing, deleting, and Exec Sessions are permitted.
 type ResourceAccess struct {
 	Edit   Access `json:"edit"`
 	Delete Access `json:"delete"`
+	Exec   Access `json:"exec"`
 }
 
 // Access is denied only when the Engine knows the action would be refused.

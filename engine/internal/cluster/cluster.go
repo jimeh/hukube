@@ -123,16 +123,17 @@ type Cluster struct {
 	disc   discovery.DiscoveryInterface
 	// probe checks reachability with a short timeout; disc has none, because
 	// the clients sharing its configuration hold long-lived watches.
-	probe    discovery.DiscoveryInterface
-	meta     metadata.Interface
-	dyn      dynamic.Interface
-	writes   dynamic.Interface
-	auth     authclient.AuthorizationV1Interface
-	accessMu sync.Mutex
-	access   map[accessKey]cachedAccess
-	core     coreclient.CoreV1Interface
-	logs     coreclient.CoreV1Interface
-	table    rest.Interface
+	probe      discovery.DiscoveryInterface
+	meta       metadata.Interface
+	dyn        dynamic.Interface
+	writes     dynamic.Interface
+	auth       authclient.AuthorizationV1Interface
+	accessMu   sync.Mutex
+	access     map[accessKey]cachedAccess
+	core       coreclient.CoreV1Interface
+	logs       coreclient.CoreV1Interface
+	execConfig *rest.Config
+	table      rest.Interface
 
 	// Index holds metadata for every Resource of every indexed type.
 	Index *index.Store
@@ -230,6 +231,7 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 		access:     make(map[accessKey]cachedAccess),
 		core:       core,
 		logs:       logs,
+		execConfig: logCfg,
 		table:      table,
 		Index:      index.New(),
 		status:     protocol.ClusterStatus{Phase: protocol.ClusterPhaseConnecting},
