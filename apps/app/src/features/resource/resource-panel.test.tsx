@@ -11,9 +11,9 @@ import type { SubscriptionState } from "@hukube/engine-client/react";
 import { formatResourceUri } from "@hukube/k8s";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DockviewPanelApi } from "dockview-react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WorkspaceContext } from "../workspace/workspace-context.tsx";
+import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
 import { ResourcePanel } from "./resource-panel.tsx";
 
 const state = vi.hoisted(() => ({
@@ -292,7 +292,7 @@ function measuredSwitcher() {
       disconnect() {}
     },
   );
-  const { container } = render(subscriptionPanel());
+  const { container, rerender } = render(subscriptionPanel());
   const scroller = container.querySelector<HTMLDivElement>(".overflow-x-auto")!;
   // jsdom rejects calc() in mask gradients, so retain the style React assigns.
   Object.defineProperty(scroller.style, "maskImage", {
@@ -310,11 +310,11 @@ function measuredSwitcher() {
     });
     act(() => observers.find((observer) => observer.elements.includes(scroller))!.callback());
   };
-  return { scroller, resize };
+  return { scroller, resize, update: () => rerender(subscriptionPanel()) };
 }
 
 it("fades only the hidden edges of the Facet scroller on measure and scroll", () => {
-  const { scroller, resize } = measuredSwitcher();
+  const { scroller, resize, update } = measuredSwitcher();
   resize(100);
   expect(scroller.style.maskImage).toBe(
     "linear-gradient(to right, black, black calc(100% - 12px), transparent)",
@@ -324,6 +324,9 @@ it("fades only the hidden edges of the Facet scroller on measure and scroll", ()
     ({ left: -scroller.scrollLeft, right: 45 - scroller.scrollLeft }) as DOMRect;
   scroller.scrollLeft = 50;
   fireEvent.scroll(scroller);
+  expect(scroller.scrollLeft).toBe(50);
+  // A live update renders the same Facets again and must not undo the scroll.
+  update();
   expect(scroller.scrollLeft).toBe(50);
   expect(scroller.style.maskImage).toBe(
     "linear-gradient(to right, transparent, black 12px, black calc(100% - 12px), transparent)",
@@ -355,4 +358,93 @@ it("shows and hides More Facets at the same width excluding its button and gap",
   expect(screen.queryByRole("button", { name: "More Facets" })).toBeNull();
   resize(299);
   expect(screen.getByRole("button", { name: "More Facets" })).toBeDefined();
+});
+
+describe("a double-click on a related Resource", () => {
+  const pod = { cluster: "c", type: "pods", namespace: "ns", name: "web" };
+  const openResource = vi.fn<WorkspaceValue["openResource"]>();
+  const tab = (id: string, address: typeof pod & { type: string }, facet: "yaml" | "related") => (
+    <WorkspaceContext
+      value={{ cluster: "c", types: new Map(), openList: vi.fn<() => void>(), openResource }}
+    >
+      <ResourcePanel
+        api={{ id, updateParameters: vi.fn<() => void>() } as unknown as DockviewPanelApi}
+        params={{ uri: formatResourceUri({ ...address, facet }), preview: true }}
+      />
+    </WorkspaceContext>
+  );
+  // The first click, on a Pod's row in a Deployment's Related Facet, opens the Pod.
+  const clickRow = () => {
+    state.manifest = { stale: false, data: { object: { metadata: { uid: "uid" } } } };
+    state.related = {
+      stale: false,
+      data: {
+        found: true,
+        total: 1,
+        types: [],
+        sections: [
+          {
+            relationship: "owns",
+            direction: "out",
+            total: 1,
+            rows: [
+              {
+                depth: 0,
+                status: "found",
+                kind: "Pod",
+                type: "pods",
+                namespace: "ns",
+                name: "web",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    render(tab("source", { ...pod, type: "deployments.apps" }, "related"));
+    fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 1 });
+    expect(openResource).toHaveBeenLastCalledWith(
+      { type: "pods", namespace: "ns", name: "web" },
+      { preview: true, pane: "source" },
+    );
+    cleanup();
+    openResource.mockClear();
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+    openResource.mockClear();
+  });
+
+  it("makes a regular tab of what the first click opened, whichever Facet the second lands in", async () => {
+    clickRow();
+    // The Pod's tab was already open on its YAML Facet, so the second click lands there.
+    render(tab("opened", pod, "yaml"));
+    await act(async () => {});
+    fireEvent.click(screen.getByText("YAML editor"), { detail: 2 });
+    expect(openResource).toHaveBeenCalledTimes(1);
+    expect(openResource).toHaveBeenLastCalledWith(
+      { type: "pods", namespace: "ns", name: "web" },
+      { preview: false, pane: "opened" },
+    );
+    // The burst's further clicks open nothing, and neither does a double-click with nothing before it.
+    fireEvent.click(screen.getByText("YAML editor"), { detail: 3 });
+    fireEvent.click(screen.getByText("YAML editor"), { detail: 2 });
+    expect(openResource).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets what a click opened after a single click elsewhere, or after a moment", async () => {
+    clickRow();
+    render(tab("opened", pod, "yaml"));
+    await act(async () => {});
+    fireEvent.click(screen.getByText("YAML editor"), { detail: 1 });
+    fireEvent.click(screen.getByText("YAML editor"), { detail: 2 });
+    expect(openResource).not.toHaveBeenCalled();
+    cleanup();
+    vi.useFakeTimers();
+    clickRow();
+    vi.advanceTimersByTime(1000);
+    render(tab("opened", pod, "yaml"));
+    fireEvent.click(screen.getByRole("tablist", { name: "Facets" }), { detail: 2 });
+    expect(openResource).not.toHaveBeenCalled();
+  });
 });

@@ -12,6 +12,7 @@ import { resourceEventsParams } from "./facet-rules.ts";
 import { facetsFor, resolveFacet } from "./facets.ts";
 import { FacetSwitcher } from "./facet-switcher.tsx";
 import { Notice } from "./notice.tsx";
+import { takePointerOpened } from "./pointer-opened.ts";
 
 /** One live Resource, with its Facet named in the tab's Resource URI. */
 export function ResourcePanel({
@@ -19,7 +20,7 @@ export function ResourcePanel({
   params,
 }: Pick<IDockviewPanelProps<ResourcePanelParams>, "api" | "params">) {
   const address = parseResourceUri(params.uri);
-  const { types } = useWorkspace();
+  const { types, openResource } = useWorkspace();
   const manifest = useSubscription(
     "resource.get",
     address
@@ -81,7 +82,18 @@ export function ResourcePanel({
     api.updateParameters({ ...params, uri: formatResourceUri({ ...address, facet }) });
   };
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div
+      className="flex h-full min-h-0 flex-col"
+      onClickCapture={(event) => {
+        const opened = takePointerOpened(address.cluster);
+        if (event.detail < 2 || !opened) return;
+        // The second click of a double-click on a related Resource lands here, in the tab the
+        // first click opened or brought forward, and makes a regular tab of it.
+        event.stopPropagation();
+        openResource(opened, { preview: false, pane: api.id });
+      }}
+    >
       <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
         <span className="text-muted-foreground">{kind}</span>
         <h2 className="truncate font-mono font-semibold">{address.name}</h2>
