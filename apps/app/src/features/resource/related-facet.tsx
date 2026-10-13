@@ -14,6 +14,7 @@ import { useNow } from "@/lib/use-now.ts";
 
 import type { FacetProps } from "./facet-props.ts";
 import { Notice } from "./notice.tsx";
+import { rememberPointerOpened } from "./pointer-opened.ts";
 
 function relatedCount(related: SubscriptionState<Related>): number {
   return related.error?.code === "forbidden" || !related.data?.found ? 0 : related.data.total;
@@ -39,7 +40,16 @@ function keyedRows(rows: RelatedRow[], section: string) {
   const ancestors: string[] = [];
   return rows.map((row) => {
     ancestors.length = row.depth;
-    const identity = JSON.stringify([row.type ?? "", row.namespace ?? "", row.name ?? ""]);
+    // A reference that did not resolve may have no type or Namespace, so the
+    // kind, API version, and UID keep two references with one name apart.
+    const identity = JSON.stringify([
+      row.type ?? "",
+      row.namespace ?? "",
+      row.name ?? "",
+      row.uid ?? "",
+      row.kind,
+      row.apiVersion ?? "",
+    ]);
     const key = JSON.stringify([
       section,
       ...ancestors,
@@ -82,10 +92,6 @@ function secondLine(
   }
 }
 
-// A click opens a Preview Tab in the Pane the row is in, which replaces the
-// content under the pointer. The second click of a double-click therefore
-// lands in another tab's Related Facet, so what the first click opened is
-// kept here for whichever Facet receives the second.
 // The Related Facet of the tab a row opens takes focus when it mounts, so the
 // arrow keys keep working. The record expires, because a tab that was already
 // open mounts nothing, and a later tab for the same Resource must not take focus.
@@ -94,32 +100,8 @@ const focusOpenedFor = 2000;
 function focusWhenOpened(address: ResourceAddress) {
   focusOpened = { address, at: performance.now() };
 }
-let pointerOpened: { cluster: string; address: Omit<ResourceAddress, "cluster"> } | undefined;
-
 /** Shows ownership paths and descendants, with live Table text and stable selection. */
-export function RelatedFacet(props: FacetProps) {
-  const { cluster, openResource } = useWorkspace();
-  return (
-    <div
-      className="h-full min-h-0"
-      onClickCapture={(event) => {
-        const opened = pointerOpened;
-        pointerOpened = undefined;
-        if (event.detail < 2) return;
-        // A double-click makes a regular tab of the Preview Tab its first click opened.
-        event.stopPropagation();
-        if (opened?.cluster === cluster) {
-          focusWhenOpened({ cluster, ...opened.address });
-          openResource(opened.address, { preview: false, pane: props.panelId });
-        }
-      }}
-    >
-      <RelatedRows {...props} />
-    </div>
-  );
-}
-
-function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) {
+export function RelatedFacet({ address, kind, manifest, related, panelId }: FacetProps) {
   const { cluster, types, status, openResource } = useWorkspace();
   const now = useNow();
   const grid = useRef<HTMLDivElement>(null);
@@ -149,7 +131,8 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
   const openable = sections
     .flatMap((section) => section.keyed)
     .filter(({ row }) => row.status === "found");
-  if (selected && !openable.some(({ key }) => key === selected)) setSelected(undefined);
+  const openableIndex = new Map(openable.map(({ key }, index) => [key, index]));
+  if (selected && !openableIndex.has(selected)) setSelected(undefined);
   const columns = new Map(data?.types.map((type) => [type.type, type.columns]));
   const forbidden = [...types.values()].filter((type) => type.state === "forbidden").length;
   const omittedText = `Resources of ${forbidden.toLocaleString("en-US")} ${forbidden === 1 ? "Resource Type" : "Resource Types"} your credentials cannot list are not shown.`;
@@ -290,7 +273,7 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
                     }
                   }
                   const canOpen = row.status === "found";
-                  const index = openable.findIndex((entry) => entry.key === key);
+                  const index = openableIndex.get(key);
                   return (
                     <div
                       key={key}
@@ -307,11 +290,12 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
                       }
                       aria-level={row.depth + 1}
                       aria-selected={canOpen ? selected === key : undefined}
-                      onClick={() => {
-                        if (!canOpen) return;
+                      onClick={(event) => {
+                        // The Resource tab handles the further clicks of a double-click.
+                        if (!canOpen || event.detail > 1) return;
                         setSelected(key);
                         const opened = open(row, true);
-                        if (opened) pointerOpened = { cluster, address: opened };
+                        if (opened) rememberPointerOpened({ cluster, ...opened });
                       }}
                       style={{ paddingLeft: 12 + Math.min(row.depth, 8) * 16 }}
                       className={cn(

@@ -399,8 +399,27 @@ describe("Related badge", () => {
   });
 });
 
+const reference = (kind: string, uid: string): RelatedRow[] => [
+  {
+    depth: 0,
+    status: "unserved",
+    kind,
+    apiVersion: "legacy.example.com/v1",
+    name: "shared",
+    uid,
+  },
+  { ...row, depth: 1, status: "self" },
+];
+const owners = (rows: RelatedRow[]) =>
+  panel({
+    stale: false,
+    data: {
+      ...populated,
+      sections: [{ relationship: "owns", direction: "in", total: 2, rows }],
+    },
+  });
 describe("Related navigation", () => {
-  it("opens click, double-click, Enter, and Space in the source Pane", () => {
+  it("opens click, Enter, and Space in the source Pane, and leaves a burst's further clicks alone", () => {
     show({ stale: false, data: populated });
     const resource = screen.getByRole("row", { name: /Pod web/ });
     const expected = { type: "pods", namespace: "shop", name: "web" };
@@ -409,11 +428,10 @@ describe("Related navigation", () => {
       preview: true,
       pane: "source",
     });
+    // The Resource tab handles the second click of a double-click, wherever it lands.
     fireEvent.click(resource, { detail: 2 });
-    expect(workspace.openResource).toHaveBeenLastCalledWith(expected, {
-      preview: false,
-      pane: "source",
-    });
+    fireEvent.click(resource, { detail: 3 });
+    expect(workspace.openResource).toHaveBeenCalledTimes(1);
     const grid = screen.getByRole("treegrid");
     fireEvent.keyDown(grid, { key: "Enter" });
     expect(workspace.openResource).toHaveBeenLastCalledWith(expected, {
@@ -425,7 +443,7 @@ describe("Related navigation", () => {
       preview: true,
       pane: "source",
     });
-    expect(workspace.openResource).toHaveBeenCalledTimes(4);
+    expect(workspace.openResource).toHaveBeenCalledTimes(3);
     expect(grid.tabIndex).toBe(0);
   });
   it.each(["click", "double-click", "Enter", " "])(
@@ -479,30 +497,18 @@ describe("Related navigation", () => {
     );
     expect(document.activeElement).not.toBe(screen.getByRole("treegrid"));
   });
-  it("makes a regular tab of what a double-click's first click opened, in whichever Facet gets the second", () => {
-    show({ stale: false, data: populated });
-    fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 1 });
-    cleanup();
-    // The Preview Tab replaced the clicked content, so another row is under the pointer now.
-    const other = { ...row, kind: "Deployment", type: "deployments.apps", name: "owner" };
-    show(
-      {
-        stale: false,
-        data: { ...populated, sections: [{ ...populated.sections[0]!, rows: [other] }] },
-      },
-      { panelId: "opened" },
-    );
-    const landed = screen.getByRole("row", { name: /Deployment owner/ });
-    fireEvent.click(landed, { detail: 2 });
-    expect(workspace.openResource).toHaveBeenCalledTimes(2);
-    expect(workspace.openResource).toHaveBeenLastCalledWith(
-      { type: "pods", namespace: "shop", name: "web" },
-      { preview: false, pane: "opened" },
-    );
-    // Further clicks of the same burst open nothing, and neither does one with nothing before it.
-    fireEvent.click(landed, { detail: 3 });
-    fireEvent.click(landed, { detail: 2 });
-    expect(workspace.openResource).toHaveBeenCalledTimes(2);
+  it("keeps two references with one name apart, and drops one that leaves", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = render(owners([...reference("Gadget", "1"), ...reference("Widget", "2")]));
+    expect(screen.getAllByRole("row", { name: /shared/ })).toHaveLength(2);
+    view.rerender(owners(reference("Widget", "2")));
+    expect(screen.queryByRole("row", { name: /^Gadget shared/ })).toBeNull();
+    expect(screen.getAllByRole("row", { name: /shared/ })).toHaveLength(1);
+    // Two incarnations of one owner differ only by UID.
+    view.rerender(owners([...reference("Widget", "2"), ...reference("Widget", "3")]));
+    expect(screen.getAllByRole("row", { name: /^Widget shared/ })).toHaveLength(2);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
   it("skips non-openable rows with arrows and ignores their pointer actions", () => {
     const rows: RelatedRow[] = [
