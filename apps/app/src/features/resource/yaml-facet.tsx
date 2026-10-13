@@ -87,7 +87,7 @@ export function YamlFacet({
     (refusal) => setSession((previous) => (previous ? { ...previous, refusal } : previous)),
   );
   useEffect(() => {
-    if ((!dirty && !review.pending) || !session) {
+    if ((!dirty && !review.pending && !review.unknownOutcome) || !session) {
       useUnsavedEdits.getState().set(panelId);
       return;
     }
@@ -95,10 +95,10 @@ export function YamlFacet({
       cluster: address.cluster,
       label,
       read: () => session.text,
-      pendingApply: review.pending,
+      pendingApply: review.pending || review.unknownOutcome,
     });
     return () => useUnsavedEdits.getState().set(panelId);
-  }, [dirty, session, panelId, address.cluster, label, review.pending]);
+  }, [dirty, session, panelId, address.cluster, label, review.pending, review.unknownOutcome]);
   const endReview = review.end;
   const hadSession = useRef(false);
   useLayoutEffect(() => {
@@ -185,8 +185,10 @@ export function YamlFacet({
   );
   const refusal = session?.refusal;
   const yamlError = parsedText === session?.text && !!parsed.issues.length;
-  const noticeKind =
-    gone || (!review.pending && (refusal || yamlError))
+  const unconfirmed = review.unknownOutcome && !review.pending;
+  const noticeKind = unconfirmed
+    ? "warning"
+    : gone || (!review.pending && (refusal || yamlError))
       ? "error"
       : review.pending || notice
         ? "warning"
@@ -331,7 +333,9 @@ export function YamlFacet({
             aria-hidden="true"
           />
           <div className="min-w-0 flex-1 basis-48">
-            {gone ? (
+            {unconfirmed ? (
+              "hukube could not confirm whether your apply went through. Review changes shows the Cluster as it is now."
+            ) : gone ? (
               notice
             ) : review.pending ? (
               "An apply of this edit was in flight when the connection to the Engine was lost. hukube checks the result when it reconnects."

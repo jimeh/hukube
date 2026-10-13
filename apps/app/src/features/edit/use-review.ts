@@ -33,6 +33,7 @@ export interface ReviewState {
   changed?: boolean;
   result?: ApplyResult;
   pending?: boolean;
+  unknownOutcome?: boolean;
 }
 export function requestError(error: unknown): EngineRequestError {
   return error instanceof EngineRequestError
@@ -64,6 +65,8 @@ export function useReview(
   const source = useRef<ResourceEdit | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const applyParams = useRef<ResourceEdit | undefined>(undefined);
+  const unknownOutcome = useRef(false);
+  const dialogOpen = useRef(false);
   const mounted = useRef(true);
   const stateRef = useRef(state);
 
@@ -86,17 +89,27 @@ export function useReview(
         phase: "checking",
         review: previous?.review,
         changed: changed || previous?.changed,
+        unknownOutcome: unknownOutcome.current,
       }));
       try {
         const review = await client.request("resource.review", source.current, {
           signal: controller.signal,
         });
         if (controller.signal.aborted || !mounted.current) return;
-        setState((previous) => ({ phase: "ready", review, changed: previous?.changed }));
+        setState((previous) => ({
+          phase: "ready",
+          review,
+          changed: previous?.changed,
+          unknownOutcome: unknownOutcome.current,
+        }));
         if (review.refusal && !review.dryRunUnsupported) refusal.current(review.refusal);
       } catch (error) {
         if (controller.signal.aborted || !mounted.current) return;
-        setState({ phase: "failed", error: requestError(error) });
+        setState({
+          phase: "failed",
+          error: requestError(error),
+          unknownOutcome: unknownOutcome.current,
+        });
       }
     },
     [client],
@@ -107,11 +120,21 @@ export function useReview(
     setState((previous) => ({ ...previous, phase: "applying" }));
     try {
       const result = await client.request("resource.apply", params);
-      if (mounted.current && applyParams.current === params)
-        setState((previous) => ({ ...previous, phase: "applied", result }));
+      if (mounted.current && applyParams.current === params) {
+        unknownOutcome.current = false;
+        setState((previous) => ({
+          ...previous,
+          phase: "applied",
+          result,
+          pending: false,
+          unknownOutcome: false,
+        }));
+      }
     } catch (error) {
       if (!mounted.current || applyParams.current !== params) return;
       const failure = requestError(error);
+      if (failure.code === "disconnected" || failure.code === "unavailable")
+        unknownOutcome.current = true;
       if (failure.code === "not_connected" && stateRef.current?.pending) {
         setState((previous) => ({ ...previous, phase: "disconnected" }));
         return;
@@ -121,7 +144,8 @@ export function useReview(
         setState((previous) => ({ ...previous, phase: "ready", pending: false, error: failure }));
         return;
       }
-      if (failure.code === "conflict") {
+      if (failure.code === "conflict" && dialogOpen.current) {
+        applyParams.current = undefined;
         await check(true);
         return;
       }
@@ -137,7 +161,9 @@ export function useReview(
               : "refused",
         error: failure,
         pending: failure.code === "disconnected",
+        unknownOutcome: unknownOutcome.current,
       }));
+      if (failure.code !== "disconnected") applyParams.current = undefined;
     }
   }, [client, check]);
   useLayoutEffect(() => {
@@ -193,6 +219,7 @@ export function useReview(
   useEffect(() => {
     if (state?.phase !== "applied") return;
     const finish = () => {
+      dialogOpen.current = false;
       setOpen(false);
       setState(undefined);
       applyParams.current = undefined;
@@ -206,6 +233,8 @@ export function useReview(
     return () => clearTimeout(timer);
   }, [state?.phase, state?.result, version]);
   const end = useCallback(() => {
+    unknownOutcome.current = false;
+    dialogOpen.current = false;
     applyParams.current = undefined;
     source.current = undefined;
     abort.current?.abort();
@@ -219,8 +248,12 @@ export function useReview(
     state,
     connection,
     pending: !!state?.pending,
+    unknownOutcome: !!state?.unknownOutcome,
     end,
     begin: (edit: ResourceEdit) => {
+      unknownOutcome.current = false;
+      dialogOpen.current = true;
+      applyParams.current = undefined;
       source.current = edit;
       setState(undefined);
       setOpen(true);
@@ -229,6 +262,7 @@ export function useReview(
     check: () => void check(),
     close: () => {
       if (state?.phase === "applying") return;
+      dialogOpen.current = false;
       setOpen(false);
       abort.current?.abort();
     },
@@ -242,7 +276,12 @@ export function useReview(
         !source.current
       )
         return;
-      applyParams.current = { ...source.current, base: review.before, manifest: review.desired };
+      applyParams.current = {
+        ...source.current,
+        base: review.before,
+        manifest: review.desired,
+        expected: review.after,
+      };
       void sendApply();
     },
   };

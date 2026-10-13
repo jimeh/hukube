@@ -18,7 +18,10 @@ const workspace = {
   openResource: () => {},
 };
 const object = { metadata: { name: "web", uid: "u" } };
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  workspace.types.clear();
+});
 function setup(
   type = "configmaps",
   answer?: unknown,
@@ -154,7 +157,7 @@ it.each(["forbidden", "conflict", "unavailable"] as const)("reports delete %s", 
       ? "Not permitted"
       : code === "conflict"
         ? "Nothing was deleted."
-        : "API answer",
+        : "The delete may or may not have happened.",
   );
   expect(h.closed).not.toHaveBeenCalled();
 });
@@ -229,7 +232,7 @@ it.each([false, true])("explains finalizers (terminating: %s)", (terminating) =>
   ).toBeDefined();
 });
 it("uses singular Resource counts for an owned Resource and a CRD", () => {
-  workspace.types.set("web", { kind: "Widget", count: 1 });
+  workspace.types.set("web", { kind: "Widget", count: 1, state: "ready" });
   setup("customresourcedefinitions.apiextensions.k8s.io", undefined, {
     sections: [
       {
@@ -270,3 +273,41 @@ it("counts owned kinds without guessing the plural of a Cluster-supplied name", 
   } as Related);
   expect(screen.getByText("It owns 2 Resources: Policy (2).")).toBeDefined();
 });
+
+it.each(["conflict", "forbidden", "invalid", "not_found"] as const)(
+  "keeps a lost delete outcome unknown when the repeat answers %s",
+  async (code) => {
+    const h = setup(
+      "configmaps",
+      new EngineRequestError({ code: "disconnected", message: "lost" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByText(/Lost the connection to the Engine while deleting/);
+    h.setAnswer(new EngineRequestError({ code, message: "API answer" }));
+    h.reconnect();
+    const alert = await screen.findByRole("alert");
+    await waitFor(() =>
+      expect(alert.textContent).toContain(
+        code === "conflict"
+          ? "The connection was lost while deleting. The Resource may have been deleted and then replaced by a new one of the same name."
+          : "The connection was lost during an earlier attempt, so the delete may already have happened.",
+      ),
+    );
+    expect(alert.textContent).not.toContain("Nothing was deleted");
+    expect(h.requests).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each(["missing", "syncing", "forbidden", "failed"])(
+  "does not state a CRD count when its type is %s",
+  (state) => {
+    if (state !== "missing") workspace.types.set("web", { kind: "Widget", count: 0, state });
+    setup("customresourcedefinitions.apiextensions.k8s.io");
+    expect(
+      screen.getByText(
+        `This deletes every ${state === "missing" ? "Resource of this type" : "Widget"} in the Cluster. The number of Resources is not known.`,
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/0 Resources/)).toBeNull();
+  },
+);

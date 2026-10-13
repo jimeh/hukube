@@ -27,6 +27,7 @@ export function ReviewDialog({
   onBack: () => void;
 }) {
   const back = useRef<HTMLButtonElement>(null);
+  const returningToEditor = useRef(false);
   const state = controller.state;
   const review = state?.review;
   const busy = state?.phase === "applying" || state?.phase === "applied";
@@ -42,8 +43,8 @@ export function ReviewDialog({
     (!refusal || unsupported);
   const close = () => {
     if (busy) return;
+    returningToEditor.current = true;
     controller.close();
-    onBack();
   };
   const status =
     controller.connection !== "open"
@@ -58,6 +59,12 @@ export function ReviewDialog({
   return (
     <Dialog
       open={controller.open}
+      onOpenChangeComplete={(open) => {
+        if (!open && returningToEditor.current) {
+          returningToEditor.current = false;
+          onBack();
+        }
+      }}
       onOpenChange={(open) => {
         if (!open) close();
       }}
@@ -82,7 +89,9 @@ export function ReviewDialog({
         >
           {state?.changed && (
             <p className="text-warning">
-              The Resource changed on the Cluster while you were reviewing. Nothing was applied.
+              {state.unknownOutcome
+                ? "The connection was lost while this edit was being applied, so it may already have been applied. This review shows the Cluster as it is now."
+                : "The Resource changed on the Cluster while you were reviewing. Nothing was applied."}
             </p>
           )}
           {refusal && !unsupported && (
@@ -97,7 +106,13 @@ export function ReviewDialog({
               {refusalLines(refusal).map((line, i) => (
                 <p key={i}>{line}</p>
               ))}
-              {state?.phase === "refused" && <p>Nothing was applied.</p>}
+              {state?.phase === "refused" && (
+                <p>
+                  {state.unknownOutcome
+                    ? "The connection was lost during an earlier attempt, so the edit may already have been applied."
+                    : "Nothing was applied."}
+                </p>
+              )}
             </div>
           )}
           {unsupported && (
@@ -112,6 +127,12 @@ export function ReviewDialog({
                   ? "The Manifest is too large to edit in hukube. Use kubectl."
                   : state.error?.message}
               </p>
+              {state.unknownOutcome && (
+                <p>
+                  The connection was lost during an earlier attempt, so the edit may already have
+                  been applied.
+                </p>
+              )}
               {!["too_large", "not_found"].includes(state.error?.code ?? "") && (
                 <Button variant="outline" onClick={controller.check}>
                   Try again

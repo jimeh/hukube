@@ -137,6 +137,7 @@ it("checks before showing the accepted diff, focuses Back, and applies the revie
       ...edit,
       base: { data: { greeting: "cluster" } },
       manifest: { data: { greeting: "mine", untouched: "cluster" } },
+      expected: ready.after,
     }),
   );
   h.rerender({ metadata: { resourceVersion: "2" } });
@@ -361,3 +362,37 @@ it("names a refusal without an API server reason as hukube's refusal", async () 
   harness({ ...ready, refusal: { code: "invalid", message: "identity changed" } });
   expect(await screen.findByText("This edit cannot be applied")).toBeDefined();
 });
+
+it("keeps a lost apply outcome unknown when a repeat conflicts with the dialog open", async () => {
+  const h = harness(ready, failure("disconnected"));
+  fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+  await screen.findByText(/Lost the connection/);
+  h.setApply(failure("conflict"));
+  h.reconnect();
+  const warning = await screen.findByText(
+    "The connection was lost while this edit was being applied, so it may already have been applied. This review shows the Cluster as it is now.",
+  );
+  expect(warning.classList.contains("text-warning")).toBe(true);
+  expect(screen.queryByText(/Nothing was applied/)).toBeNull();
+  expect(h.request.mock.calls.filter(([method]) => method === "resource.review")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  await screen.findByText("The Cluster accepts this edit.");
+  expect(screen.queryByText(/may already have been applied/)).toBeNull();
+});
+
+it.each(["forbidden", "invalid", "not_found"] as const)(
+  "keeps a lost apply outcome unknown when a repeat is refused with %s",
+  async (code) => {
+    const h = harness(ready, failure("disconnected"));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+    await screen.findByText(/Lost the connection/);
+    h.setApply(failure(code));
+    h.reconnect();
+    await screen.findByText(
+      "The connection was lost during an earlier attempt, so the edit may already have been applied.",
+    );
+    expect(screen.queryByText(/Nothing was applied/)).toBeNull();
+    expect(h.request.mock.calls.filter(([method]) => method === "resource.review")).toHaveLength(1);
+  },
+);

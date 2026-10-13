@@ -197,6 +197,47 @@ it("drops the pending apply when the Facet unmounts", async () => {
   await act(async () => {});
   expect(h.request.mock.calls.filter(([method]) => method === "resource.apply")).toHaveLength(1);
 });
+it.each(["conflict", "forbidden", "not_found"] as const)(
+  "keeps a warning without a background review when a closed dialog's repeat answers %s",
+  async (code) => {
+    const h = setup();
+    await pendingApply();
+    h.setApply(new EngineRequestError({ code, message: "API answer" }));
+    h.reconnect();
+    const warning = await screen.findByText(
+      "hukube could not confirm whether your apply went through. Review changes shows the Cluster as it is now.",
+    );
+    expect(warning.closest("[data-notice]")?.getAttribute("data-notice")).toBe("warning");
+    expect(h.request.mock.calls.filter(([method]) => method === "resource.review")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    h.props.manifest = { stale: false, data: { deleted: true } };
+    h.rerender();
+    expect(screen.getByText(/hukube could not confirm/)).toBeDefined();
+    h.props.manifest = { stale: false, data: { object: live } };
+    h.rerender();
+    fireEvent.change(screen.getByRole("textbox", { name: "Manifest" }), {
+      target: { value: "data:\n  greeting: next\n" },
+    });
+    expect(screen.getByText(/hukube could not confirm/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+    await within(screen.getByRole("dialog")).findByText("The Cluster accepts this edit.");
+    expect(screen.queryByText(/hukube could not confirm/)).toBeNull();
+    h.unmount();
+  },
+);
+it("keeps the review closed for a non-finite Manifest and focuses its issue", async () => {
+  const h = setup();
+  await editText();
+  fireEvent.change(screen.getByRole("textbox", { name: "Manifest" }), {
+    target: { value: "spec:\n  replicas: .inf\n" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(h.request).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Manifest" }));
+  expect(screen.getByText(/A Manifest cannot hold this number/)).toBeDefined();
+  h.unmount();
+});
 it("returns focus to Edit after a clean Cancel", async () => {
   const h = setup();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
