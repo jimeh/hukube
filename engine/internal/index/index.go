@@ -79,8 +79,9 @@ type Change struct {
 // Store indexes Resource metadata by Resource Type. It is safe for concurrent
 // use.
 type Store struct {
-	mu      sync.RWMutex
-	types   map[protocol.TypeKey]map[string]Meta
+	mu    sync.RWMutex
+	types map[protocol.TypeKey]map[string]Meta
+	// owned maps an owner UID to the Resources whose references name it.
 	owned   map[string]map[Ref]struct{}
 	changed notify.Keyed[protocol.TypeKey]
 }
