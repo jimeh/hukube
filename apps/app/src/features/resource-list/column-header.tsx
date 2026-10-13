@@ -17,6 +17,7 @@ import {
   ContextMenuContent,
   ContextMenuGroup,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@hukube/ui/components/context-menu";
 import { cn } from "@hukube/ui/lib/utils";
@@ -29,10 +30,10 @@ import {
   moveColumn,
   moveColumnTo,
   showColumn,
-  type ResolvedColumnLayout,
   type StoredColumnLayout,
 } from "./column-layout.ts";
 import type { ListColumn } from "./columns.ts";
+import { ColumnMenuItems, type ColumnMenuProps } from "./column-menu.tsx";
 
 const sensors = [
   PointerSensor.configure({
@@ -47,11 +48,9 @@ const plugins = [
   PreventSelection,
 ];
 
-interface ColumnHeadersProps {
-  layout: ResolvedColumnLayout;
+interface ColumnHeadersProps extends ColumnMenuProps {
   sort: Sort;
   onSort: (sort: Sort) => void;
-  onEdit: (layout: StoredColumnLayout) => void;
 }
 
 /** Headers stay aligned with the cells until the column is dropped. */
@@ -61,6 +60,8 @@ export function ColumnHeaders({
   onSort,
   onEdit,
   scrollRef,
+  allNamespaces,
+  hasStored,
 }: ColumnHeadersProps & { scrollRef: RefObject<HTMLDivElement | null> }) {
   const [marker, setMarker] = useState<{ id: string; edge: "left" | "right" }>();
   return (
@@ -106,6 +107,8 @@ export function ColumnHeaders({
           sort={sort}
           onSort={onSort}
           onEdit={onEdit}
+          allNamespaces={allNamespaces}
+          hasStored={hasStored}
           marker={marker?.id === column.id ? marker.edge : undefined}
         />
       ))}
@@ -113,7 +116,7 @@ export function ColumnHeaders({
   );
 }
 
-/** A sortable header that can be dragged, with a menu to hide or move its column. */
+/** A sortable header with sorting and column customization in its menu. */
 function ColumnHeader({
   column,
   index,
@@ -122,6 +125,8 @@ function ColumnHeader({
   onSort,
   onEdit,
   marker,
+  allNamespaces,
+  hasStored,
 }: ColumnHeadersProps & {
   column: ListColumn;
   index: number;
@@ -129,7 +134,7 @@ function ColumnHeader({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const targetRef = useRef<HTMLDivElement>(null);
-  useSortable({
+  const { isDragging } = useSortable({
     element: ref,
     target: targetRef,
     id: column.id,
@@ -163,8 +168,10 @@ function ColumnHeader({
                 onSort({ ...by, desc: active ? !sort.desc : false });
               }}
               className={cn(
-                "flex h-full w-full min-w-0 items-center gap-1 text-left font-sans text-xs outline-none select-none hover:text-foreground focus-visible:text-foreground",
+                "flex h-full w-full min-w-0 items-center gap-1 text-left font-sans text-xs outline-none select-none hover:text-foreground focus-visible:text-foreground data-[dnd-placeholder]:opacity-40",
                 column.numeric && "justify-end",
+                isDragging &&
+                  "rounded-md bg-background px-2 text-foreground shadow-md ring-1 ring-border",
               )}
             />
           }
@@ -180,11 +187,17 @@ function ColumnHeader({
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuGroup>
+            <ContextMenuItem onClick={() => onSort({ ...by, desc: false })}>
+              Sort ascending
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => onSort({ ...by, desc: true })}>
+              Sort descending
+            </ContextMenuItem>
             <ContextMenuItem
               disabled={layout.shown.length === 1}
               onClick={() => edit(showColumn(layout, column.id, false))}
             >
-              Hide
+              Hide column
             </ContextMenuItem>
             <ContextMenuItem disabled={index === 0} onClick={() => move(-1)}>
               Move left
@@ -193,6 +206,14 @@ function ColumnHeader({
               Move right
             </ContextMenuItem>
           </ContextMenuGroup>
+          <ContextMenuSeparator />
+          <ColumnMenuItems
+            context
+            layout={layout}
+            allNamespaces={allNamespaces}
+            hasStored={hasStored}
+            onEdit={onEdit}
+          />
         </ContextMenuContent>
       </ContextMenu>
       {marker !== undefined && (

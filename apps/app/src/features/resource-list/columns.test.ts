@@ -102,13 +102,19 @@ describe("growWidths", () => {
       const first = growWidths(none, named, [row("a", ["Running"])]);
       expect(first.get(`cell:${name}`)).toBe(name.length + 3);
       expect(growWidths(first, named, [row("a", ["Running"])])).toBe(first);
-      expect(gridLayout(named, first, undefined).template).toBe(`${name.length + 3}ch`);
+      expect(gridLayout(named, first, undefined).template).toBe(`${name.length + 3}ch 2rem`);
     },
   );
 });
 
 describe("gridLayout", () => {
   const served = [{ name: "Status", type: "string", priority: 0 }];
+  it("reserves the action cell even while no columns have loaded", () => {
+    expect(gridLayout([], none, undefined)).toEqual({
+      template: "minmax(0px, 1fr) 2rem",
+      minWidth: "calc(0px + 2rem + 2.25rem)",
+    });
+  });
   it("sizes the resolved order with Name taking spare width", () => {
     const layout = resolveColumnLayout({
       type: "pods",
@@ -119,8 +125,8 @@ describe("gridLayout", () => {
       stored: null,
     });
     expect(gridLayout(layout.shown, new Map([["cell:Status", 17]]), layout.spare)).toEqual({
-      template: "minmax(12rem, 2fr) minmax(8rem, 1fr) 17ch 5rem",
-      minWidth: "calc(12rem + 8rem + 17ch + 5rem + 3.75rem)",
+      template: "minmax(12rem, 2fr) minmax(8rem, 1fr) 17ch 5rem 2rem",
+      minWidth: "calc(12rem + 8rem + 17ch + 5rem + 2rem + 4.5rem)",
     });
   });
   it("leaves out Namespace when narrowed, sizing a column without cells by its header", () => {
@@ -133,8 +139,8 @@ describe("gridLayout", () => {
       stored: null,
     });
     expect(gridLayout(layout.shown, none, layout.spare)).toEqual({
-      template: "minmax(12rem, 2fr) 9ch 5rem",
-      minWidth: "calc(12rem + 9ch + 5rem + 3rem)",
+      template: "minmax(12rem, 2fr) 9ch 5rem 2rem",
+      minWidth: "calc(12rem + 9ch + 5rem + 2rem + 3.75rem)",
     });
   });
   it("gives Message the spare width and sizes a shown Name by content", () => {
@@ -142,9 +148,9 @@ describe("gridLayout", () => {
     const name = { id: "name", source: "name" as const, name: "Name", numeric: false };
     const widths = growWidths(none, [name, ...columns], [row("a-long-resource-name", ["hello"])]);
     expect(gridLayout([name, ...columns], widths, "cell:Message").template).toBe(
-      "20ch minmax(12rem, 2fr)",
+      "20ch minmax(12rem, 2fr) 2rem",
     );
-    expect(gridLayout([name], widths, "name").template).toBe("minmax(12rem, 2fr)");
+    expect(gridLayout([name], widths, "name").template).toBe("minmax(12rem, 2fr) 2rem");
   });
   it("keeps Name and a served cell called Name at different widths", () => {
     const layout = resolveColumnLayout({
@@ -159,7 +165,7 @@ describe("gridLayout", () => {
     expect(widths.get("name")).toBe(18);
     expect(widths.get("cell:Name")).toBe(7);
     expect(gridLayout(layout.shown, widths, layout.spare).template).toBe(
-      "minmax(12rem, 2fr) 7ch 5rem",
+      "minmax(12rem, 2fr) 7ch 5rem 2rem",
     );
   });
 });

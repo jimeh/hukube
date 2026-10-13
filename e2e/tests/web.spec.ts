@@ -123,7 +123,7 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
   await sidebar.getByRole("button", { name: /^Service \d+$/ }).click();
   const panel = page.getByRole("tabpanel", { name: "services" });
   const headers = panel.getByRole("columnheader");
-  const columns = panel.getByRole("button", { name: "Columns", exact: true });
+  const columns = panel.getByRole("button", { name: "Customize columns", exact: true });
   const defaults = ["Name", "Namespace", "Type", "Cluster-IP", "External-IP", "Port(s)", "Age"];
   // Read through another client so optimistic rendering cannot stand in for
   // persistence, including when resetting before the page closes.
@@ -138,7 +138,7 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       const otherPanel = other.getByRole("tabpanel", { name: "services" });
       await expect(otherPanel.getByRole("columnheader")).toHaveText(expected);
       if (resetToDefault) {
-        await otherPanel.getByRole("button", { name: "Columns", exact: true }).click();
+        await otherPanel.getByRole("button", { name: "Customize columns", exact: true }).click();
         await expect(other.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
       }
     } finally {
@@ -261,6 +261,24 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     await expect(panel.locator("[data-column-drop-marker]")).toHaveCount(0);
     await panel.getByRole("columnheader", { name: "Name", exact: true }).click();
 
+    await externalIP.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Sort descending", exact: true }).click();
+    await expect(externalIP).toHaveAttribute("aria-sort", "descending");
+    await externalIP.click({ button: "right" });
+    const namespaceItem = page.getByRole("menuitemcheckbox", { name: "Namespace", exact: true });
+    await namespaceItem.click();
+    await expect(namespaceItem).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await expect(panel.getByRole("columnheader", { name: "Namespace", exact: true })).toBeVisible();
+    await externalIP.click({ button: "right" });
+    await namespaceItem.click();
+    await expect(namespaceItem).toHaveAttribute("aria-checked", "false");
+    await page.keyboard.press("Escape");
+    await expect(panel.getByRole("columnheader", { name: "Namespace", exact: true })).toHaveCount(
+      0,
+    );
+    await page.keyboard.press("Escape");
+
     const age = panel.getByRole("columnheader", { name: "Age", exact: true });
     await age.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Move left" }).click();
@@ -308,6 +326,15 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       )
       .toBeLessThanOrEqual(1);
     expect(await scroller.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+    await expect(columns).toBeVisible();
+    const customize = (await columns.boundingBox())!;
+    const last = (await headers.last().boundingBox())!;
+    expect(customize.x + customize.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect(customize.x).toBeGreaterThanOrEqual(bounds.x);
+    expect(last.x + last.width).toBeLessThanOrEqual(customize.x);
+    const lastCell = panel.getByRole("grid").getByRole("row").first().getByRole("gridcell").last();
+    const cell = (await lastCell.boundingBox())!;
+    expect(cell.x + cell.width).toBeLessThanOrEqual(customize.x);
     const end = (await ports.boundingBox())!;
     await page.mouse.move(end.x + end.width - 2, end.y + end.height / 2, { steps: 8 });
     await page.mouse.up();
