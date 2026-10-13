@@ -8,6 +8,7 @@ import {
 } from "@hukube/ui/components/alert-dialog";
 import { Button } from "@hukube/ui/components/button";
 import { useUnsavedEdits } from "./unsaved-edits.ts";
+import { isRunning, useExecSessions } from "../exec/sessions.ts";
 
 export function UnsavedGuard() {
   const guard = useUnsavedEdits((state) => state.guard);
@@ -15,7 +16,11 @@ export function UnsavedGuard() {
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!useUnsavedEdits.getState().entries.size) return;
+      if (
+        !useUnsavedEdits.getState().entries.size &&
+        ![...useExecSessions.getState().entries.values()].some(isRunning)
+      )
+        return;
       event.preventDefault();
       event.returnValue = "";
     };

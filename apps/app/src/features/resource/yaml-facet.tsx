@@ -24,7 +24,7 @@ import {
 } from "../edit/session.ts";
 import { parseManifest, metadata } from "../edit/yaml.ts";
 import { fieldIssue, refusalLines } from "../edit/field-paths.ts";
-import { guardResource, useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { copyText } from "../edit/clipboard.ts";
 import { useReview } from "../edit/use-review.ts";
 import { ReviewDialog } from "../edit/review-dialog.tsx";
@@ -160,7 +160,7 @@ export function YamlFacet({
     });
   };
   const cancel = () =>
-    guardResource(panelId, () => {
+    guardPanel(panelId, () => {
       review.end();
       focusEdit.current = true;
       setSession(undefined);

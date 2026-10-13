@@ -54,9 +54,19 @@ func Run(ctx context.Context, c Cluster, idx Index, p protocol.ExecParams, input
 	defer sizes.Close()
 	changed, stop := idx.Changed("pods")
 	defer stop()
+	// The index is empty while the Engine lists Pods, at its start and whenever
+	// it lists them again, so only the Cluster can say that a Pod is gone.
 	present := func() bool {
-		meta, ok := idx.Get("pods", p.Namespace+"/"+p.Pod)
-		return ok && meta.UID == p.UID
+		if meta, ok := idx.Get("pods", p.Namespace+"/"+p.Pod); ok {
+			return meta.UID == p.UID
+		}
+		rctx, cancel := context.WithTimeout(ctx, timing.Settle)
+		defer cancel()
+		pod, err := c.ReadPod(rctx, p.Namespace, p.Pod)
+		if err != nil {
+			return !apierrors.IsNotFound(err)
+		}
+		return string(pod.UID) == p.UID
 	}
 	if !present() {
 		return deleted()

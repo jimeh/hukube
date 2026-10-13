@@ -11,7 +11,7 @@ export interface ResourcePanelParams {
   preview?: boolean;
 }
 
-export type PanelComponent = "list" | "resource";
+export type PanelComponent = "list" | "resource" | "exec";
 
 interface OpenPanelOptions<P> {
   id: string;

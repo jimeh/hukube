@@ -40,6 +40,7 @@ const workspace: WorkspaceValue = {
   active: true,
   types: new Map(),
   openResource: vi.fn<WorkspaceValue["openResource"]>(),
+  openExecSession: () => {},
   openList: vi.fn<WorkspaceValue["openList"]>(),
 };
 function panel(
