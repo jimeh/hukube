@@ -6,12 +6,14 @@ import { WorkerEngineClient } from "./worker-client.ts";
 class FakeWorker {
   static latest: FakeWorker;
   sent: ToWorker[] = [];
+  transfers: Transferable[][] = [];
   onmessage: ((event: MessageEvent<FromWorker>) => void) | null = null;
   constructor() {
     FakeWorker.latest = this;
   }
-  postMessage(msg: ToWorker) {
-    this.sent.push(msg);
+  postMessage(msg: ToWorker, transfer?: Transferable[]) {
+    if (transfer) this.transfers.push(transfer);
+    this.sent.push(transfer ? structuredClone(msg, { transfer }) : msg);
   }
   terminate() {}
   receive(msg: FromWorker) {
@@ -158,3 +160,46 @@ it.each(["connecting", "reconnecting", "outdated", "closed"] as const)(
     client.close();
   },
 );
+
+it("transfers Exec input and resize to the Worker and defers byte acknowledgements until the listener settles", async () => {
+  const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+  const worker = FakeWorker.latest;
+  let resolve!: () => void;
+  const data = vi.fn<() => Promise<void>>(
+    () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+  );
+  const stream = client.openStream(
+    "pod.exec",
+    { cluster: "c", namespace: "ns", pod: "p", uid: "u", container: "main", cols: 80, rows: 24 },
+    { data, event: () => {}, gap: () => {}, end: () => {} },
+  );
+  const opened = worker.sent[1]!;
+  if (opened.kind !== "stream-open") throw new Error("missing stream");
+  const input = new Uint8Array([255, 0, 42]);
+  const buffer = input.buffer;
+  stream.write(input);
+  stream.resize(132, 43);
+  expect(input.byteLength).toBe(0);
+  expect(worker.transfers).toEqual([[buffer]]);
+  expect(worker.sent.at(-2)).toEqual({
+    kind: "stream-write",
+    id: opened.id,
+    data: new Uint8Array([255, 0, 42]),
+  });
+  expect(worker.sent.at(-1)).toEqual({ kind: "stream-resize", id: opened.id, cols: 132, rows: 43 });
+  const output = new Uint8Array([0, 128, 255]);
+  worker.receive({ kind: "stream-data", id: opened.id, data: output, bytes: 4, token: 1 });
+  expect(data).toHaveBeenCalledWith(output);
+  expect(worker.sent.filter((message) => message.kind === "stream-ack")).toEqual([]);
+  resolve();
+  await Promise.resolve();
+  expect(worker.sent.at(-1)).toEqual({ kind: "stream-ack", id: opened.id, token: 1, bytes: 4 });
+  data.mockImplementation(() => Promise.reject(new Error("parse failure")));
+  worker.receive({ kind: "stream-data", id: opened.id, data: output, bytes: 4, token: 2 });
+  await Promise.resolve();
+  expect(worker.sent.at(-1)).toEqual({ kind: "stream-ack", id: opened.id, token: 2, bytes: 8 });
+  client.close();
+});

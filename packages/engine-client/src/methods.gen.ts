@@ -7,6 +7,7 @@ import type {
   ClusterStatus,
   DeleteParams,
   EditReview,
+  ExecParams,
   FindParams,
   FindResult,
   LogStreamParams,
@@ -47,6 +48,7 @@ export interface Topics {
 }
 
 export interface Streams {
+  "pod.exec": { params: ExecParams; event: undefined };
   "resource.logs": { params: LogStreamParams; event: LogStreamStatus };
 }
 

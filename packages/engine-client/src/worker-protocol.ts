@@ -12,6 +12,8 @@ export type ToWorker =
   | { kind: "unsubscribe"; id: number }
   | { kind: "stream-open"; id: number; method: StreamMethod; params: unknown }
   | { kind: "stream-pause" | "stream-resume" | "stream-close"; id: number }
+  | { kind: "stream-write"; id: number; data: Uint8Array }
+  | { kind: "stream-resize"; id: number; cols: number; rows: number }
   | { kind: "stream-ack"; id: number; token: number; bytes: number }
   | { kind: "close" };
 
