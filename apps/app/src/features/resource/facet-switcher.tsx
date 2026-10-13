@@ -30,8 +30,19 @@ export function FacetSwitcher({
   setControls: (element: HTMLDivElement | null) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState(false);
+  const [edges, setEdges] = useState({ start: false, end: false });
+  const measureEdges = useCallback(() => {
+    const container = scroller.current;
+    if (!container) return;
+    const start = container.scrollLeft > 0;
+    const end = container.scrollLeft + container.clientWidth < container.scrollWidth - 1;
+    setEdges((previous) =>
+      previous.start === start && previous.end === end ? previous : { start, end },
+    );
+  }, []);
   const reveal = useCallback(() => {
     const container = scroller.current;
     const tab = list.current?.querySelector<HTMLElement>('[aria-selected="true"]');
@@ -46,20 +57,41 @@ export function FacetSwitcher({
     const tabs = list.current;
     if (!container || !tabs) return;
     const measure = () => {
-      setOverflow(container.scrollWidth > container.clientWidth);
+      const button = more.current;
+      const gap = button
+        ? parseFloat(getComputedStyle(container.parentElement!).columnGap) || 0
+        : 0;
+      const availableWidth = container.clientWidth + (button ? button.offsetWidth + gap : 0);
+      setOverflow(tabs.scrollWidth > availableWidth);
       reveal();
+      measureEdges();
     };
     const observer = new ResizeObserver(measure);
     observer.observe(container);
     observer.observe(tabs);
     measure();
-    return () => observer.disconnect();
-  }, [reveal]);
-  useLayoutEffect(reveal);
+    container.addEventListener("scroll", measureEdges);
+    return () => {
+      observer.disconnect();
+      container.removeEventListener("scroll", measureEdges);
+    };
+  }, [reveal, measureEdges]);
+  useLayoutEffect(() => {
+    reveal();
+    measureEdges();
+    // Tab content, selection, and button visibility change geometry. Scrolling must not reveal the tab.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [available, selected, overflow, reveal, measureEdges]);
   return (
     <div className="@container/switcher flex h-8 shrink-0 items-center gap-2 border-b px-3">
       <div
         ref={scroller}
+        style={{
+          maskImage:
+            edges.start || edges.end
+              ? `linear-gradient(to right, ${edges.start ? "transparent, black 12px" : "black"}, ${edges.end ? "black calc(100% - 12px), transparent" : "black"})`
+              : undefined,
+        }}
         className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <TabsList ref={list} variant="line" aria-label="Facets" activateOnFocus>
@@ -79,6 +111,7 @@ export function FacetSwitcher({
         <DropdownMenu>
           <DropdownMenuTrigger
             render={<Button variant="ghost" size="icon-sm" />}
+            ref={more}
             aria-label="More Facets"
           >
             <HugeiconsIcon icon={MoreHorizontalIcon} aria-hidden="true" />

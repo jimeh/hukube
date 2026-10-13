@@ -247,6 +247,10 @@ it("offers every Facet in More Facets only while overflowing and changes the URI
     scrollWidth: { configurable: true, value: 300 },
     clientWidth: { configurable: true, value: 100 },
   });
+  Object.defineProperty(screen.getByRole("tablist", { name: "Facets" }), "scrollWidth", {
+    configurable: true,
+    value: 300,
+  });
   scroller.getBoundingClientRect = () => ({ left: 0, right: 100 }) as DOMRect;
   screen.getByRole("tab", { name: "Related, 12 Resources" }).getBoundingClientRect = () =>
     ({ left: 200, right: 280 }) as DOMRect;
@@ -270,4 +274,85 @@ it("offers every Facet in More Facets only while overflowing and changes the URI
   Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 400 });
   act(() => observers.find((observer) => observer.elements.includes(scroller))!.callback());
   expect(screen.queryByRole("button", { name: "More Facets" })).toBeNull();
+});
+
+function measuredSwitcher() {
+  const observers: { callback: () => void; elements: Element[] }[] = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        this.observer = { callback, elements: [] };
+        observers.push(this.observer);
+      }
+      observer: { callback: () => void; elements: Element[] };
+      observe(element: Element) {
+        this.observer.elements.push(element);
+      }
+      disconnect() {}
+    },
+  );
+  const { container } = render(subscriptionPanel());
+  const scroller = container.querySelector<HTMLDivElement>(".overflow-x-auto")!;
+  // jsdom rejects calc() in mask gradients, so retain the style React assigns.
+  Object.defineProperty(scroller.style, "maskImage", {
+    configurable: true,
+    writable: true,
+    value: "",
+  });
+  const tabs = screen.getByRole("tablist", { name: "Facets" });
+  Object.defineProperty(tabs, "scrollWidth", { configurable: true, value: 300 });
+  scroller.parentElement!.style.columnGap = "8px";
+  const resize = (width: number) => {
+    Object.defineProperties(scroller, {
+      scrollWidth: { configurable: true, value: 300 },
+      clientWidth: { configurable: true, value: width },
+    });
+    act(() => observers.find((observer) => observer.elements.includes(scroller))!.callback());
+  };
+  return { scroller, resize };
+}
+
+it("fades only the hidden edges of the Facet scroller on measure and scroll", () => {
+  const { scroller, resize } = measuredSwitcher();
+  resize(100);
+  expect(scroller.style.maskImage).toBe(
+    "linear-gradient(to right, black, black calc(100% - 12px), transparent)",
+  );
+  scroller.getBoundingClientRect = () => ({ left: 0, right: 100 }) as DOMRect;
+  screen.getByRole("tab", { name: "YAML" }).getBoundingClientRect = () =>
+    ({ left: -scroller.scrollLeft, right: 45 - scroller.scrollLeft }) as DOMRect;
+  scroller.scrollLeft = 50;
+  fireEvent.scroll(scroller);
+  expect(scroller.scrollLeft).toBe(50);
+  expect(scroller.style.maskImage).toBe(
+    "linear-gradient(to right, transparent, black 12px, black calc(100% - 12px), transparent)",
+  );
+  scroller.scrollLeft = 199;
+  fireEvent.scroll(scroller);
+  expect(scroller.style.maskImage).toBe(
+    "linear-gradient(to right, transparent, black 12px, black)",
+  );
+  scroller.scrollLeft = 0;
+  resize(300);
+  expect(scroller.style.maskImage).toBe("");
+});
+
+it("shows and hides More Facets at the same width excluding its button and gap", () => {
+  const { resize } = measuredSwitcher();
+  resize(300);
+  expect(screen.queryByRole("button", { name: "More Facets" })).toBeNull();
+  resize(299);
+  Object.defineProperty(screen.getByRole("button", { name: "More Facets" }), "offsetWidth", {
+    configurable: true,
+    value: 32,
+  });
+  resize(259);
+  expect(screen.getByRole("button", { name: "More Facets" })).toBeDefined();
+  resize(260);
+  expect(screen.queryByRole("button", { name: "More Facets" })).toBeNull();
+  resize(300);
+  expect(screen.queryByRole("button", { name: "More Facets" })).toBeNull();
+  resize(299);
+  expect(screen.getByRole("button", { name: "More Facets" })).toBeDefined();
 });
