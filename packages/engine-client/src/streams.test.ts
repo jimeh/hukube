@@ -185,3 +185,14 @@ it("acknowledges exact binary frame totals only after consumption and ignores ol
   expect(next.sent).toHaveLength(1);
   conn.close();
 });
+
+it("holds back a stream that was paused before its first socket opened", async () => {
+  const connection = connect();
+  const before = sockets.length;
+  const stream = connection.openStream("resource.logs", params, listener());
+  stream.pause();
+  await Promise.resolve();
+  expect(sockets).toHaveLength(before);
+  stream.resume();
+  expect(sockets).toHaveLength(before + 1);
+});

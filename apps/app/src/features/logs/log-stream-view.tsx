@@ -125,7 +125,17 @@ function LogRun({
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
-    let socketReady = false;
+    // A previous run is sent whole on every socket, so a second socket's
+    // lines replace the first's. They are cleared when the new socket
+    // delivers something, not when it is ready, which comes after its lines.
+    let delivered = false;
+    let replaying = false;
+    const replace = () => {
+      delivered = true;
+      if (!replaying) return;
+      replaying = false;
+      document.clear();
+    };
     let pods: Map<string, string> | undefined;
     const handle = engine.openStream(
       "resource.logs",
@@ -134,15 +144,16 @@ function LogRun({
         state: (value) => {
           if (!active) return;
           setState(value);
-          if (value === "connecting" || value === "reconnecting") socketReady = false;
+          if (value === "connecting" || value === "reconnecting") replaying = previous && delivered;
         },
         event: (value) => {
           if (!active) return;
-          if (previous && value.ready && !socketReady) document.clear();
-          if (value.ready) socketReady = true;
+          if (value.sources.length) replace();
           document.status(value);
-          if (value.ready) {
-            const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
+          const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
+          // A status can be ready before a slow Pod's containers are known.
+          // Only one that lists every followed Pod says who joined and who left.
+          if (value.ready && next.size >= value.followed) {
             if (type !== "pods" && pods && !previous) {
               for (const [id, pod] of next)
                 if (!pods.has(id)) document.marker(`··· following Pod ${pod} ···`);
@@ -160,7 +171,9 @@ function LogRun({
             });
         },
         data: (lines) => {
-          if (active) document.append(lines);
+          if (!active) return;
+          replace();
+          document.append(lines);
         },
         gap: (gap) => {
           if (active)
@@ -342,7 +355,8 @@ function LogRun({
         container={container}
         previous={previous}
         hasPrevious={known.hasPrevious}
-        disabled={containers.length === 0 || end?.reason === "deleted"}
+        disabled={containers.length === 0}
+        ended={end?.reason === "deleted"}
         focus={focus}
         select={setContainer}
         setPrevious={setPrevious}

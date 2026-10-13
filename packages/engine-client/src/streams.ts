@@ -61,7 +61,7 @@ export class StreamPool {
     this.#all.add(stream);
     queueMicrotask(() => {
       if (this.#closed) stream.close();
-      else stream.resume();
+      else stream.start();
     });
     return stream;
   }
@@ -102,6 +102,8 @@ class SocketStream implements EngineStream {
   #helloTimer?: ReturnType<typeof setTimeout>;
   #attempt = 0;
   #paused = true;
+  #started = false;
+  #heldBack = false;
   #ended = false;
   #closed = false;
   constructor(
@@ -117,7 +119,13 @@ class SocketStream implements EngineStream {
   state(state: StreamState): void {
     if (!this.#closed) this.listener.state?.(state);
   }
+  /** Opens the first socket, unless the stream was paused before it could. */
+  start(): void {
+    this.#started = true;
+    if (!this.#heldBack) this.resume();
+  }
   pause(): void {
+    if (!this.#started) this.#heldBack = true;
     if (this.#closed || this.#ended || this.#paused) return;
     this.#paused = true;
     this.#disconnect();
@@ -125,7 +133,8 @@ class SocketStream implements EngineStream {
     this.state("paused");
   }
   resume(): void {
-    if (this.#closed || this.#ended || !this.#paused) return;
+    this.#heldBack = false;
+    if (!this.#started || this.#closed || this.#ended || !this.#paused) return;
     this.#paused = false;
     this.pool.acquire(this);
   }
