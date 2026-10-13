@@ -442,7 +442,7 @@ describe("a double-click on a related Resource", () => {
     cleanup();
     vi.useFakeTimers();
     clickRow();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(5000);
     render(tab("opened", pod, "yaml"));
     fireEvent.click(screen.getByRole("tablist", { name: "Facets" }), { detail: 2 });
     expect(openResource).not.toHaveBeenCalled();

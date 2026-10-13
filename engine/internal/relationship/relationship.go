@@ -332,6 +332,10 @@ func (g *Graph) ownerSection(node Node, limit int) protocol.RelatedSection {
 	paths := [][]protocol.RelatedRow{}
 	var walk func(Node, []protocol.RelatedRow, map[identity]bool)
 	finish := func(path []protocol.RelatedRow) {
+		// A Resource that names itself ends a path with no owner on it.
+		if len(path) == 0 {
+			return
+		}
 		if len(paths) >= limit {
 			section.Truncated = true
 			return
