@@ -184,17 +184,29 @@ spreadsheets, and other data grids. The list's toolbar holds filters only.
 The button makes the feature findable, and the context menu is where users
 of comparable tools look for it. Both render one checklist.
 
+Showing a column scrolls the list sideways to bring it into view, because a
+column that is hidden by default appears at the far end, which is off screen
+in a list that fills its window. A header focused from the keyboard shows the
+same focus ring as the app's other controls.
+
 The first version put a "Columns" button in the toolbar, next to the
 filters. It was moved in review (see "What changed while building").
 
 ### Drag headers with dnd-kit
 
-Headers are dragged with dnd-kit: `@dnd-kit/react` and `@dnd-kit/dom`, both
-0.5.0. A press that moves more than 5 px starts a drag, a copy of the header
-follows the pointer, a marker shows the edge where the column will land,
-releasing moves it, and Escape cancels. A press that does not move still
-sorts. Dragging toward the left or right edge scrolls the list sideways, so a
-column can be dropped on a header that was off screen when the drag started.
+Headers are dragged with dnd-kit: `@dnd-kit/react`, `@dnd-kit/dom`, and
+`@dnd-kit/collision`, all 0.5.0. A press that moves more than 5 px starts a
+drag, a copy of the header follows the pointer just below the header row, a
+marker shows the edge where the column will land, releasing moves it, and
+Escape cancels. A press that does not move still sorts. Dragging toward the
+left or right edge scrolls the list sideways, so a column can be dropped on a
+header that was off screen when the drag started.
+
+The marker is the rule for where a column lands: it sits on the edge of the
+nearest header that is nearer the pointer, and the drop puts the column
+there. While the pointer is level with the header row, anywhere past the last
+column means after it, including over the pinned button, and anywhere before
+the first means before it. A release away from the header row moves nothing.
 
 - **The newer dnd-kit API, not `@dnd-kit/core` and `@dnd-kit/sortable`.** The
   older packages last released in December 2024. `@dnd-kit/react` released
@@ -291,6 +303,13 @@ How the Event and Pod lists look at 1280 px is checked by hand on
 
 ## What changed while building
 
+- **An experience review of the running app found four things, now fixed.**
+  A drop at the right edge of a wide list failed while the pointer was over
+  the pinned button. A column shown from the checklist could appear off
+  screen. A header focused from the keyboard had no focus ring. The dragged
+  copy of a header covered the marker and the labels beside it. The review
+  also asked for the Event list to open sorted by Last Seen, which stays a
+  non-goal here.
 - **Dragging moved to dnd-kit.** The hand-rolled pointer-event drag was
   replaced on Jim's direction, because it avoided a dependency at the cost
   of the experience: a drag could not scroll the list. "Drag headers with
