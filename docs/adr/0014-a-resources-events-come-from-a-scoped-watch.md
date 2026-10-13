@@ -78,7 +78,8 @@ Resource, and its Events should stay those of the same incarnation.
 - Events about a cluster-scoped Resource need permission to list and watch
   Events in every Namespace, as `kubectl describe node` needs to list them. A
   user without it sees that they are not permitted, not an empty Facet. So
-  does a user who may list Events but not watch them.
+  does a user who may list Events but not watch them, although each retry's
+  list reaches the client for a moment before the refused watch replaces it.
 - An Event leaves the Facet when the Cluster deletes it, which by default is
   an hour after it was last updated. Keeping Events longer is the Timeline's
   job.

@@ -458,6 +458,17 @@ independent experience review.
 
 ## Risks
 
+- **A credential that may list Events but not watch them.** Every retry lists
+  first, and a completed list sends the Events before the refused watch
+  reports `forbidden`. With a short gap between the two, the Facet shows the
+  rows and the badge for about a tenth of a second, once a minute when the
+  delay has reached its maximum, and then `Not permitted` again. Holding the
+  list's answer until the watch has started would remove it.
+- **A watch the API server keeps answering with 429.** The Reflector backs
+  off and tries again without returning, so the Events stop updating and the
+  Facet shows no error until the watch starts. A refused connection had the
+  same effect and is now reported; a 429 is left alone because the remedy is
+  to ask less, and reporting it would mean another list.
 - **Two watches for each open Resource tab.** Accepted for the warning count.
   ADR-0014 names the way out if it costs too much.
 - **A hidden Monaco editor.** The YAML Facet stays mounted while hidden.
