@@ -203,6 +203,14 @@ func (r *containerReader) instance(instance string) {
 		}
 	}
 }
+
+// forbidden says what the credentials lack, in place of the API's own text.
+func (r *containerReader) forbidden() error {
+	return &protocol.ErrorDetail{
+		Code:    protocol.ErrorCodeForbidden,
+		Message: fmt.Sprintf("Your credentials cannot read Pod logs in the %s Namespace.", r.namespace),
+	}
+}
 func (r *containerReader) gap() { r.s.add(r.id, record{flags: protocol.LogRecordFlagGap}) }
 func (r *containerReader) exited(instance string) {
 	s := r.get().status
@@ -253,7 +261,7 @@ func (r *containerReader) run() {
 			r.exited(previous(snapshot.status))
 		}
 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			r.s.fail(err)
+			r.s.fail(r.forbidden())
 		} else if err != nil && !apierrors.IsBadRequest(err) {
 			r.setError(err)
 		}
@@ -295,7 +303,7 @@ func (r *containerReader) run() {
 			oldOptions := &corev1.PodLogOptions{Container: r.name, Timestamps: true, Previous: true, SinceTime: &stamp}
 			_, err := r.read(oldOptions, r.cursorInstance, r.cursorTime)
 			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-				r.s.fail(err)
+				r.s.fail(r.forbidden())
 				return
 			}
 			if err != nil {
@@ -320,7 +328,7 @@ func (r *containerReader) run() {
 			continue
 		}
 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			r.s.fail(err)
+			r.s.fail(r.forbidden())
 			return
 		}
 		if err != nil && !apierrors.IsBadRequest(err) && !apierrors.IsNotFound(err) {

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -251,8 +250,8 @@ func TestResourceLogsForbidden(t *testing.T) {
 			if e.Reason != protocol.StreamEndReasonError || e.Error == nil || e.Error.Code != protocol.ErrorCodeForbidden {
 				t.Fatalf("log permission refusal=%+v", e)
 			}
-			if allowPods && !strings.Contains(e.Error.Message, "pods/log") {
-				t.Fatalf("refused something other than logs: %+v", e)
+			if want := "Your credentials cannot read Pod logs in the " + ns + " Namespace."; allowPods && e.Error.Message != want {
+				t.Fatalf("refusal message=%q, want %q", e.Error.Message, want)
 			}
 		})
 	}
