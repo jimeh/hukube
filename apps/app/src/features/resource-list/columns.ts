@@ -103,11 +103,13 @@ export function gridLayout(
     const width = `${widths.get(column.id) ?? column.name.length + headerExtraChars}ch`;
     return [width, width];
   });
-  if (tracks.length === 0) tracks.push(["0px", "1fr"]);
-  tracks.push(["2rem", "2rem"]);
+  // The action stays at the right end, so its track takes the spare width
+  // when no column does.
+  const flexible = tracks.some(([min, max]) => min !== max);
+  tracks.push(["2rem", flexible ? "2rem" : "1fr"]);
   return {
     template: tracks.map(([min, max]) => (min === max ? min : `minmax(${min}, ${max})`)).join(" "),
     // The tracks, the gaps between them, and the padding at both ends.
-    minWidth: `calc(${tracks.length ? tracks.map(([min]) => min).join(" + ") : "0px"} + ${(tracks.length + 1) * 0.75}rem)`,
+    minWidth: `calc(${tracks.map(([min]) => min).join(" + ")} + ${(tracks.length + 1) * 0.75}rem)`,
   };
 }

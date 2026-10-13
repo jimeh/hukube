@@ -102,18 +102,28 @@ describe("growWidths", () => {
       const first = growWidths(none, named, [row("a", ["Running"])]);
       expect(first.get(`cell:${name}`)).toBe(name.length + 3);
       expect(growWidths(first, named, [row("a", ["Running"])])).toBe(first);
-      expect(gridLayout(named, first, undefined).template).toBe(`${name.length + 3}ch 2rem`);
+      expect(gridLayout(named, first, undefined).template).toBe(
+        `${name.length + 3}ch minmax(2rem, 1fr)`,
+      );
     },
   );
 });
 
 describe("gridLayout", () => {
   const served = [{ name: "Status", type: "string", priority: 0 }];
-  it("reserves the action cell even while no columns have loaded", () => {
+  // The action sits at the right end of the header, so its track takes the
+  // spare width whenever no column does.
+  it("keeps the action cell at the right end before any column has loaded", () => {
     expect(gridLayout([], none, undefined)).toEqual({
-      template: "minmax(0px, 1fr) 2rem",
-      minWidth: "calc(0px + 2rem + 2.25rem)",
+      template: "minmax(2rem, 1fr)",
+      minWidth: "calc(2rem + 1.5rem)",
     });
+  });
+  it("keeps the action cell at the right end when every column has a fixed width", () => {
+    const age = { id: "age", source: "age" as const, name: "Age", numeric: false };
+    expect(gridLayout([...listColumns(served, []), age], none, undefined).template).toBe(
+      "9ch 5rem minmax(2rem, 1fr)",
+    );
   });
   it("sizes the resolved order with Name taking spare width", () => {
     const layout = resolveColumnLayout({
