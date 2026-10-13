@@ -370,7 +370,7 @@ it("keeps a lost apply outcome unknown when a repeat conflicts with the dialog o
   h.setApply(failure("conflict"));
   h.reconnect();
   const warning = await screen.findByText(
-    "The connection was lost while this edit was being applied, so it may already have been applied. This review shows the Cluster as it is now.",
+    "The answer to an earlier apply of this edit was lost, so it may already have been applied. This review shows the Cluster as it is now.",
   );
   expect(warning.classList.contains("text-warning")).toBe(true);
   expect(screen.queryByText(/Nothing was applied/)).toBeNull();
@@ -390,7 +390,7 @@ it.each(["forbidden", "invalid", "not_found"] as const)(
     h.setApply(failure(code));
     h.reconnect();
     await screen.findByText(
-      "The connection was lost during an earlier attempt, so the edit may already have been applied.",
+      "The answer to an earlier attempt was lost, so the edit may already have been applied.",
     );
     expect(screen.queryByText(/Nothing was applied/)).toBeNull();
     expect(h.request.mock.calls.filter(([method]) => method === "resource.review")).toHaveLength(1);

@@ -611,12 +611,17 @@ The apply sends the review's `Before` as `Base`, its `Desired` as
 `Manifest`, and its `After` as `Expected` when present. A review that runs
 again sends the edit's own base and text.
 
-After a lost apply answer, a conflicting repeat reviews again only while
-the dialog is open. Its warning replaces the changed-while-reviewing line:
-"The connection was lost while this edit was being applied, so it may
-already have been applied. This review shows the Cluster as it is now."
-A refused repeat replaces "Nothing was applied." with "The connection was
-lost during an earlier attempt, so the edit may already have been applied."
+An apply's outcome is unknown once its answer was lost, whether between the
+UI and the Engine (`disconnected`) or between the Engine and the API server
+(`unavailable`). It stays unknown until an apply succeeds, a new review
+starts, or the edit is discarded. While it is unknown, a conflicting repeat
+reviews again only while the dialog is open, and its warning replaces the
+changed-while-reviewing line: "The answer to an earlier apply of this edit
+was lost, so it may already have been applied. This review shows the
+Cluster as it is now." A refused repeat replaces "Nothing was applied." with
+"The answer to an earlier attempt was lost, so the edit may already have
+been applied." A conflict is never kept as a refusal in the editor's strip,
+because it is about the Cluster and not about the text.
 
 After an apply, Edit mode ends and the editor shows the live Manifest.
 
@@ -683,11 +688,12 @@ The confirmation is an alert dialog. From the top:
 | Connection lost while deleting | "Lost the connection to the Engine while deleting. The delete may or may not have reached the Cluster. hukube sends it again when it reconnects." Stop and close, or Escape, stops the resend. |
 | Not connected                  | "Reconnecting to the Engine…"; Delete is disabled. A raced unsent request says "Not connected to the Engine. Nothing was deleted."                                                             |
 
-After a lost delete answer, a conflicting repeat instead says "The
-connection was lost while deleting. The Resource may have been deleted and
-then replaced by a new one of the same name." Other refused repeats end
-with "The connection was lost during an earlier attempt, so the delete may
-already have happened." Neither claims nothing was deleted.
+After a delete whose answer was lost, by `disconnected` or `unavailable`, a
+conflicting repeat instead says "The answer to an earlier attempt was lost.
+The Resource may have been deleted and then replaced by a new one of the
+same name." Other refused repeats end with "The answer to an earlier attempt
+was lost, so the delete may already have happened." Neither claims nothing
+was deleted.
 
 A Resource with a `deletionTimestamp` shows a `Terminating` badge in the
 header, whose tooltip says "Waiting for finalizers: a, b", or "Waiting for the Cluster

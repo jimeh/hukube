@@ -40,6 +40,14 @@ export function requestError(error: unknown): EngineRequestError {
     ? error
     : new EngineRequestError({ code: "internal", message: String(error) });
 }
+/**
+ * Whether a failed write may still have reached the Cluster: its answer was lost on the way from
+ * the Engine (disconnected) or from the API server (unavailable). Until a later attempt succeeds,
+ * nothing may then say that the write did not happen.
+ */
+export function leavesOutcomeUnknown(error: EngineRequestError): boolean {
+  return error.code === "disconnected" || error.code === "unavailable";
+}
 export function errorDetail(error: EngineRequestError): ErrorDetail {
   return {
     code:
@@ -133,8 +141,7 @@ export function useReview(
     } catch (error) {
       if (!mounted.current || applyParams.current !== params) return;
       const failure = requestError(error);
-      if (failure.code === "disconnected" || failure.code === "unavailable")
-        unknownOutcome.current = true;
+      if (leavesOutcomeUnknown(failure)) unknownOutcome.current = true;
       if (failure.code === "not_connected" && stateRef.current?.pending) {
         setState((previous) => ({ ...previous, phase: "disconnected" }));
         return;
@@ -149,7 +156,8 @@ export function useReview(
         await check(true);
         return;
       }
-      if (failure.code !== "disconnected" && failure.code !== "unavailable")
+      // A conflict is about the Cluster, not the text, so it is no refusal to show in the editor.
+      if (!leavesOutcomeUnknown(failure) && failure.code !== "conflict")
         refusal.current(errorDetail(failure));
       setState((previous) => ({
         ...previous,

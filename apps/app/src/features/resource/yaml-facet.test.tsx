@@ -189,6 +189,22 @@ it("retains the pending apply when only its dialog closes and repeats its exact 
   expect(h.controls.textContent).not.toContain("Applied");
   h.unmount();
 });
+it("shows no refusal after a closed dialog's repeat conflicted and the next review is accepted", async () => {
+  const h = setup();
+  await pendingApply();
+  h.setApply(new EngineRequestError({ code: "conflict", message: "The Resource changed" }));
+  h.reconnect();
+  await screen.findByText(/hukube could not confirm/);
+  // The same text is reviewed again and accepted, so nothing is left to refuse.
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await within(screen.getByRole("dialog")).findByText("The Cluster accepts this edit.");
+  fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.queryByText("This edit cannot be applied")).toBeNull();
+  expect(screen.queryByText(/The Resource changed/)).toBeNull();
+  expect(document.querySelector("[data-notice]")?.getAttribute("data-notice")).toBe("neutral");
+  h.unmount();
+});
 it("drops the pending apply when the Facet unmounts", async () => {
   const h = setup();
   await pendingApply();

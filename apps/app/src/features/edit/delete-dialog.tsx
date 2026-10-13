@@ -23,7 +23,7 @@ import { useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 import { clusterScope } from "../clusters/cluster-color.ts";
 import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { metadata, metadataString } from "./yaml.ts";
-import { requestError } from "./use-review.ts";
+import { leavesOutcomeUnknown, requestError } from "./use-review.ts";
 
 export function DeleteDialog({
   open,
@@ -96,7 +96,7 @@ export function DeleteDialog({
       } catch (failure) {
         if (!active.current || pending.current !== params) return;
         const detail = requestError(failure);
-        if (detail.code === "disconnected") setUnknownOutcome(true);
+        if (leavesOutcomeUnknown(detail)) setUnknownOutcome(true);
         if (detail.code === "not_connected" && checkingPending) {
           setPhase("disconnected");
           return;
@@ -288,7 +288,7 @@ export function DeleteDialog({
                 ? "Not permitted"
                 : error?.code === "conflict"
                   ? unknownOutcome
-                    ? "The connection was lost while deleting. The Resource may have been deleted and then replaced by a new one of the same name."
+                    ? "The answer to an earlier attempt was lost. The Resource may have been deleted and then replaced by a new one of the same name."
                     : `This ${kind} was replaced by a new one of the same name. Nothing was deleted.`
                   : error?.code === "not_connected"
                     ? unknownOutcome
@@ -303,8 +303,7 @@ export function DeleteDialog({
             )}
             {unknownOutcome && error?.code !== "conflict" && (
               <p>
-                The connection was lost during an earlier attempt, so the delete may already have
-                happened.
+                The answer to an earlier attempt was lost, so the delete may already have happened.
               </p>
             )}
           </div>
