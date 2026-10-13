@@ -183,6 +183,19 @@ func TestOwnershipOddShapes(t *testing.T) {
 		}
 		return fmt.Sprint(out)
 	}
+	t.Run("itself and another owner", func(t *testing.T) {
+		g, _ := fixture()
+		owner := add(g, "deployments.apps", "owner")
+		self := add(g, "pods", "self")
+		self = add(g, "pods", "self", owner, self)
+		got := []string{}
+		for _, section := range g.Related(self, DefaultLimits()) {
+			got = append(got, names(section))
+		}
+		if want := []string{"[0:owner:found 1:self:self]"}; !slices.Equal(got, want) {
+			t.Fatalf("sections = %v, want %v", got, want)
+		}
+	})
 	for size, want := range map[int][]string{
 		// A Resource that names only itself has no owner and owns nothing.
 		1: {},

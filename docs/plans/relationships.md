@@ -692,7 +692,8 @@ A double-click on a related Resource is handled as two clicks. The first
 click opens a Preview Tab in the same Pane, or brings forward a tab that was
 already open, which replaces the content under the pointer. The second click
 therefore lands in whatever Facet that tab shows, and no `dblclick` reaches
-the row. A click on a row records what it opened for one second. A second
+the row. A click on a row records what it opened for five seconds, which
+is longer than the slowest double-click an operating system allows. A second
 click of the same burst (`detail` of 2) anywhere in a Resource tab opens the
 recorded Resource as a regular tab. A click opens its Preview Tab at once,
 with no delay to wait for a second.
@@ -710,7 +711,8 @@ Two code reviews found these, and they are fixed:
   update, which undid a manual scroll. It now does so only when the Facets,
   the selection, or the layout change.
 - **A Resource that names itself as its owner** got an owners section that
-  held only itself. It now has none.
+  held only itself, or a row for itself beside its other owners. A reference
+  to itself now adds nothing.
 
 An independent review of the running app found eight UI corrections:
 
