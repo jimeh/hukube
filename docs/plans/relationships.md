@@ -392,7 +392,9 @@ Two rules, applied in this order as the row narrows:
    the showing Facet's tab is kept in view. While the list is wider than its
    space, a `More Facets` button sits after it, between the list and the
    controls. Its menu lists every Facet with its badge and marks the
-   showing one. Choosing an entry shows that Facet.
+   showing one. Choosing an entry shows that Facet. A hidden edge of the
+   scrolling container fades over 12 px with a standard `mask-image` linear
+   gradient. An edge with nothing hidden has no fade.
 
 Why: tabs that scroll are what Carbon and Material prescribe, and a menu of
 the entries is what VS Code and Chrome DevTools add. Dropping tabs that do
@@ -402,8 +404,14 @@ browser, and the menu gives a pointer without sideways scrolling a way to
 every Facet.
 
 Built from native scrolling, shadcn's `dropdown-menu` with a radio group, and
-a `ResizeObserver` that compares the list's `scrollWidth` with its
-`clientWidth`. Keyboard: the tab list stays one stop with the arrow keys, and
+a `ResizeObserver` that compares the list's `scrollWidth` with the width
+available without the menu button. When the button is showing, its
+`offsetWidth` and the row's gap are added back to the container's
+`clientWidth`, so it appears and disappears at the same Pane width. The
+same measurement and the container's `scroll` event track hidden edges:
+`scrollLeft > 0` at the start, and
+`scrollLeft + clientWidth < scrollWidth - 1` at the end. Keyboard: the tab
+list stays one stop with the arrow keys, and
 moving to a tab scrolls it into view. The menu button is the next stop.
 
 Widths: at 330 px the row has 306 px. Three tabs with both badges need about
@@ -415,7 +423,10 @@ control's label showing.
 
 One scrolling area. Each section has a heading row in the style of the
 Events header (`h-7`, `px-3`, bottom border, muted `text-xs`), then its rows.
-The owners section comes first.
+The owners section comes first. Each heading stays at the top while its
+section scrolls, with `sticky top-0`, an opaque `bg-background`, and `z-10`
+above the Resource rows. Keyboard selection scrolls a row below its
+heading so it is not covered.
 
 - **Sections.** The Facet shows the sections whose Relationship is `owns`
   and skips any other, which a later layer adds.
@@ -429,8 +440,11 @@ The owners section comes first.
 - **A Resource row has two lines** and a fixed height. The first holds the
   kind in muted text and the name in the monospace font. The name takes the
   rest of the line and truncates with the full name as its title. The second
-  line, muted and truncated with its full text as its title, holds the live
-  age, then each cell that has a value as `Column value`, joined by `·`:
+  line truncates on one line with its full plain text as its title. It holds
+  the live age, then each cell that has a value as `Column value`, joined by
+  `·`. The Namespace, age, separators, and column names are muted, while
+  each cell value uses `text-foreground`. The row's accessible name keeps
+  the same plain text:
   `3d · Ready 1/1 · Status Running · Restarts 0`. It starts with the
   Namespace when that differs from the Namespace of the tab's Resource.
 - **Why the age is on the second line.** The index always knows the age, so
@@ -440,18 +454,24 @@ The owners section comes first.
   its name in medium weight and `This <Kind>` in place of the kind. It is
   not a link.
 - **A reference that did not resolve** has the reference's kind and name in
-  muted text and the reason on its second line (see States). It is not a
-  link.
+  muted text and a fully muted reason on its second line (see States). It is
+  not a link.
 - **A `more` row** has one line of muted text, indented as the Resources it
-  counts: `2,900 more Pod Resources are not shown.`, or
-  `1 more Pod Resource is not shown.`
+  counts. If a `found` row of the same type and depth appears between it
+  and the nearest preceding row of smaller depth, it says
+  `30 older Pod Resources are not shown.` or
+  `1 older Pod Resource is not shown.` The rows are newest first, so the
+  omitted Resources are the oldest. Without such a shown sibling, it says
+  `30 Pod Resources are not shown.` or `1 Pod Resource is not shown.`
 - **Truncated owners.** A muted line under the owners section when it is
   `truncated`: `Not every owner is shown.` The owned section's `truncated`
   shows nothing more, because its `more` rows already say what is left out.
 - **Types that cannot be listed.** When the Cluster has types in state
   `forbidden`, a muted line under the last section says
   `Resources of 12 Resource Types your credentials cannot list are not
-shown.` The count comes from the Workspace's types.
+shown.` The count comes from the Workspace's types. In the empty state,
+  this qualification is part of the notice's description instead of a
+  separate line.
 
 At each width:
 
@@ -492,6 +512,12 @@ Rows behave like the rows of a Resource list:
   one. A Preview Tab replaces the Pane's Preview Tab, which is the tab the
   user is looking at when that tab is itself a preview. VS Code does the
   same when a link is followed from a preview editor.
+- **Focus after opening.** When a pointer or keyboard action opens a
+  Resource, its Related Facet takes focus on its `treegrid` when it mounts,
+  using `focus({ preventScroll: true })`. A module-level record beside the
+  double-click record holds the address just opened. Only a Facet with the
+  same Cluster, type, Namespace, and name consumes it. It selects no row.
+  A tab that was already open does not need to take focus.
 - **Selection** is remembered by row, not by position, so it stays on the
   same Resource while rows arrive and leave. A selected row that leaves
   clears the selection.
@@ -512,26 +538,26 @@ In a row about a reference, `<Kind>`, `<apiVersion>`, and `<type>` are the
 row's own. In a notice, `<Kind>` is the kind of the tab's Resource and
 `<type>` its type key.
 
-| State                                                                                                        | What shows                                                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading: no value and no error                                                                               | A heading skeleton and three two-line skeleton rows, marked busy. No count.                                                                                                                     |
-| `found` is false and the Manifest's answer is not `deleted`                                                  | The same skeleton, whether the Manifest has answered or not: the index has not caught up with the Manifest's watch. No count.                                                                   |
-| Nothing related                                                                                              | `Nothing related`. `No Resource owns this <Kind>, and it owns none. Owners and owned Resources appear here as they change.` The line about types that cannot be listed follows when it applies. |
-| Populated                                                                                                    | The sections. The count shows.                                                                                                                                                                  |
-| A large owner                                                                                                | 100 Resources of a type under one owner and a `more` row. The heading holds the full count.                                                                                                     |
-| A reference to a Resource that is gone (`missing`)                                                           | Second line: `Not found. No <Kind> with this name and UID exists.`                                                                                                                              |
-| A reference to a kind the Cluster does not serve (`unserved`)                                                | Second line: `This Cluster does not serve <apiVersion> <Kind>.`                                                                                                                                 |
-| A reference to a type the user may not list (`forbidden`)                                                    | Second line: `Your credentials cannot list <type>.`                                                                                                                                             |
-| A reference to a type the Cluster refused (`failed`)                                                         | Second line: `The Cluster cannot list <type>.`                                                                                                                                                  |
-| A reference to a type still loading (`syncing`)                                                              | Second line: `Loading <type>…`                                                                                                                                                                  |
-| Not permitted (`forbidden` error)                                                                            | `Not permitted`. `Your credentials cannot list <type>, so hukube cannot tell what this <Kind> is related to.` Replaces any rows. No count.                                                      |
-| Another error, no value yet                                                                                  | `Related Resources unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                |
-| Another error, with a value                                                                                  | A line above the sections in the destructive color, `Related Resources may be out of date: <message>`. The rows and the count stay.                                                             |
-| The Cluster is unreachable                                                                                   | The status bar says so, as today. The index keeps what it last saw, so the rows stay.                                                                                                           |
-| The connection to the Engine is lost                                                                         | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                          |
-| `found` is false and the Manifest's answer is `deleted`: the Resource was deleted while open, or never found | The header's `Deleted` or `Not found` badge. `Nothing related`. `This <Kind> does not exist right now. Related Resources appear here if it is created.` No count.                               |
-| The Resource is created again                                                                                | The new incarnation's sections. What the old one owned is not owned by it.                                                                                                                      |
-| The window is out of date                                                                                    | Frozen by the root layout, as everything else.                                                                                                                                                  |
+| State                                                                                                        | What shows                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading: no value and no error                                                                               | A heading skeleton and three two-line skeleton rows, marked busy. No count.                                                                                                                                                                                                                                                                                                                                                                   |
+| `found` is false and the Manifest's answer is not `deleted`                                                  | The same skeleton, whether the Manifest has answered or not: the index has not caught up with the Manifest's watch. No count.                                                                                                                                                                                                                                                                                                                 |
+| No owners or owned Resources                                                                                 | `No owners or owned Resources`. With no forbidden types: `No Resource owns this <Kind>, and it owns none. Owners and owned Resources appear here as they change.` With N forbidden types: `No Resource that your credentials can list owns this <Kind> or is owned by it. Resources of N Resource Types your credentials cannot list are not shown.` Use `1 Resource Type` for N of 1. No separate bottom line.                               |
+| Populated                                                                                                    | The sections. The count shows.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| A large owner                                                                                                | 100 Resources of a type under one owner and a `more` row. The heading holds the full count.                                                                                                                                                                                                                                                                                                                                                   |
+| A reference to a Resource that is gone (`missing`)                                                           | Second line: `Not found. No <Kind> with this name and UID exists.`                                                                                                                                                                                                                                                                                                                                                                            |
+| A reference to a kind the Cluster does not serve (`unserved`)                                                | Second line: `This Cluster does not serve <apiVersion> <Kind>.`                                                                                                                                                                                                                                                                                                                                                                               |
+| A reference to a type the user may not list (`forbidden`)                                                    | Second line: `Your credentials cannot list <type>.`                                                                                                                                                                                                                                                                                                                                                                                           |
+| A reference to a type the Cluster refused (`failed`)                                                         | Second line: `The Cluster cannot list <type>.`                                                                                                                                                                                                                                                                                                                                                                                                |
+| A reference to a type still loading (`syncing`)                                                              | Second line: `Loading <type>…`                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Not permitted (`forbidden` error)                                                                            | `Not permitted`. `Your credentials cannot list <type>, so hukube cannot tell what this <Kind> is related to.` Replaces any rows. No count.                                                                                                                                                                                                                                                                                                    |
+| Another error, no value yet                                                                                  | `Related Resources unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                                                                                                                                                                                                                                                              |
+| Another error, with a value                                                                                  | A line above the sections or empty state in the destructive color, `Related Resources may be out of date: <message>`. The rows and the count stay.                                                                                                                                                                                                                                                                                            |
+| The Cluster is unreachable                                                                                   | The status bar says so, as today. A Workspace status with phase `failed` also shows `Related Resources may be out of date: <status.message>` above sections or the empty state, in the destructive color. Without a message, use `the Cluster cannot be reached`. A topic error takes precedence. Neither the `Not permitted` nor `Related Resources unavailable` notice gains this line. The index keeps what it last saw, so the rows stay. |
+| The connection to the Engine is lost                                                                         | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                                                                                                                                                                                                                                                                        |
+| `found` is false and the Manifest's answer is `deleted`: the Resource was deleted while open, or never found | The header's `Deleted` or `Not found` badge. `Nothing related`. `This <Kind> does not exist right now. Related Resources appear here if it is created.` No count.                                                                                                                                                                                                                                                                             |
+| The Resource is created again                                                                                | The new incarnation's sections. What the old one owned is not owned by it.                                                                                                                                                                                                                                                                                                                                                                    |
+| The window is out of date                                                                                    | Frozen by the root layout, as everything else.                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Every text the Cluster supplies is rendered as text. Kinds, type keys, and
 column names are compared by value or held in a `Map`, never used as keys of
@@ -669,6 +695,28 @@ the pointer, so the second click lands in another tab's Related Facet and no
 opened, and a second click of the same burst (`detail` of 2) opens that
 Resource as a regular tab, wherever in a Related Facet it lands. A click
 opens its Preview Tab at once, with no delay to wait for a second.
+
+An independent review of the running app found eight UI corrections:
+
+1. The empty notice now says `No owners or owned Resources` and qualifies
+   its description when Resource Types cannot be listed. The old copy
+   claimed more than the Facet knew and separated the qualification from it.
+2. A `more` row now says `older` only when the same owner has a shown
+   Resource of that type. The old `more` copy did not say which were omitted.
+3. Cell values now use the foreground color while their labels stay muted.
+   The review found that status values were hard to read in the second line.
+4. A newly opened Resource's Related Facet now takes focus without scrolling
+   or selecting a row. Opening a Resource previously dropped keyboard focus.
+5. A failed Cluster status now warns that Related Resources may be out of
+   date, with topic errors taking precedence. Retained rows looked live
+   while the Cluster was unreachable.
+6. Section headings now stay at the top while their section scrolls. Long
+   sections previously lost their heading as the user moved down the rows.
+7. Hidden edges of the Facet switcher now fade over 12 px with `mask-image`.
+   Clipped tabs previously ended at a hard edge.
+8. The overflow measurement now adds the button's width and the row's gap
+   back to available space. The button previously stayed after the tabs
+   would have fit without it, so narrowing and widening had different thresholds.
 
 ## Measurements
 

@@ -6,7 +6,7 @@ import type { SubscriptionState } from "@hukube/engine-client/react";
 import { formatAge, type ResourceAddress } from "@hukube/k8s";
 import { Skeleton } from "@hukube/ui/components/skeleton";
 import { cn } from "@hukube/ui/lib/utils";
-import { useId, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { cellText, noValue } from "@/features/resource-list/columns.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
@@ -69,14 +69,15 @@ function secondLine(
     case "syncing":
       return `Loading ${row.type}…`;
     default: {
-      const parts: string[] = [];
-      if (row.namespace && row.namespace !== namespace) parts.push(row.namespace);
-      if (row.createdAt) parts.push(formatAge(new Date(row.createdAt), new Date(now)));
+      const parts: { text: string; label?: string; value?: string }[] = [];
+      if (row.namespace && row.namespace !== namespace) parts.push({ text: row.namespace });
+      if (row.createdAt) parts.push({ text: formatAge(new Date(row.createdAt), new Date(now)) });
       columns?.forEach((column, index) => {
         const value = cellText(row.cells?.[index]);
-        if (value !== noValue && value !== "") parts.push(`${column.name} ${value}`);
+        if (value !== noValue && value !== "")
+          parts.push({ text: `${column.name} ${value}`, label: column.name, value });
       });
-      return parts.join(" · ");
+      return parts;
     }
   }
 }
@@ -85,6 +86,14 @@ function secondLine(
 // content under the pointer. The second click of a double-click therefore
 // lands in another tab's Related Facet, so what the first click opened is
 // kept here for whichever Facet receives the second.
+// The Related Facet of the tab a row opens takes focus when it mounts, so the
+// arrow keys keep working. The record expires, because a tab that was already
+// open mounts nothing, and a later tab for the same Resource must not take focus.
+let focusOpened: { address: ResourceAddress; at: number } | undefined;
+const focusOpenedFor = 2000;
+function focusWhenOpened(address: ResourceAddress) {
+  focusOpened = { address, at: performance.now() };
+}
 let pointerOpened: { cluster: string; address: Omit<ResourceAddress, "cluster"> } | undefined;
 
 /** Shows ownership paths and descendants, with live Table text and stable selection. */
@@ -99,8 +108,10 @@ export function RelatedFacet(props: FacetProps) {
         if (event.detail < 2) return;
         // A double-click makes a regular tab of the Preview Tab its first click opened.
         event.stopPropagation();
-        if (opened?.cluster === cluster)
+        if (opened?.cluster === cluster) {
+          focusWhenOpened({ cluster, ...opened.address });
           openResource(opened.address, { preview: false, pane: props.panelId });
+        }
       }}
     >
       <RelatedRows {...props} />
@@ -109,11 +120,26 @@ export function RelatedFacet(props: FacetProps) {
 }
 
 function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) {
-  const { cluster, types, openResource } = useWorkspace();
+  const { cluster, types, status, openResource } = useWorkspace();
   const now = useNow();
   const grid = useRef<HTMLDivElement>(null);
   const elements = useRef(new Map<string, HTMLDivElement>());
   const id = useId();
+  useLayoutEffect(() => {
+    const opened = focusOpened;
+    if (
+      opened &&
+      performance.now() - opened.at < focusOpenedFor &&
+      opened.address.cluster === address.cluster &&
+      opened.address.type === address.type &&
+      opened.address.namespace === address.namespace &&
+      opened.address.name === address.name &&
+      grid.current
+    ) {
+      focusOpened = undefined;
+      grid.current.focus({ preventScroll: true });
+    }
+  }, [address.cluster, address.type, address.namespace, address.name]);
   const [selected, setSelected] = useState<string>();
   const { data, error } = related;
   const sections = (data?.sections ?? [])
@@ -126,16 +152,16 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
   if (selected && !openable.some(({ key }) => key === selected)) setSelected(undefined);
   const columns = new Map(data?.types.map((type) => [type.type, type.columns]));
   const forbidden = [...types.values()].filter((type) => type.state === "forbidden").length;
-  const omitted = forbidden > 0 && (
-    <p className="px-3 py-2 text-muted-foreground">
-      Resources of {forbidden.toLocaleString("en-US")}{" "}
-      {forbidden === 1 ? "Resource Type" : "Resource Types"} your credentials cannot list are not
-      shown.
-    </p>
-  );
+  const omittedText = `Resources of ${forbidden.toLocaleString("en-US")} ${forbidden === 1 ? "Resource Type" : "Resource Types"} your credentials cannot list are not shown.`;
+  const warning =
+    error?.message ??
+    (status?.phase === "failed" ? status.message || "the Cluster cannot be reached" : undefined);
+  const omitted = forbidden > 0 && <p className="px-3 py-2 text-muted-foreground">{omittedText}</p>;
   const open = (row: RelatedRow, preview: boolean) => {
     if (row.status !== "found" || !row.type || !row.name) return undefined;
     const opened = { type: row.type, namespace: row.namespace ?? "", name: row.name };
+    // The destination is recorded before its Facet mounts.
+    focusWhenOpened({ cluster, ...opened });
     openResource(opened, { preview, pane: panelId });
     return opened;
   };
@@ -146,7 +172,11 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
     if (!container || !element) return;
     const bounds = container.getBoundingClientRect();
     const target = element.getBoundingClientRect();
-    if (target.top < bounds.top) container.scrollTop += target.top - bounds.top;
+    const heading = element
+      .closest('[role="rowgroup"]')
+      ?.querySelector('[role="columnheader"]')?.parentElement;
+    const visibleTop = bounds.top + (heading?.getBoundingClientRect().height ?? 0);
+    if (target.top < visibleTop) container.scrollTop += target.top - visibleTop;
     else if (target.bottom > bounds.bottom) container.scrollTop += target.bottom - bounds.bottom;
   };
   const onKeyDown = (event: KeyboardEvent) => {
@@ -186,9 +216,9 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
         onKeyDown={onKeyDown}
         className="peer h-full overflow-auto outline-none"
       >
-        {error && (
+        {warning !== undefined && (
           <p className="border-b px-3 py-2 text-destructive">
-            Related Resources may be out of date: {error.message}
+            Related Resources may be out of date: {warning}
           </p>
         )}
         {loading ? (
@@ -211,15 +241,16 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
           <div className="flex h-full flex-col">
             <div className="flex-1">
               <Notice
-                title="Nothing related"
+                title={data.found ? "No owners or owned Resources" : "Nothing related"}
                 description={
                   !data.found
                     ? `This ${kind} does not exist right now. Related Resources appear here if it is created.`
-                    : `No Resource owns this ${kind}, and it owns none. Owners and owned Resources appear here as they change.`
+                    : forbidden > 0
+                      ? `No Resource that your credentials can list owns this ${kind} or is owned by it. ${omittedText}`
+                      : `No Resource owns this ${kind}, and it owns none. Owners and owned Resources appear here as they change.`
                 }
               />
             </div>
-            {data.found && omitted}
           </div>
         ) : (
           <>
@@ -227,20 +258,37 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
               <div key={section.direction} role="rowgroup">
                 <div
                   role="row"
-                  className="flex h-7 items-center gap-2 border-b px-3 text-xs text-muted-foreground"
+                  className="sticky top-0 z-10 flex h-7 items-center gap-2 border-b bg-background px-3 text-xs text-muted-foreground"
                 >
                   <div role="columnheader">{section.direction === "in" ? "Owned by" : "Owns"}</div>
                   {section.direction === "out" && (
                     <span>{section.total.toLocaleString("en-US")}</span>
                   )}
                 </div>
-                {section.keyed.map(({ row, key }) => {
-                  const details = secondLine(
+                {section.keyed.map(({ row, key }, rowIndex) => {
+                  const parts = secondLine(
                     row,
                     address.namespace,
                     columns.get(row.type ?? ""),
                     now,
                   );
+                  const details =
+                    typeof parts === "string" ? parts : parts.map((part) => part.text).join(" · ");
+                  let older = false;
+                  if (row.status === "more") {
+                    for (let previous = rowIndex - 1; previous >= 0; previous--) {
+                      const sibling = section.rows[previous]!;
+                      if (sibling.depth < row.depth) break;
+                      if (
+                        sibling.depth === row.depth &&
+                        sibling.status === "found" &&
+                        sibling.type === row.type
+                      ) {
+                        older = true;
+                        break;
+                      }
+                    }
+                  }
                   const canOpen = row.status === "found";
                   const index = openable.findIndex((entry) => entry.key === key);
                   return (
@@ -278,8 +326,8 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
                       <div role="gridcell" className="min-w-0 w-full">
                         {row.status === "more" ? (
                           <span>
-                            {(row.more ?? 0).toLocaleString("en-US")} more {row.kind}{" "}
-                            {row.more === 1 ? "Resource is" : "Resources are"} not shown.
+                            {(row.more ?? 0).toLocaleString("en-US")} {older && "older "}
+                            {row.kind} {row.more === 1 ? "Resource is" : "Resources are"} not shown.
                           </span>
                         ) : (
                           <>
@@ -299,7 +347,21 @@ function RelatedRows({ address, kind, manifest, related, panelId }: FacetProps) 
                               </span>
                             </div>
                             <div title={details} className="truncate text-muted-foreground">
-                              {details}
+                              {typeof parts === "string"
+                                ? parts
+                                : parts.map((part, partIndex) => (
+                                    <span key={partIndex}>
+                                      {partIndex > 0 && " · "}
+                                      {part.value !== undefined ? (
+                                        <>
+                                          <span>{part.label}</span>{" "}
+                                          <span className="text-foreground">{part.value}</span>
+                                        </>
+                                      ) : (
+                                        part.text
+                                      )}
+                                    </span>
+                                  ))}
                             </div>
                           </>
                         )}
