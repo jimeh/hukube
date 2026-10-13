@@ -2,19 +2,29 @@ import { useConnectionState } from "@hukube/engine-client/react";
 import { Button } from "@hukube/ui/components/button";
 import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useEffect, useRef } from "react";
 
 import { useHost } from "@/lib/host.tsx";
 
 /** Shows how to recover when the UI and Engine protocol definitions differ. */
 export function OutOfDateNotice() {
-  const connection = useConnectionState();
+  const outdated = useConnectionState() === "outdated";
   const host = useHost();
-  if (connection !== "outdated") return null;
+  const ref = useRef<HTMLDivElement>(null);
+  // The content below turns inert, which drops focus and leaves Tab with no
+  // way back up to Reload. Focus the notice, not Reload, so a key pressed
+  // while typing cannot reload the page.
+  useEffect(() => {
+    if (outdated) ref.current?.focus();
+  }, [outdated]);
+  if (!outdated) return null;
   const web = host.kind === "web";
   return (
     <div
+      ref={ref}
+      tabIndex={-1}
       role="alert"
-      className="flex shrink-0 items-start gap-3 border-b border-border bg-warning/15 px-4 py-3 text-foreground"
+      className="flex shrink-0 items-start gap-3 border-b border-border bg-warning/15 px-4 py-3 text-foreground outline-none"
     >
       <HugeiconsIcon
         icon={Alert02Icon}
