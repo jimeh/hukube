@@ -3,7 +3,11 @@
 //////////
 // source: hash.gen.go
 
-export const Hash = "b3226517ab7bc3cf";
+/**
+ * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
+ * with another value is of another build.
+ */
+export const Hash = "a87b0606a343b25d";
 
 //////////
 // source: protocol.go
@@ -51,14 +55,14 @@ export type ClientType = typeof ClientTypeRequest | typeof ClientTypeSubscribe |
  * client and correlates responses and subscription data.
  */
 export interface ClientMessage {
-  /**
-   * Rev is the revision of subscription params, chosen by the client.
-   */
-  rev?: number /* uint64 */;
   id: number /* uint64 */;
   type: ClientType;
   method?: Method;
   params?: unknown;
+  /**
+   * Rev is the revision of subscription params, chosen by the client.
+   */
+  rev?: number /* uint64 */;
 }
 /**
  * ServerType identifies the kind of ServerMessage.
@@ -84,15 +88,15 @@ export type ServerType = typeof ServerTypeHello | typeof ServerTypeResult | type
  * ServerMessage is sent from the Engine to a UI client.
  */
 export interface ServerMessage {
+  id: number /* uint64 */;
+  type: ServerType;
+  data?: unknown;
+  error?: ErrorDetail;
   /**
    * Rev is the revision of the params a subscription data or error answers.
    */
   rev?: number /* uint64 */;
   hello?: Hello;
-  id: number /* uint64 */;
-  type: ServerType;
-  data?: unknown;
-  error?: ErrorDetail;
 }
 /**
  * Hello is the first message the Engine sends on a control socket.

@@ -34,12 +34,12 @@ const (
 // ClientMessage is sent from a UI client to the Engine. ID is chosen by the
 // client and correlates responses and subscription data.
 type ClientMessage struct {
-	// Rev is the revision of subscription params, chosen by the client.
-	Rev    uint64          `json:"rev,omitempty"`
 	ID     uint64          `json:"id"`
 	Type   ClientType      `json:"type"`
 	Method Method          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty" tstype:"unknown"`
+	// Rev is the revision of subscription params, chosen by the client.
+	Rev uint64 `json:"rev,omitempty"`
 }
 
 // ServerType identifies the kind of ServerMessage.
@@ -58,13 +58,13 @@ const (
 
 // ServerMessage is sent from the Engine to a UI client.
 type ServerMessage struct {
-	// Rev is the revision of the params a subscription data or error answers.
-	Rev   uint64       `json:"rev,omitempty"`
-	Hello *Hello       `json:"hello,omitempty"`
 	ID    uint64       `json:"id"`
 	Type  ServerType   `json:"type"`
 	Data  any          `json:"data,omitempty" tstype:"unknown"`
 	Error *ErrorDetail `json:"error,omitempty"`
+	// Rev is the revision of the params a subscription data or error answers.
+	Rev   uint64 `json:"rev,omitempty"`
+	Hello *Hello `json:"hello,omitempty"`
 }
 
 // Hello is the first message the Engine sends on a control socket.
