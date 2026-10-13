@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import type { ConnectionState, EngineClient, Subscription } from "./client.ts";
-import type { TopicMethod, Topics } from "./methods.ts";
+import type { TopicMethod, Topics } from "./methods.gen.ts";
 import type { ErrorDetail } from "./protocol.gen.ts";
 
 const EngineContext = createContext<EngineClient | null>(null);
@@ -40,6 +40,7 @@ export function useConnectionState(): ConnectionState {
 }
 
 export interface SubscriptionState<T> {
+  stale: boolean;
   data?: T;
   error?: ErrorDetail;
 }
@@ -55,7 +56,11 @@ export function useSubscription<M extends TopicMethod>(
   params: Topics[M]["params"] | undefined,
 ): SubscriptionState<Topics[M]["data"]> {
   const client = useEngine();
-  const [state, setState] = useState<SubscriptionState<Topics[M]["data"]>>({});
+  const [state, setState] = useState<{
+    data?: Topics[M]["data"];
+    error?: ErrorDetail;
+    key?: string;
+  }>({});
   const key = params === undefined ? undefined : JSON.stringify(params);
   const enabled = key !== undefined;
   const subRef = useRef<Subscription<Topics[M]["params"]> | null>(null);
@@ -68,8 +73,8 @@ export function useSubscription<M extends TopicMethod>(
     if (initial === undefined) return;
     sentKeyRef.current = initial;
     const sub = client.subscribe(method, JSON.parse(initial) as Topics[M]["params"], {
-      data: (data) => setState({ data }),
-      error: (error) => setState((prev) => ({ data: prev.data, error })),
+      data: (data) => setState({ data, key: sentKeyRef.current }),
+      error: (error) => setState((prev) => ({ ...prev, error })),
     });
     subRef.current = sub;
     return () => {
@@ -86,5 +91,9 @@ export function useSubscription<M extends TopicMethod>(
     subRef.current.update(JSON.parse(key) as Topics[M]["params"]);
   }, [key]);
 
-  return state;
+  return {
+    data: state.data,
+    error: state.error,
+    stale: state.data !== undefined && state.key !== key,
+  };
 }

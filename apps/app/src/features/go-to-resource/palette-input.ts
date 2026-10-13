@@ -1,4 +1,4 @@
-import type { Expr, FindParams, FindResult, ResourceType, Row } from "@hukube/engine-client";
+import type { Expr, FindResult, ResourceType, Row } from "@hukube/engine-client";
 import type { TypeKey } from "@hukube/k8s";
 
 /** Where a palette search is scoped, as resolved from its prefixes. */
@@ -104,30 +104,13 @@ export interface ResourceItem {
  * answers other params than the current ones stay visible but disabled, so
  * typing does not flicker and Enter cannot open a Resource from old input.
  */
-export function resourceItems(
-  result: FindResult | undefined,
-  params: Pick<FindParams, "text" | "where"> | undefined,
-): ResourceItem[] {
+export function resourceItems(result: FindResult | undefined, stale: boolean): ResourceItem[] {
   if (!result) return [];
-  const stale = !params || result.text !== params.text || !sameJson(result.where, params.where);
   return result.rows.map((row) => ({
     row,
     value: `resource:${row.type}/${row.uid}`,
     disabled: stale,
   }));
-}
-
-/** Compares JSON values structurally, ignoring object key order. */
-export function sameJson(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  const ak = Object.keys(a).filter((k) => (a as Record<string, unknown>)[k] !== undefined);
-  const bk = Object.keys(b).filter((k) => (b as Record<string, unknown>)[k] !== undefined);
-  return (
-    ak.length === bk.length &&
-    ak.every((k) => sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
-  );
 }
 
 /**

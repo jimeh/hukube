@@ -38,9 +38,9 @@ depends = ["install"]
 run = "lefthook install"
 
 [tasks.gen]
-description = "Generate TypeScript protocol types from the Engine's Go definitions"
+description = "Generate the protocol method map, hash, and TypeScript types"
 dir = "engine"
-run = "tygo generate"
+run = ["go run ./internal/protocol/gen", "tygo generate"]
 
 # --- Development ---
 
@@ -238,16 +238,20 @@ description = "Fail if generated protocol types are out of date, and regenerate 
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-file=packages/engine-client/src/protocol.gen.ts
-before="$(mktemp)"
-trap 'rm -f "$before"' EXIT
-cp "$file" "$before"
+files=(packages/engine-client/src/protocol.gen.ts packages/engine-client/src/methods.gen.ts engine/internal/protocol/hash.gen.go)
+before="$(mktemp -d)"
+trap 'rm -rf "$before"' EXIT
+for file in "${files[@]}"; do cp "$file" "$before/$(basename "$file")"; done
 mise run gen
-if ! cmp -s "$before" "$file"; then
-  git diff --no-index -- "$before" "$file" || true
-  echo "protocol.gen.ts was out of date; this check regenerated it." >&2
-  exit 1
-fi
+stale=0
+for file in "${files[@]}"; do
+  if ! cmp -s "$before/$(basename "$file")" "$file"; then
+    git diff --no-index -- "$before/$(basename "$file")" "$file" || true
+    echo "$file was out of date; this check regenerated it." >&2
+    stale=1
+  fi
+done
+exit "$stale"
 '''
 
 [tasks."gen:check:staged"]
@@ -260,8 +264,8 @@ if ! git diff --quiet -- engine/internal/protocol engine/tygo.yaml || \
   exit 1
 fi
 mise run gen
-git diff --exit-code -- packages/engine-client/src/protocol.gen.ts || {
-  echo "The staged protocol.gen.ts is out of date: stage the file \`mise run gen\` wrote." >&2
+git diff --exit-code -- packages/engine-client/src/protocol.gen.ts packages/engine-client/src/methods.gen.ts engine/internal/protocol/hash.gen.go || {
+  echo "The staged generated protocol files are out of date: stage the files \`mise run gen\` wrote." >&2
   exit 1
 }
 '''

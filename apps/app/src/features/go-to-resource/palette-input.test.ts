@@ -6,7 +6,6 @@ import {
   matchingTypes,
   parsePaletteInput,
   resourceItems,
-  sameJson,
   scopeQuery,
 } from "./palette-input.ts";
 
@@ -130,17 +129,13 @@ describe("scopeQuery", () => {
 });
 
 describe("resourceItems", () => {
-  const where = { op: "in" as const, field: "type" as const, values: ["pods"] };
-  // The Engine echoes params in its own key order.
   const result: FindResult = {
-    text: "web",
-    where: { values: ["pods"], field: "type", op: "in" },
     total: 1,
     rows: [{ uid: "1", type: "pods", namespace: "default", name: "web", createdAt: "" }],
   };
 
   it("enables rows that answer the current params", () => {
-    expect(resourceItems(result, { text: "web", where })).toEqual([
+    expect(resourceItems(result, false)).toEqual([
       { row: result.rows[0], value: "resource:pods/1", disabled: false },
     ]);
   });
@@ -148,35 +143,22 @@ describe("resourceItems", () => {
   it("tells apart one Resource served under two types", () => {
     const row = { uid: "1", namespace: "default", name: "e", createdAt: "" };
     const events: FindResult = {
-      text: "e",
       total: 2,
       rows: [
         { ...row, type: "events" },
         { ...row, type: "events.events.k8s.io" },
       ],
     };
-    const values = resourceItems(events, { text: "e" }).map((i) => i.value);
+    const values = resourceItems(events, false).map((i) => i.value);
     expect(new Set(values).size).toBe(2);
   });
 
-  it.each([
-    ["the text changed", { text: "webx", where }],
-    ["the scope changed", { text: "web", where: { ...where, values: ["services"] } }],
-    ["the scope was removed", { text: "web" }],
-    ["there are no params", undefined],
-  ])("disables rows when %s", (_, params) => {
-    expect(resourceItems(result, params).map((i) => i.disabled)).toEqual([true]);
+  it("disables rows while the held result is stale", () => {
+    expect(resourceItems(result, true).map((i) => i.disabled)).toEqual([true]);
   });
-});
 
-describe("sameJson", () => {
-  it("ignores key order and undefined keys", () => {
-    expect(sameJson({ a: 1, b: [1, { c: 2 }] }, { b: [1, { c: 2 }], a: 1, d: undefined })).toBe(
-      true,
-    );
-    expect(sameJson({ a: [1, 2] }, { a: [2, 1] })).toBe(false);
-    expect(sameJson({ a: [] }, { a: {} })).toBe(false);
-    expect(sameJson(undefined, {})).toBe(false);
+  it("has no rows before the first result", () => {
+    expect(resourceItems(undefined, false)).toEqual([]);
   });
 });
 
