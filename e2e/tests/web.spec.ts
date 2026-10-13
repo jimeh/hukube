@@ -689,3 +689,166 @@ test("walks live ownership from a Deployment to its Pod and follows scale-up", a
     deployment.getByRole("tab", { name: "Related, 3 Resources", exact: true }),
   ).toBeVisible();
 });
+
+test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shortcuts scoped", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const name = "e2e-log-counter";
+  kubectlCreate({
+    apiVersion: "apps/v1",
+    kind: "Deployment",
+    metadata: { name, namespace },
+    spec: {
+      replicas: 2,
+      selector: { matchLabels: { app: name } },
+      template: {
+        metadata: { labels: { app: name } },
+        spec: {
+          containers: [
+            {
+              name: "counter",
+              image: "busybox:1.36",
+              command: [
+                "sh",
+                "-c",
+                'i=0; while [ "$i" -lt 400 ]; do echo "counter $i from $HOSTNAME"; i=$((i+1)); done; while true; do echo "counter $i from $HOSTNAME"; i=$((i+1)); sleep 1; done',
+              ],
+            },
+          ],
+        },
+      },
+    },
+  });
+  kubectl("-n", namespace, "rollout", "status", `deployment/${name}`, "--timeout=60s");
+  const podNames = kubectl(
+    "-n",
+    namespace,
+    "get",
+    "pods",
+    "-l",
+    `app=${name}`,
+    "-o",
+    "jsonpath={.items[*].metadata.name}",
+  )
+    .trim()
+    .split(/\s+/);
+  expect(podNames).toHaveLength(2);
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  const open = async (query: string) => {
+    await page.keyboard.press("ControlOrMeta+K");
+    await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/${query}`);
+    await expect(
+      page.getByRole("option", { name: new RegExp(query.split("/").at(-1)!) }),
+    ).toBeVisible();
+    await page.keyboard.press("Enter");
+  };
+  await open(`pod/${podNames[0]}`);
+  const pod = page.getByRole("tabpanel", { name: podNames[0]!, exact: true });
+  await pod.getByRole("tab", { name: "Logs", exact: true }).click();
+  const editor = pod.locator(".monaco-editor:visible");
+  await expect(editor.locator(".view-lines")).toContainText(`from ${podNames[0]}`);
+  await editor.hover();
+  await page.mouse.wheel(0, -100_000);
+  const newest = pod.getByRole("button", { name: /^Newest/ });
+  await expect(newest).toBeVisible();
+  const firstVisible = () =>
+    editor.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return [...element.querySelectorAll(".view-line")].find((line) => {
+        const rect = line.getBoundingClientRect();
+        return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+      })?.textContent;
+    });
+  const first = await firstVisible();
+  expect(first).toBeTruthy();
+  await expect(newest).toHaveText(/Newest · [1-9][\d,]* new/);
+  expect(await firstVisible()).toBe(first);
+  await newest.click();
+  await expect(newest).toBeHidden();
+  await expect(editor.locator(".view-lines")).not.toContainText("counter 0 from");
+
+  await pod.getByRole("button", { name: "Timestamps" }).click();
+  await expect(editor.locator(".view-lines")).toContainText(/\d{2}:\d{2}:\d{2}\.\d{3}/);
+  await pod.getByRole("button", { name: "Wrap", exact: true }).click();
+  await expect(pod.getByRole("button", { name: "Wrap", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await assertEditorKeys(page, pod, editor);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("ControlOrMeta+C");
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toContain("counter 0 from");
+  await expect(newest).toBeVisible();
+  await pod.getByRole("tab", { name: "YAML", exact: true }).click();
+  await assertEditorKeys(page, pod, pod.locator(".monaco-editor:visible"));
+
+  await open(`deployment/${name}`);
+  const workload = page.getByRole("tabpanel", { name, exact: true });
+  await workload.getByRole("tab", { name: "Logs", exact: true }).click();
+  for (const podName of podNames) {
+    const origin = podName.slice(name.length + 1);
+    await expect(workload.locator(".monaco-editor:visible .view-lines")).toContainText(
+      new RegExp(`${origin}.*counter`),
+    );
+  }
+});
+
+async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Promise<void> {
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+F");
+  const find = editor.getByRole("textbox", { name: /^Find$/ });
+  await expect(find).toBeVisible();
+  await find.fill("counter");
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await expect
+    .poll(() => editor.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("ControlOrMeta+K");
+  const palette = page.getByRole("combobox", { name: "Go to Resource" });
+  await expect(palette).toBeVisible();
+  await expect(palette).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+  await editor.click();
+  await page.evaluate(() => {
+    const host = window as Window & { logKeyJ?: boolean };
+    const listener = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "j") {
+        host.logKeyJ = event.defaultPrevented;
+        window.removeEventListener("keydown", listener);
+      }
+    };
+    window.addEventListener("keydown", listener);
+  });
+  await page.keyboard.press("ControlOrMeta+J");
+  expect(await page.evaluate(() => (window as Window & { logKeyJ?: boolean }).logKeyJ)).toBe(false);
+  await expect(panel).toBeVisible();
+  await panel.locator("header").click();
+  await expect
+    .poll(() => editor.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(false);
+  await page.evaluate(() => {
+    const host = window as Window & { logOutsideFind?: boolean };
+    const listener = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        host.logOutsideFind = event.defaultPrevented;
+        window.removeEventListener("keydown", listener);
+      }
+    };
+    window.addEventListener("keydown", listener);
+  });
+  await page.keyboard.press("ControlOrMeta+F");
+  expect(
+    await page.evaluate(() => (window as Window & { logOutsideFind?: boolean }).logOutsideFind),
+  ).toBe(false);
+  await expect(find).toBeHidden();
+  await page.keyboard.press("Escape");
+}

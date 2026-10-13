@@ -10,6 +10,9 @@ import type { Setting } from "./protocol.gen.ts";
 import { EngineProvider, useSubscription } from "./react.tsx";
 
 class FakeEngineClient implements EngineClient {
+  openStream: EngineClient["openStream"] = () => {
+    throw new Error("unexpected stream");
+  };
   subscriptions: { method: TopicMethod; params: unknown }[] = [];
   updates: unknown[] = [];
   listener?: SubscriptionListener<Setting>;

@@ -3,7 +3,7 @@ import { formatResourceUri, parseResourceUri, type Facet } from "@hukube/k8s";
 import { Badge } from "@hukube/ui/components/badge";
 import { Tabs, TabsContent } from "@hukube/ui/components/tabs";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { ResourcePanelParams } from "@/features/workspace/dock.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
@@ -11,6 +11,7 @@ import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { resourceEventsParams } from "./facet-rules.ts";
 import { facetsFor, resolveFacet } from "./facets.ts";
 import { FacetSwitcher } from "./facet-switcher.tsx";
+import { ownsPods } from "./logs-rule.ts";
 import { Notice } from "./notice.tsx";
 import { takePointerOpened } from "./pointer-opened.ts";
 
@@ -20,7 +21,7 @@ export function ResourcePanel({
   params,
 }: Pick<IDockviewPanelProps<ResourcePanelParams>, "api" | "params">) {
   const address = parseResourceUri(params.uri);
-  const { types, openResource } = useWorkspace();
+  const { types, openResource, active } = useWorkspace();
   const manifest = useSubscription(
     "resource.get",
     address
@@ -35,7 +36,13 @@ export function ResourcePanel({
   const [lastObject, setLastObject] = useState<Record<string, unknown>>();
   if (manifest.data?.object && manifest.data.object !== lastObject)
     setLastObject(manifest.data.object);
-  const target = { type: address?.type ?? "", resourceType: types.get(address?.type ?? "") };
+  const [panelVisible, setPanelVisible] = useState(api.isVisible ?? true);
+  useEffect(() => {
+    const subscription = api.onDidVisibilityChange?.((event) => setPanelVisible(event.isVisible));
+    return () => subscription?.dispose();
+  }, [api]);
+  const [logs, setLogs] = useState(false);
+  const target = { type: address?.type ?? "", resourceType: types.get(address?.type ?? ""), logs };
   const available = facetsFor(target);
   const events = useSubscription(
     "resource.events",
@@ -56,6 +63,7 @@ export function ResourcePanel({
         }
       : undefined,
   );
+  if (!logs && ownsPods(related.data)) setLogs(true);
   const [mounted, setMounted] = useState<ReadonlySet<Facet>>(() => new Set([selected]));
   if (!mounted.has(selected)) setMounted(new Set([...mounted, selected]));
   const [controls, setControls] = useState<HTMLDivElement | null>(null);
@@ -108,6 +116,7 @@ export function ResourcePanel({
         <FacetSwitcher
           available={available}
           selected={selected}
+          visible={panelVisible && active}
           shared={shared}
           onChoose={choose}
           setControls={setControls}
@@ -124,7 +133,11 @@ export function ResourcePanel({
                 className="min-h-0 overflow-hidden"
                 hidden={selected !== id}
               >
-                <View {...shared} showing={selected === id} />
+                <View
+                  {...shared}
+                  showing={selected === id}
+                  visible={selected === id && panelVisible && active}
+                />
               </TabsContent>
             ),
         )}
