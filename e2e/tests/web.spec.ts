@@ -780,6 +780,14 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
     "false",
   );
   await assertEditorKeys(page, pod, editor);
+  // A log is searched from its newest line: Enter goes to the last match first.
+  await pod.getByRole("button", { name: "Search" }).click();
+  await editor.getByRole("textbox", { name: /^Find$/ }).fill("counter 1");
+  await page.keyboard.press("Enter");
+  await expect(editor.locator(".matchesCount")).toHaveText(/^(\d+) of \1$/);
+  await page.keyboard.press("Enter");
+  await expect(editor.locator(".matchesCount")).not.toHaveText(/^(\d+) of \1$/);
+  await page.keyboard.press("Escape");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");

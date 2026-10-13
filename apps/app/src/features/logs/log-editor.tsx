@@ -10,6 +10,8 @@ import { type LogDocument, type LogRow } from "./log-document.ts";
 /** How many characters edits may add to the model before it is built again. */
 const rebuildAfter = 8_000_000;
 
+let editors = 0;
+
 export interface LogEditorHandle {
   search(): void;
 }
@@ -28,6 +30,7 @@ export default function LogEditor({
 }) {
   const container = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const searchRef = useRef<(() => void) | undefined>(undefined);
   const follow = useRef(true);
   const ownScroll = useRef(false);
   const [following, setFollowing] = useState(true);
@@ -36,11 +39,7 @@ export default function LogEditor({
   useImperativeHandle(
     ref,
     () => ({
-      search: () => {
-        const editor = editorRef.current;
-        editor?.focus();
-        void editor?.getAction("actions.find")?.run();
-      },
+      search: () => searchRef.current?.(),
     }),
     [],
   );
@@ -54,6 +53,8 @@ export default function LogEditor({
       monaco.editor.ScrollType.Immediate,
     );
     ownScroll.current = false;
+    // The button is about to go, and focus would go with it.
+    editorRef.current?.focus();
   };
   useEffect(() => {
     if (!container.current) return;
@@ -66,11 +67,18 @@ export default function LogEditor({
       ariaLabel: label,
       minimap: { enabled: false },
       lineNumbers: "off",
-      lineDecorationsWidth: 8,
+      // Lines start where the toolbar's and the header's text does.
+      lineDecorationsWidth: 12,
       glyphMargin: false,
       folding: false,
       links: false,
-      contextmenu: false,
+      contextmenu: true,
+      find: {
+        // Only what the user selected is searched for, not the word the caret
+        // happens to be in, and the view stays put until they ask for a match.
+        seedSearchStringFromSelection: "selection",
+        cursorMoveOnType: false,
+      },
       scrollBeyondLastLine: false,
       wordWrap: wrap ? "on" : "off",
       fontFamily: '"JetBrains Mono Variable", ui-monospace, monospace',
@@ -93,6 +101,43 @@ export default function LogEditor({
       hover: { enabled: "off" },
     });
     editorRef.current = editor;
+    // A log is read from its end. With the caret there, the nearest match is
+    // the newest one, and Enter in the find box goes to it and then to older
+    // ones, as it does in VS Code's terminal. Shift+Enter goes the other way.
+    const openSearch = () => {
+      editor.focus();
+      if (follow.current && editor.getSelection()?.isEmpty())
+        editor.setPosition({ lineNumber: model.getLineCount(), column: 1 });
+      void editor.getAction("actions.find")?.run();
+    };
+    searchRef.current = openSearch;
+    // Monaco's key bindings are shared by every editor, so these are bound
+    // to a context key that only this editor sets.
+    const scope = `hukubeLogEditor${++editors}`;
+    editor.createContextKey(scope, true);
+    const actions = [
+      editor.addAction({
+        id: "hukube.logs.find",
+        label: "Search",
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF],
+        keybindingContext: scope,
+        run: openSearch,
+      }),
+      editor.addAction({
+        id: "hukube.logs.newerMatch",
+        label: "Previous Match",
+        keybindings: [monaco.KeyCode.Enter],
+        keybindingContext: `${scope} && findInputFocussed`,
+        run: () => editor.getAction("editor.action.previousMatchFindAction")?.run(),
+      }),
+      editor.addAction({
+        id: "hukube.logs.olderMatch",
+        label: "Next Match",
+        keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+        keybindingContext: `${scope} && findInputFocussed`,
+        run: () => editor.getAction("editor.action.nextMatchFindAction")?.run(),
+      }),
+    ];
     const none: readonly string[] = [];
     let decorationIds: (readonly string[])[] = [];
     const options = new Map<string, monaco.editor.IModelDecorationOptions>();
@@ -143,10 +188,11 @@ export default function LogEditor({
       const next = rows.length ? rows.at(-1)!.sequence + 1 : first;
       const received = Math.max(0, next - (shownFirst + shownCount));
       const removed = first - shownFirst;
-      const kept = shownRewrites === log.rewrites && removed >= 0 && removed <= shownCount;
-      if (!kept || added > rebuildAfter) {
-        // Lines that are still there keep their place on screen and their selection.
-        const shift = kept ? removed : undefined;
+      const inPlace = removed >= 0 && removed <= shownCount;
+      if (!inPlace || shownRewrites !== log.rewrites || added > rebuildAfter) {
+        // Lines that are still there keep their place on screen and their
+        // selection, also when they were only formatted again.
+        const shift = inPlace ? removed : undefined;
         const top = editor.getVisibleRanges()[0]?.startLineNumber ?? 1;
         const offset = editor.getScrollTop() - editor.getTopForLineNumber(top);
         const selection = editor.getSelection();
@@ -250,6 +296,7 @@ export default function LogEditor({
     });
     return () => {
       unsubscribe();
+      for (const action of actions) action.dispose();
       cancelAnimationFrame(pending);
       cancelAnimationFrame(frame);
       resize.disconnect();

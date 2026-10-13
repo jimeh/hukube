@@ -16,7 +16,8 @@ interface Entry {
   marker?: string;
 }
 export const logBudgets = { lines: 50_000, characters: 32_000_000, decorations: 200_000 };
-const originColors = [6, 2, 5, 4, 3, 14];
+// Cyan, magenta, blue, and yellow: red and green are left to log levels.
+const originColors = [6, 5, 4, 3];
 
 const pad = (value: number, width = 2) => value.toString().padStart(width, "0");
 
@@ -31,16 +32,34 @@ export function formatLogTime(time: number, now = new Date()): string {
   return `${today ? "" : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} `}${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
 }
 
+/**
+ * The length of what every Pod name starts with, up to and including a
+ * hyphen, and never a whole name: the Pods of one ReplicaSet differ only in
+ * their last part, and that is all a line has room for.
+ */
+export function commonPodPrefix(pods: Iterable<string>): number {
+  const names = [...pods];
+  let common = names[0] ?? "";
+  for (const pod of names) {
+    let length = 0;
+    while (length < common.length && length < pod.length && common[length] === pod[length])
+      length++;
+    common = common.slice(0, length);
+  }
+  // A whole name leaves nothing to show, so it gives up its last part.
+  return names.includes(common)
+    ? common.lastIndexOf("-", common.length - 2) + 1
+    : common.lastIndexOf("-") + 1;
+}
+
 export function logOrigin(
   source: LogSource,
   type: string,
-  name: string,
+  prefix: number,
   multipleContainers: boolean,
 ): string {
   if (type === "pods") return source.container;
-  const prefix = `${name}-`;
-  const pod = source.pod.startsWith(prefix) ? source.pod.slice(prefix.length) : source.pod;
-  return pod + (multipleContainers ? `/${source.container}` : "");
+  return source.pod.slice(prefix) + (multipleContainers ? `/${source.container}` : "");
 }
 
 function ansiClass(foreground: number, background: number, flags: number): string {
@@ -70,13 +89,13 @@ export class LogDocument {
   #decorations = 0;
   #multipleSources = false;
   #multipleContainers = false;
+  #podPrefix = 0;
   #timestamps = false;
   revision = 0;
   /** Counts the times every row was formatted again, or dropped. */
   rewrites = 0;
   constructor(
     readonly type: string,
-    readonly name: string,
     readonly budgets = logBudgets,
   ) {}
   subscribe = (listener: () => void): (() => void) => {
@@ -103,16 +122,19 @@ export class LogDocument {
       if (!this.#originColors.has(key))
         this.#originColors.set(key, originColors[this.#originColors.size % originColors.length]!);
     }
+    const prefix = commonPodPrefix(new Set([...this.sources.values()].map((source) => source.pod)));
     const multipleSources = this.#multipleSources || status.sources.length > 1;
     const multipleContainers =
       this.#multipleContainers ||
       new Set(status.sources.map((source) => source.container)).size > 1;
     if (
       multipleSources !== this.#multipleSources ||
-      multipleContainers !== this.#multipleContainers
+      multipleContainers !== this.#multipleContainers ||
+      prefix !== this.#podPrefix
     ) {
       this.#multipleSources = multipleSources;
       this.#multipleContainers = multipleContainers;
+      this.#podPrefix = prefix;
       this.#rebuild();
     }
   }
@@ -178,7 +200,7 @@ export class LogDocument {
     const source = this.sources.get(line.source);
     const origin =
       source && this.#multipleSources
-        ? logOrigin(source, this.type, this.name, this.#multipleContainers)
+        ? logOrigin(source, this.type, this.#podPrefix, this.#multipleContainers)
         : "";
     if (line.gap) return muted(`··· ${origin ? `${origin}: ` : ""}some lines may be missing ···`);
     if (line.exited) return muted(`··· ${origin || "the container"} exited: ${line.text} ···`);

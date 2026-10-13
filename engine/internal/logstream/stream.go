@@ -83,7 +83,7 @@ var DefaultTiming = Timing{
 	FastBytes:  2 << 20,
 	BatchBytes: 256 << 10,
 	FrameBytes: 64 << 10,
-	Pods:       20,
+	Pods:       protocol.LogStreamMaxPods,
 }
 
 type podChange struct {
@@ -159,6 +159,7 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 	var missingSince time.Time
 	initial := make(chan struct{})
 	initialDone := false
+	var initialAt time.Time
 	defer func() {
 		if !initialDone {
 			close(initial)
@@ -168,6 +169,7 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 		cancel()
 		s.mu.Lock()
 		s.flushLocked()
+		s.ready = s.ready || selected
 		for {
 			wait := s.statusLocked(false)
 			if wait <= 0 {
@@ -273,9 +275,7 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 				s.tail = int64(max(50, min(1000, 2000/max(1, count))))
 				close(initial)
 				initialDone = true
-				s.mu.Lock()
-				s.ready = true
-				s.mu.Unlock()
+				initialAt = time.Now()
 			}
 		}
 		if p.Previous && selected && initialDone {
@@ -349,6 +349,11 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 			}
 			if len(s.batch) > 0 && time.Since(s.batchAt) >= timing.Batch && (!s.first || settled || time.Since(s.started) >= timing.Initial) {
 				s.flushLocked()
+			}
+			// Ready follows the first lines, so a client never takes a
+			// container that has not been read yet for one that printed nothing.
+			if initialDone && !s.ready && (!s.first || (settled && len(s.batch) == 0) || time.Since(initialAt) >= timing.Initial) {
+				s.ready = true
 			}
 			s.mu.Unlock()
 		}

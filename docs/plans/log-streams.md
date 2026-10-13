@@ -718,7 +718,7 @@ While not following, a button floats over the bottom of the lines, centered,
 with a down arrow and `Newest`, and the number of lines that arrived since
 following stopped, as `Newest · 1,204 new`. Pressing it scrolls to the
 bottom and follows. It is the next tab stop after the editor. Inside the
-editor, Ctrl or Cmd+End moves to the end, which is the bottom, so the
+editor, Ctrl+End, or Cmd+Down on macOS, moves to the end, which is the bottom, so the
 keyboard has a second way that is the editor's own.
 
 This is Freelens's "To bottom" button and VS Code's smart scroll together: a
@@ -1005,6 +1005,56 @@ credentials cannot read Pod logs in the <Namespace> Namespace.`
 - **An init container that completed is not "not running".**
 - **A stream that ended stops reporting what its containers were doing.**
 
+**After the experience review**
+
+An independent review of the running app found nothing that blocks a user
+and a list of rough edges. These were fixed:
+
+- **A status is ready after the first lines.** `ready` meant "the containers
+  are known", so every stream showed "No log lines yet" for a third of a
+  second before its lines. It now follows the first batch, or a second
+  without one.
+- **The place is kept when timestamps are turned on or off,** as it is for
+  wrap. It jumped to the oldest line.
+- **Search starts from the newest line.** Opening it while following puts
+  the caret at the end, the find box is no longer filled with the word the
+  caret was in, typing does not move the view, and Enter goes to the newest
+  match and then to older ones, as in VS Code's terminal. Shift+Enter goes
+  the other way. The YAML Facet keeps the editor's order.
+- **Right-click offers Copy.** The editors show Monaco's own context menu,
+  which keeps the selection. The browser's menu selected the word under the
+  pointer first.
+- **Choosing a container or the previous run keeps focus** on the control
+  that was used, and `Newest` hands focus to the lines. The toolbar is
+  replaced when a stream starts, which had dropped focus to the page.
+- **An origin is what tells the Pods apart.** It drops everything the Pod
+  names have in common up to a hyphen, so the Pods of one ReplicaSet show as
+  `p656b/clock` and not `6ddb47c784-p656b/clock`. During a rollout, with two
+  ReplicaSets, the hash shows again. The plan dropped only the workload's
+  name.
+- **Selection and matches can be seen.** The selection was 1.2 to 1 against
+  the background in both themes. It is now a tint of the Cluster's color,
+  and matches are amber. A pressed toggle has the Cluster's tint too.
+- **Notices say what is true.** The Pod limit shows only at the limit, not
+  whenever fewer Pods are read than exist for a moment. A deleted Resource
+  keeps its container's name and loses the limit notice. `1 of 4 containers
+is not running`. A container that is not running shows its reason in one
+  line and the kubelet's message as a tooltip.
+- **A previous run whose logs are gone says so,** in place of "Lines appear
+  here as it does".
+- **One container is shown as its name,** not as a disabled menu, and the
+  menu no longer stretches across a wide Pane.
+- **Origin colors leave green and red to log levels:** cyan, magenta, blue,
+  and yellow.
+- **The YAML Facet has a Search button** beside `Show managed fields`.
+- **A view that is first shown after its Resource was deleted** says `Not
+found`, where it showed a loading state for 10 seconds.
+
+Left as follow-ups: a marker that older lines exist and a way to load them,
+blank frames when scrolled away during a burst, a hover with a line's full
+Pod name and date, opening a Pod from its origin, and arrow keys within the
+toolbar.
+
 **Key bindings**
 
 Loading Monaco's find and clipboard features binds more than search. These
@@ -1018,6 +1068,10 @@ are kept, in both editors, and only while an editor has focus:
 | `toggleFindCaseSensitive`, `toggleFindWholeWord`, `toggleFindRegex`, `toggleFindInSelection` | Alt+C, Alt+W, Alt+R, Alt+L, with Cmd on macOS               |
 | `closeFindWidget`                                                                            | Escape, Shift+Escape                                        |
 
+In the log viewer, Ctrl or Cmd+F and the two Enter keys of the find box run
+the viewer's own versions of the same commands, for the search order
+described above. No key is added by them.
+
 Every binding of these commands is removed: `actions.findWithSelection`
 (Cmd+E), `editor.action.nextSelectionMatchFindAction` and
 `previousSelectionMatchFindAction` (Ctrl or Cmd+F3, with Shift),
@@ -1025,8 +1079,9 @@ Every binding of these commands is removed: `actions.findWithSelection`
 `togglePreserveCase`, `editor.action.replaceOne`, `editor.action.replaceAll`,
 `editor.action.selectAllMatches` (Alt+Enter), `history.showPrevious` and
 `history.showNext` (Up and Down in the find box), `leaveEditorMessage`, and
-the cut, copy, and paste commands, whose keys the browser handles itself.
-Copy still works.
+the cut, copy, and paste commands, whose keys the browser handles itself,
+and `editor.action.showContextMenu` (Shift+F10), which the context menu
+feature binds. Copy still works.
 
 The end-to-end test checks, in both editors, that Ctrl or Cmd+K opens the Go
 to Resource palette, that nothing handles Ctrl or Cmd+J, that Escape returns

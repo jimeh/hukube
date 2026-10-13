@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "6d5b211a8af86bca";
+export const Hash = "871f912a076c2f63";
 
 //////////
 // source: protocol.go
@@ -668,6 +668,10 @@ export interface StreamEnd {
   error?: ErrorDetail;
 }
 /**
+ * LogStreamMaxPods is the most Pods one Log Stream reads.
+ */
+export const LogStreamMaxPods = 20;
+/**
  * LogStreamParams opens a Log Stream on a Pod, or on the Pods a Resource owns.
  */
 export interface LogStreamParams {
@@ -712,9 +716,9 @@ export interface LogCursor {
  */
 export interface LogStreamStatus {
   /**
-   * Ready reports that the stream has found its Resource and knows the
-   * containers of the Pods it reads. Until then the other fields are empty
-   * because nothing is known yet, not because there is nothing.
+   * Ready reports that the stream has found its Resource and has sent the
+   * history of the containers it reads, or waited a moment for it. Until
+   * then, no lines and no sources mean "not yet", not "none".
    */
   ready: boolean;
   sources: LogSource[];
