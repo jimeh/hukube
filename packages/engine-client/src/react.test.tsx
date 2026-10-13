@@ -47,13 +47,21 @@ afterEach(cleanup);
 
 function renderSubscription() {
   const client = new FakeEngineClient();
-  const hook = renderHook(({ key }) => useSubscription("settings.watch", { key }), {
-    initialProps: { key: "a" },
-    wrapper: ({ children }: { children: ReactNode }) => (
-      <EngineProvider client={client}>{children}</EngineProvider>
-    ),
-  });
-  return { client, ...hook };
+  const renders: { key: string; stale: boolean }[] = [];
+  const hook = renderHook(
+    ({ key }) => {
+      const state = useSubscription("settings.watch", { key });
+      renders.push({ key, stale: state.stale });
+      return state;
+    },
+    {
+      initialProps: { key: "a" },
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <EngineProvider client={client}>{children}</EngineProvider>
+      ),
+    },
+  );
+  return { client, renders, ...hook };
 }
 
 describe("useSubscription", () => {
@@ -70,11 +78,13 @@ describe("useSubscription", () => {
   });
 
   it("is stale in the params-changing render until new data arrives", () => {
-    const { client, result, rerender } = renderSubscription();
+    const { client, renders, result, rerender } = renderSubscription();
     const oldData = { key: "a", value: 1 };
     act(() => client.listener!.data(oldData));
 
+    const firstChangedRender = renders.length;
     rerender({ key: "b" });
+    expect(renders[firstChangedRender]).toEqual({ key: "b", stale: true });
     expect(result.current.stale).toBe(true);
     expect(result.current.data).toEqual(oldData);
     expect(client.updates).toEqual([{ key: "b" }]);
@@ -87,13 +97,15 @@ describe("useSubscription", () => {
   });
 
   it("is not stale when params return to those answered by the held data", () => {
-    const { client, result, rerender } = renderSubscription();
+    const { client, renders, result, rerender } = renderSubscription();
     const data = { key: "a", value: 1 };
     act(() => client.listener!.data(data));
 
     rerender({ key: "b" });
     expect(result.current.stale).toBe(true);
+    const firstRestoredRender = renders.length;
     rerender({ key: "a" });
+    expect(renders[firstRestoredRender]).toEqual({ key: "a", stale: false });
     expect(result.current.stale).toBe(false);
     expect(result.current.data).toEqual(data);
     expect(client.updates).toEqual([{ key: "b" }, { key: "a" }]);

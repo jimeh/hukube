@@ -250,7 +250,7 @@ func queryChanges(store *index.Store, q *query.Compiled) func() (<-chan struct{}
 
 func decode[P any](raw json.RawMessage) (P, error) {
 	var p P
-	if _, ok := any(p).(protocol.None); ok && len(raw) == 0 {
+	if _, ok := any(p).(protocol.None); ok {
 		return p, nil
 	}
 	if len(raw) == 0 {

@@ -203,6 +203,29 @@ describe("hello verification", () => {
     expect(conn.getState()).toBe("closed");
   });
 
+  it("becomes outdated after reconnecting to an upgraded Engine and never resubscribes", async () => {
+    const conn = connect();
+    conn.subscribe("settings.watch", { key: "a" }, { data: vi.fn<(value: unknown) => void>() });
+    latest().open();
+    expect(conn.getState()).toBe("open");
+    expect(latest().sent).toEqual([
+      { id: 1, type: "subscribe", method: "settings.watch", params: { key: "a" }, rev: 0 },
+    ]);
+
+    latest().close();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sockets).toHaveLength(2);
+    const reconnected = latest();
+    reconnected.open(false);
+    reconnected.receive({ id: 0, type: "hello", hello: { protocol: "upgraded" } });
+    expect(conn.getState()).toBe("outdated");
+    expect(reconnected.sent).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(sockets).toHaveLength(2);
+    expect(conn.getState()).toBe("outdated");
+    expect(reconnected.sent).toEqual([]);
+  });
+
   it("becomes outdated when no hello arrives within the timeout", async () => {
     const conn = connect();
     conn.subscribe("settings.watch", { key: "a" }, { data: vi.fn<(value: unknown) => void>() });
@@ -222,6 +245,7 @@ describe("hello verification", () => {
 
   it("reconnects with backoff when sockets close before hello", async () => {
     const conn = connect();
+    conn.subscribe("settings.watch", { key: "a" }, { data: vi.fn<(value: unknown) => void>() });
     latest().open(false);
     latest().close();
     await vi.advanceTimersByTimeAsync(100);
