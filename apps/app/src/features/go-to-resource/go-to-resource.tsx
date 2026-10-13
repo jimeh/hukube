@@ -17,6 +17,7 @@ import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { execKey } from "../exec/keys.ts";
 import { useExecSessions } from "../exec/sessions.ts";
 
+import { onOpenGoToResource } from "./open.ts";
 import {
   isPaletteShortcut,
   matchingTypes,
@@ -74,8 +75,15 @@ export function GoToResource({ active }: { active: boolean }) {
       onShortcut();
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [active]);
+    const off = onOpenGoToResource(cluster, () => {
+      setInput("");
+      setOpen(true);
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      off();
+    };
+  }, [active, cluster]);
 
   const typeList = useMemo(() => [...types.values()], [types]);
   const namespaceList = useNamespaces(cluster, shown);

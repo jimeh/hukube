@@ -27,6 +27,8 @@ export interface ExecTerminal {
   setEnded(ended: boolean): void;
   focus(): void;
   attach(body: HTMLElement, visible: boolean): () => void;
+  /** Sizes the terminal to its panel as it is now laid out. */
+  refit(): Promise<void>;
   theme(): void;
   onData(fn: (data: string) => void): () => void;
   onBinary(fn: (data: string) => void): () => void;
@@ -37,7 +39,8 @@ export interface ExecTerminal {
   selectAll(): void;
   clear(): void;
   onFind(fn: () => void): () => void;
-  find(text: string, previous?: boolean, incremental?: boolean): void;
+  /** Finds from the current match towards older or newer output. */
+  find(text: string, direction: "older" | "newer", incremental?: boolean): void;
   clearSearch(): void;
   onSearchResults(fn: (result: { resultIndex: number; resultCount: number }) => void): () => void;
 }
@@ -136,6 +139,8 @@ export async function startSession(
     }),
   ]);
   clearTimeout(timer);
+  // Starting again changes the panel's layout, and with it the terminal's size.
+  if (previous?.terminal) await terminal.refit();
   if (!current()) return;
   let output = false;
   const stream = engine.openStream(
