@@ -319,6 +319,10 @@ func TestLogContainerSelection(t *testing.T) {
 			_, s := out.await(t, func(_ []record, s protocol.LogStreamStatus) bool {
 				return len(s.Containers) == 4 && len(s.Sources) == want
 			})
+			// A Pod without the selected container is loaded all the same.
+			if s.Followed != 2 || s.Loaded != 2 {
+				t.Fatalf("followed=%d loaded=%d, want 2 and 2", s.Followed, s.Loaded)
+			}
 			if !reflect.DeepEqual(s.Containers, []protocol.LogContainer{{Name: "helper", Kind: protocol.LogContainerKindContainer}, {Name: "main", Kind: protocol.LogContainerKindContainer}, {Name: "setup", Kind: protocol.LogContainerKindInit}, {Name: "debug", Kind: protocol.LogContainerKindEphemeral}}) {
 				t.Fatalf("container chooser=%+v", s.Containers)
 			}
@@ -352,6 +356,24 @@ func TestLogContainerSelection(t *testing.T) {
 		cancel()
 		awaitEnd(t, end)
 	})
+}
+
+func TestLogStatusCountsLoadedPods(t *testing.T) {
+	a, b := pod("a", "main"), pod("b", "main")
+	f, g := newFake(a, b)
+	// The manifest of b is late.
+	f.mu.Lock()
+	delete(f.pods, "b")
+	f.mu.Unlock()
+	out, end, cancel := start(t, f, g, targetParams())
+	_, s := out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Ready })
+	if s.Followed != 2 || s.Loaded != 1 || len(s.Sources) != 1 {
+		t.Fatalf("followed=%d loaded=%d sources=%d before the late manifest", s.Followed, s.Loaded, len(s.Sources))
+	}
+	f.update(b)
+	out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Loaded == 2 && len(s.Sources) == 2 })
+	cancel()
+	awaitEnd(t, end)
 }
 
 func TestLogPrevious(t *testing.T) {

@@ -278,6 +278,9 @@ type LogStreamStatus struct {
 	// Pods counts the Pods the Resource owns, and Followed those being read.
 	Pods     int `json:"pods"`
 	Followed int `json:"followed"`
+	// Loaded counts the followed Pods whose containers are known. Sources
+	// lists every container being read only once it equals Followed.
+	Loaded int `json:"loaded"`
 }
 
 type LogContainer struct {
@@ -1070,9 +1073,13 @@ toolbar.
   been told of.
 - **A status that is ready before a slow Pod's containers are known** no
   longer makes the client forget that Pod's cursor or call the Pod gone.
-  Both wait for a status that lists every followed Pod.
+  Both wait for a status whose `loaded` equals its `followed`. The status
+  gained `loaded` for this, because the sources cannot say it: a Pod without
+  the selected container is followed and has no source.
 - **A deleted Resource keeps its timestamps, wrap, and search,** and loses
   only the container and previous-run choices.
+- **Search is disabled while the stream loads,** as the other controls are.
+  Only its tooltip was. The YAML Facet's Search button had the same fault.
 - **A stream paused before its first socket opened stays paused.**
 - **Every key an editor binds is listed by the end-to-end test,** which
   reads the keybinding service of a live editor and fails on a command that

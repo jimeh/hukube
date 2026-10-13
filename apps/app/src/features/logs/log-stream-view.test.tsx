@@ -82,6 +82,7 @@ const ready: LogStreamStatus = {
   containers: [{ name: "constructor", kind: "container" }],
   pods: 1,
   followed: 1,
+  loaded: 1,
 };
 const mount = (override: Partial<LogStreamViewProps> = {}) =>
   render(
@@ -112,7 +113,8 @@ it("shows loading, not found, no Pods, waiting, quiet, and no-source states with
   mount({ uid: undefined, exists: undefined });
   expect(screen.getByLabelText("Loading Log Stream")).toBeDefined();
   expect(opened).toHaveLength(0);
-  expect(screen.getByRole("button", { name: "Timestamps" }).hasAttribute("disabled")).toBe(true);
+  for (const name of ["Timestamps", "Wrap", "Search"])
+    expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(true);
   cleanup();
   mount({ uid: undefined, exists: false });
   expect(screen.getByText("Not found")).toBeDefined();
@@ -174,6 +176,7 @@ it("shows retained lines with stopped containers, unreadable logs, Pod limits, r
     ],
     pods: 134,
     followed: 20,
+    loaded: 20,
   });
   expect(screen.getByRole("textbox").textContent).toBe("hello");
   // The kubelet's message can be a paragraph, so it is the notice's title.
@@ -201,7 +204,7 @@ it("shows retained lines with stopped containers, unreadable logs, Pod limits, r
       ?.title,
   ).toBe("first");
   // Fewer Pods are read than exist for a moment whenever Pods come and go.
-  event({ ...ready, pods: 4, followed: 3 });
+  event({ ...ready, pods: 4, followed: 3, loaded: 3 });
   expect(screen.queryByText(/newest of/)).toBeNull();
   act(() => latest().listener.state?.("reconnecting"));
   expect(screen.getByText("Connection to the Engine lost. Reconnecting…")).toBeDefined();
@@ -366,7 +369,7 @@ it("renders ordered drop, join, leave and record markers with merged origins", (
   event();
   line();
   const other = { ...source, id: 1, pod: "web-b", podUid: "uid2" };
-  event({ ...ready, sources: [source, other], pods: 2, followed: 2 });
+  event({ ...ready, sources: [source, other], pods: 2, followed: 2, loaded: 2 });
   act(() =>
     latest().listener.data([
       { source: 1, time: 0, text: "next" },
@@ -440,12 +443,24 @@ it("keeps the display controls of a deleted Resource and takes away its choices"
 it("does not call a Pod gone because a status came before its containers were known", () => {
   mount({ target: { ...props.target, type: "deployments.apps" }, kind: "Deployment" });
   const other = { ...source, id: 1, pod: "web-b", podUid: "uid2" };
-  event({ ...ready, sources: [source, other], pods: 2, followed: 2 });
+  event({ ...ready, sources: [source, other], pods: 2, followed: 2, loaded: 2 });
   line();
   // A resumed stream is ready after a second, with one Pod's manifest still on its way.
-  event({ ...ready, sources: [source], pods: 2, followed: 2 });
-  event({ ...ready, sources: [source, other], pods: 2, followed: 2 });
+  event({ ...ready, sources: [source], pods: 2, followed: 2, loaded: 1 });
+  event({ ...ready, sources: [source, other], pods: 2, followed: 2, loaded: 2 });
   expect(screen.getByRole("textbox").textContent).not.toMatch(/is gone|following Pod/);
-  event({ ...ready, sources: [source], pods: 1, followed: 1 });
+  event({ ...ready, sources: [source], pods: 1, followed: 1, loaded: 1 });
   expect(screen.getByRole("textbox").textContent).toContain("··· Pod web-b is gone ···");
+});
+
+it("marks Pods that come and go in a stream narrowed to a container another Pod lacks", () => {
+  mount({ target: { ...props.target, type: "deployments.apps" }, kind: "Deployment" });
+  // Two Pods are followed and loaded, and only one has the chosen container.
+  event({ ...ready, pods: 2, followed: 2, loaded: 2 });
+  line();
+  const next = { ...source, id: 1, pod: "web-c", podUid: "uid3" };
+  event({ ...ready, sources: [next], pods: 2, followed: 2, loaded: 2 });
+  const text = screen.getByRole("textbox").textContent;
+  expect(text).toContain("··· following Pod web-c ···");
+  expect(text).toContain("··· Pod web is gone ···");
 });

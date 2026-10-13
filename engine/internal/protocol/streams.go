@@ -144,6 +144,9 @@ type LogStreamStatus struct {
 	// Pods counts the Pods the Resource owns, and Followed those being read.
 	Pods     int `json:"pods"`
 	Followed int `json:"followed"`
+	// Loaded counts the followed Pods whose containers are known. Sources
+	// lists every container being read only once it equals Followed.
+	Loaded int `json:"loaded"`
 }
 
 // LogContainerKind is the list of a Pod's spec that holds a container.
