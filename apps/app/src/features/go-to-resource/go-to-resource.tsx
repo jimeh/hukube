@@ -31,7 +31,8 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
  * The Go to Resource palette of one Workspace. It finds Resource Types and
  * Resources by name, optionally scoped by type and Namespace prefixes. Only
  * the active Workspace responds to the shortcut, and the palette closes when
- * its Workspace is hidden, because the dialog renders outside it.
+ * its Workspace is hidden or the window is out of date, because the dialog
+ * renders outside the frozen content.
  */
 export function GoToResource({ active }: { active: boolean }) {
   const { cluster, types, openList, openResource } = useWorkspace();

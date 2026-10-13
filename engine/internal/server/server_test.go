@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -377,6 +378,69 @@ func TestResourceGetWaitsForDiscovery(t *testing.T) {
 		var d protocol.ResourceData
 		_ = json.Unmarshal(data, &d)
 		return m.Type == protocol.ServerTypeData && len(d.Object) > 0
+	})
+}
+
+func TestUIServesIndexWithoutValidators(t *testing.T) {
+	dir := t.TempDir()
+	const index = "<html>current UI</html>"
+	const asset = "current asset"
+	for name, body := range map[string]string{"index.html": index, "asset.js": asset} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := New(Config{Token: testToken, UIDir: dir, Log: slog.New(slog.DiscardHandler)}).Handler()
+	for _, route := range []string{"/", "/c/some-cluster"} {
+		for header, value := range map[string]string{
+			"If-Modified-Since": time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat),
+			"If-None-Match":     "*",
+		} {
+			t.Run(route+"/"+header, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "http://localhost"+route, nil)
+				req.Header.Set(header, value)
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status %d, want 200", rec.Code)
+				}
+				if got := rec.Body.String(); got != index {
+					t.Errorf("body %q, want %q", got, index)
+				}
+				if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+					t.Errorf("Cache-Control %q, want no-cache", got)
+				}
+				for _, validator := range []string{"Last-Modified", "ETag"} {
+					if got := rec.Header().Get(validator); got != "" {
+						t.Errorf("%s %q, want no validator", validator, got)
+					}
+				}
+			})
+		}
+	}
+	t.Run("asset", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "http://localhost/asset.js", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200", rec.Code)
+		}
+		if got := rec.Body.String(); got != asset {
+			t.Errorf("body %q, want %q", got, asset)
+		}
+	})
+	t.Run("missing index", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(dir, "index.html")); err != nil {
+			t.Fatal(err)
+		}
+		for _, route := range []string{"/", "/c/some-cluster"} {
+			req := httptest.NewRequest(http.MethodGet, "http://localhost"+route, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s: status %d, want 404", route, rec.Code)
+			}
+		}
 	})
 }
 
