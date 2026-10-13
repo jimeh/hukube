@@ -5,14 +5,20 @@ import "reflect"
 // None stands for a method without params or a result.
 type None struct{}
 
+// Request names a request with params P and result R.
 type Request[P, R any] struct{ Name Method }
+
+// Topic names a subscription topic with params P and data D.
 type Topic[P, D any] struct{ Name Method }
 
+// MethodKind distinguishes requests from subscription topics.
 type MethodKind string
 
 const (
+	// MethodKindRequest identifies a request.
 	MethodKindRequest MethodKind = "request"
-	MethodKindTopic   MethodKind = "topic"
+	// MethodKindTopic identifies a subscription topic.
+	MethodKindTopic MethodKind = "topic"
 )
 
 // MethodDefinition describes one declared request or subscription topic.
@@ -34,11 +40,13 @@ func declare[P, R any](name Method, kind MethodKind) {
 	methods = append(methods, MethodDefinition{name, kind, reflect.TypeFor[P](), reflect.TypeFor[R]()})
 }
 
+// DeclareRequest records a request with params P and result R.
 func DeclareRequest[P, R any](name Method) Request[P, R] {
 	declare[P, R](name, MethodKindRequest)
 	return Request[P, R]{Name: name}
 }
 
+// DeclareTopic records a subscription topic with params P and data D.
 func DeclareTopic[P, D any](name Method) Topic[P, D] {
 	declare[P, D](name, MethodKindTopic)
 	return Topic[P, D]{Name: name}
@@ -47,6 +55,9 @@ func DeclareTopic[P, D any](name Method) Topic[P, D] {
 // Methods returns the methods in declaration order.
 func Methods() []MethodDefinition { return append([]MethodDefinition(nil), methods...) }
 
+// This is the one place each request or topic is declared. The Engine's handlers
+// register against these values, and mise run gen generates the TypeScript method
+// map from them.
 var (
 	RequestClustersList = DeclareRequest[None, []Cluster]("clusters.list")
 	RequestSettingsPut  = DeclareRequest[Setting, None]("settings.put")
