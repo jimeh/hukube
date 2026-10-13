@@ -19,13 +19,15 @@ import type { FacetEntry } from "./facets.ts";
 export function FacetSwitcher({
   available,
   selected,
+  visible,
   shared,
   onChoose,
   setControls,
 }: {
   available: readonly FacetEntry[];
   selected: Facet;
-  shared: Omit<FacetProps, "showing">;
+  visible: boolean;
+  shared: Omit<FacetProps, "showing" | "visible">;
   onChoose: (value: string) => void;
   setControls: (element: HTMLDivElement | null) => void;
 }) {
@@ -101,10 +103,16 @@ export function FacetSwitcher({
             <TabsTrigger
               key={id}
               value={id}
-              aria-label={accessibleName?.({ ...shared, showing: selected === id })}
+              aria-label={accessibleName?.({
+                ...shared,
+                showing: selected === id,
+                visible: visible && selected === id,
+              })}
             >
               {label}
-              {Badge && <Badge {...shared} showing={selected === id} />}
+              {Badge && (
+                <Badge {...shared} showing={selected === id} visible={visible && selected === id} />
+              )}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -124,10 +132,20 @@ export function FacetSwitcher({
                 <DropdownMenuRadioItem
                   key={id}
                   value={id}
-                  aria-label={accessibleName?.({ ...shared, showing: selected === id })}
+                  aria-label={accessibleName?.({
+                    ...shared,
+                    showing: selected === id,
+                    visible: visible && selected === id,
+                  })}
                 >
                   {label}
-                  {Badge && <Badge {...shared} showing={selected === id} />}
+                  {Badge && (
+                    <Badge
+                      {...shared}
+                      showing={selected === id}
+                      visible={visible && selected === id}
+                    />
+                  )}
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>

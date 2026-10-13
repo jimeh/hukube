@@ -6,6 +6,8 @@ import type {
   ClusterStatus,
   FindParams,
   FindResult,
+  LogStreamParams,
+  LogStreamStatus,
   QueryParams,
   QueryResult,
   Related,
@@ -35,5 +37,10 @@ export interface Topics {
   "settings.watch": { params: SettingKey; data: Setting };
 }
 
+export interface Streams {
+  "resource.logs": { params: LogStreamParams; event: LogStreamStatus };
+}
+
 export type RequestMethod = keyof Requests;
 export type TopicMethod = keyof Topics;
+export type StreamMethod = keyof Streams;

@@ -10,6 +10,9 @@ import { HostProvider } from "../../lib/host.tsx";
 import { OutOfDateNotice } from "./out-of-date-notice.tsx";
 
 class FakeEngineClient implements EngineClient {
+  openStream: EngineClient["openStream"] = () => {
+    throw new Error("unexpected stream");
+  };
   state: ConnectionState = "open";
   listeners = new Set<() => void>();
 
