@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
 import { clusterId, engineToken, kubectl, kubectlCreate } from "./env.ts";
@@ -60,18 +62,23 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await expect(input).toBeFocused();
   await run("echo hukube-$((6*7))", "hukube-42");
   await input.pressSequentially(
-    "stty raw -echo; printf 'paste-%s-ready\\n' $((6*7)); head -c 1048576 | wc -c; stty sane; echo paste-done-$((6*7))",
+    "stty raw -echo; printf 'paste-%s-ready\\n' $((6*7)); head -c 1048576 | md5sum; stty sane; echo paste-done-$((6*7))",
   );
   await input.press("Enter");
   await expect(screen).toContainText("paste-42-ready");
-  await input.evaluate((element) => {
+  // Patterned, so a paste that arrived reordered or doubled has another digest.
+  let pasted = "";
+  for (let index = 0; pasted.length < 1024 * 1024; index++) pasted += `${index.toString(36)}.`;
+  pasted = pasted.slice(0, 1024 * 1024);
+  await input.evaluate((element, text) => {
     const clipboard = new DataTransfer();
-    clipboard.setData("text/plain", "a".repeat(1024 * 1024));
+    clipboard.setData("text/plain", text);
     element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: clipboard }));
-  });
+  }, pasted);
   await expect(screen).toContainText("paste-done-42", { timeout: 20_000 });
-  // Every byte arrived: `wc -c` counted what `head` read from the paste.
-  await expect(screen).toContainText("1048576");
+  // The container read exactly what was pasted. The digest is nowhere in the
+  // command, so only `md5sum` can have printed it.
+  await expect(screen).toContainText(createHash("md5").update(pasted).digest("hex"));
   // A link a process prints must not open anything, or ask to.
   let dialogs = 0;
   const onDialog = (dialog: Dialog) => {

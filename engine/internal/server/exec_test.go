@@ -305,7 +305,7 @@ func TestLogStreamRefusesInput(t *testing.T) {
 		})
 	}
 }
-func TestExecOutputStall(t *testing.T) {
+func TestExecOutputWaitsThenSheds(t *testing.T) {
 	limits := defaultStreamLimits
 	limits.window = 5
 	limits.stall = time.Second
@@ -319,6 +319,7 @@ func TestExecOutputStall(t *testing.T) {
 	if !ready || string(first.data) != "\x011234" {
 		t.Fatal("first output missing")
 	}
+	// The window is full, so the next write waits for an acknowledgement.
 	done := make(chan error, 1)
 	go func() { _, err := q.write(ctx, []byte("5678")); done <- err }()
 	pollExec(t, func() bool { q.mu.Lock(); defer q.mu.Unlock(); return q.waiting == 1 })
@@ -332,17 +333,25 @@ func TestExecOutputStall(t *testing.T) {
 	if !ready || string(second.data) != "\x015678" {
 		t.Fatal("ack did not release output")
 	}
-	q.limits.stall = 15 * time.Millisecond
-	// A write that never gives up would hang here, so it is awaited.
+	// A client that then takes nothing is waited for once, for the stall
+	// period, and no longer: the oldest output goes, and a gap stands for it.
+	q.mu.Lock()
+	q.limits.stall = 30 * time.Millisecond
+	q.waitingSince = time.Now()
+	q.mu.Unlock()
+	started := time.Now()
 	go func() { _, err := q.write(ctx, []byte("abcdefgh")); done <- err }()
 	if err := awaitExec(t, done); err != nil {
 		t.Fatal(err)
 	}
+	if held := time.Since(started); held < 20*time.Millisecond {
+		t.Fatalf("output was shed after %v, without waiting for the client", held)
+	}
 	q.mu.Lock()
-	dropped, bound := q.dropping, q.bytes
+	queued := q.bytes
 	q.mu.Unlock()
-	if !dropped || bound > limits.window {
-		t.Fatalf("stall dropping=%v queued=%d", dropped, bound)
+	if queued > limits.window {
+		t.Fatalf("queued=%d beyond the window", queued)
 	}
 	if !q.acknowledge(10) {
 		t.Fatal("second ack refused")
@@ -355,9 +364,13 @@ func TestExecOutputStall(t *testing.T) {
 	if !ready || string(third.data) != "\x01efgh" {
 		t.Fatal("stall did not retain latest output")
 	}
+	// Once the client is taking output again, a write waits for it again.
+	q.mu.Lock()
 	q.limits.stall = time.Second
+	q.waitingSince = time.Time{}
+	q.mu.Unlock()
 	go func() { _, err := q.write(ctx, []byte("ijkl")); done <- err }()
-	pollExec(t, func() bool { q.mu.Lock(); defer q.mu.Unlock(); return q.waiting == 1 && !q.dropping })
+	pollExec(t, func() bool { q.mu.Lock(); defer q.mu.Unlock(); return q.waiting == 1 })
 	if !q.acknowledge(15) {
 		t.Fatal("third ack refused")
 	}
@@ -366,61 +379,119 @@ func TestExecOutputStall(t *testing.T) {
 	}
 }
 
-// A client that acknowledges a little now and then keeps every write waiting
-// without ever being silent. That must not hold the producer past the stall.
-func TestExecOutputStallIgnoresATrickle(t *testing.T) {
-	for _, floor := range []int{1 << 20, 4} {
-		t.Run(fmt.Sprint(floor), func(t *testing.T) {
+// stallClient takes one frame from q per tick until stop closes, and counts
+// the gaps it is sent. The queue's stall rule is about elapsed time, so the
+// tests that use it run on the clock, with wide margins.
+func stallClient(q *streamQueue, tick time.Duration, stop <-chan struct{}, gaps *atomic.Int32) {
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		item, ready, _, _ := q.next()
+		if !ready {
+			continue
+		}
+		if item.msg.Gap != nil {
+			gaps.Add(1)
+		}
+		if item.data != nil {
+			q.mu.Lock()
+			sent := q.sent
+			q.mu.Unlock()
+			q.acknowledge(sent)
+		}
+	}
+}
+
+// A client that takes a little now and then is never silent. It keeps up only
+// if what it took in the last stall period reaches the floor.
+func TestExecOutputShedsBelowTheFloor(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		floor uint64
+		sheds bool
+	}{{"below", 1 << 20, true}, {"at", 5, false}} {
+		t.Run(test.name, func(t *testing.T) {
 			limits := defaultStreamLimits
 			limits.window = 5
-			limits.stall = 40 * time.Millisecond
-			limits.stallFloor = floor
+			limits.stall = 300 * time.Millisecond
+			limits.stallFloor = test.floor
 			q := newStreamQueue(limits)
-			ctx, cancel := context.WithCancel(context.Background())
+			// A queue that never gives up fails here instead of hanging.
+			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 			defer cancel()
 			stop := make(chan struct{})
 			defer close(stop)
-			// The client takes one frame per tick, slower than the producer
-			// writes, so every write after the first has to wait. The queue's
-			// stall rule is about elapsed time, so this test runs on the clock.
-			go func() {
-				tick := time.NewTicker(limits.stall / 8)
-				defer tick.Stop()
-				for {
-					select {
-					case <-stop:
-						return
-					case <-tick.C:
-					}
-					if item, ready, _, _ := q.next(); ready && item.data != nil {
-						q.mu.Lock()
-						sent := q.sent
-						q.mu.Unlock()
-						q.acknowledge(sent)
-					}
-				}
-			}()
-			deadline := time.Now().Add(4 * limits.stall)
-			for time.Now().Before(deadline) {
+			var gaps atomic.Int32
+			// Slower than the producer, so every write after the first waits.
+			go stallClient(q, 10*time.Millisecond, stop, &gaps)
+			for deadline := time.Now().Add(4 * limits.stall); time.Now().Before(deadline); {
 				if _, err := q.write(ctx, []byte("1234")); err != nil {
 					t.Fatal(err)
 				}
-				q.mu.Lock()
-				dropping := q.dropping
-				q.mu.Unlock()
-				if dropping {
+				if gaps.Load() > 0 {
 					break
 				}
 			}
-			q.mu.Lock()
-			dropped := q.dropping
-			q.mu.Unlock()
-			// Below the floor the queue gives up after one stall. A client that
-			// takes the floor in each period is never dropped.
-			if want := floor > 4; dropped != want {
-				t.Fatalf("floor=%d dropping=%v want %v", floor, dropped, want)
+			if shed := gaps.Load() > 0; shed != test.sheds {
+				t.Fatalf("floor=%d shed=%v want %v", test.floor, shed, test.sheds)
 			}
 		})
+	}
+}
+
+// A client that kept up and then goes silent is waited for during one stall
+// period from then, not for a new period at each one's end.
+func TestExecOutputShedsOnePeriodAfterSilence(t *testing.T) {
+	limits := defaultStreamLimits
+	limits.window = 5
+	limits.stall = 300 * time.Millisecond
+	limits.stallFloor = 5
+	q := newStreamQueue(limits)
+	// A queue that never gives up fails here instead of hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	stop := make(chan struct{})
+	var gaps atomic.Int32
+	go stallClient(q, 10*time.Millisecond, stop, &gaps)
+	// The client keeps up for longer than a stall period, so output has
+	// waited for more than one when the client goes silent.
+	for deadline := time.Now().Add(limits.stall + limits.stall/2); time.Now().Before(deadline); {
+		if _, err := q.write(ctx, []byte("1234")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if gaps.Load() != 0 {
+		t.Fatal("output was shed while the client kept up")
+	}
+	close(stop)
+	silent := time.Now()
+	// The window fills, and then a write is held until the queue gives up.
+	for {
+		before := time.Now()
+		if _, err := q.write(ctx, []byte("1234")); err != nil {
+			t.Fatal(err)
+		}
+		q.mu.Lock()
+		shed := false
+		for _, item := range q.items {
+			shed = shed || item.msg.Gap != nil
+		}
+		q.mu.Unlock()
+		if shed {
+			break
+		}
+		if time.Since(before) > 2*limits.stall || time.Since(silent) > 4*limits.stall {
+			t.Fatalf("output was still held %v after the client went silent", time.Since(silent))
+		}
+	}
+	// Two periods would be 600 ms. One, to the next slice, is at most 350.
+	if held := time.Since(silent); held < limits.stall/2 || held > limits.stall+limits.stall/2 {
+		t.Fatalf("output was held %v after the client went silent, with a stall of %v", held, limits.stall)
 	}
 }
 
