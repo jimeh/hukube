@@ -1,4 +1,7 @@
 import { Button } from "@hukube/ui/components/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
+import { EyeIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { Skeleton } from "@hukube/ui/components/skeleton";
 import { lazy, Suspense, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -21,17 +24,27 @@ export function YamlFacet({ address, kind, manifest, lastObject, showing, contro
       {showing &&
         controls &&
         createPortal(
-          <Button
-            variant="ghost"
-            size="sm"
-            className="min-w-0 shrink"
-            aria-pressed={showManagedFields}
-            onClick={() => setShowManagedFields(!showManagedFields)}
-          >
-            <span className="truncate">
+          <Tooltip>
+            <TooltipTrigger
+              render={<Button variant="ghost" size="sm" />}
+              className="shrink-0 @max-[26rem]/switcher:size-7 @max-[26rem]/switcher:p-0"
+              aria-label={showManagedFields ? "Hide managed fields" : "Show managed fields"}
+              aria-pressed={showManagedFields}
+              onClick={() => setShowManagedFields(!showManagedFields)}
+            >
+              <HugeiconsIcon
+                icon={EyeIcon}
+                aria-hidden="true"
+                className="hidden @max-[26rem]/switcher:block"
+              />
+              <span className="@max-[26rem]/switcher:hidden">
+                {showManagedFields ? "Hide managed fields" : "Show managed fields"}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
               {showManagedFields ? "Hide managed fields" : "Show managed fields"}
-            </span>
-          </Button>,
+            </TooltipContent>
+          </Tooltip>,
           controls,
         )}
       {manifest.error && (

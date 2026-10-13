@@ -115,3 +115,20 @@ describe("openPanel active tab params", () => {
     expect(d.previous.api.close).not.toHaveBeenCalled();
   });
 });
+
+it("opens in the named panel's Pane, inherits its active tab, and replaces its preview", () => {
+  const d = dock();
+  const source = { ...d.previous, group: d.group };
+  const other = { panels: [], activePanel: undefined };
+  (d.api as unknown as { activeGroup: unknown }).activeGroup = other;
+  d.getPanel.mockImplementation((id) => (id === "source" ? source : undefined));
+  const derive = vi.fn<(params: typeof options.params, active: unknown) => typeof options.params>(
+    (params) => params,
+  );
+  openPanel(d.api, { ...options, pane: "source", deriveActiveTabParams: derive });
+  expect(d.addPanel).toHaveBeenCalledWith(
+    expect.objectContaining({ position: { referenceGroup: d.group, index: 0 } }),
+  );
+  expect(derive).toHaveBeenCalledWith(options.params, d.previous.params);
+  expect(d.previous.api.close).toHaveBeenCalledOnce();
+});

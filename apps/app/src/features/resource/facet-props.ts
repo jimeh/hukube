@@ -1,4 +1,4 @@
-import type { ResourceData, ResourceEvents, ResourceType } from "@hukube/engine-client";
+import type { Related, ResourceData, ResourceEvents, ResourceType } from "@hukube/engine-client";
 import type { SubscriptionState } from "@hukube/engine-client/react";
 import type { ResourceAddress, TypeKey } from "@hukube/k8s";
 
@@ -20,6 +20,10 @@ export interface FacetProps {
   lastObject?: Record<string, unknown>;
   /** The live Events subscription state for the same incarnation. */
   events: SubscriptionState<ResourceEvents>;
+  /** The live Relationships, retained while only the request for cells changes. */
+  related: SubscriptionState<Related>;
+  /** The panel whose Pane related Resources open in. */
+  panelId: string;
   /** Whether this Facet is currently visible. */
   showing: boolean;
   /** The switcher row element for the showing Facet's own controls. */

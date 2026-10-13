@@ -1,6 +1,7 @@
 # Plan: ownership Relationships and the Related Facet
 
-Status: planned.
+Status: implemented, not merged yet. "What changed while building" lists where
+the result differs from the text below.
 
 ADR-0015 records where ownership comes from and what identifies an owner and
 an owned Resource.
@@ -660,6 +661,14 @@ The Engine follows phases 1 and 2 without a design change. The existing tygo
 generator emits the single-valued `RelationshipKind` as TypeScript `string`
 plus `RelationshipKindOwns`, even with `enum_style: "union"`. The direction
 and status enums generate unions. No generator workaround was added.
+
+A double-click on a related Resource is handled as two clicks. The first
+click opens a Preview Tab in the same Pane, which replaces the content under
+the pointer, so the second click lands in another tab's Related Facet and no
+`dblclick` reaches the row. The Facet therefore remembers what a click
+opened, and a second click of the same burst (`detail` of 2) opens that
+Resource as a regular tab, wherever in a Related Facet it lands. A click
+opens its Preview Tab at once, with no delay to wait for a second.
 
 ## Measurements
 
