@@ -15,7 +15,22 @@ export function resourceEventsParams(
   const metadata = lastObject?.["metadata"];
   const uid =
     metadata && typeof metadata === "object" && "uid" in metadata ? metadata.uid : undefined;
-  return { cluster, type, namespace, name, ...(typeof uid === "string" ? { uid } : {}) };
+  const annotations =
+    metadata && typeof metadata === "object" && "annotations" in metadata
+      ? metadata.annotations
+      : undefined;
+  const mirror =
+    annotations && typeof annotations === "object" && "kubernetes.io/config.mirror" in annotations
+      ? annotations["kubernetes.io/config.mirror"]
+      : undefined;
+  return {
+    cluster,
+    type,
+    namespace,
+    name,
+    ...(typeof uid === "string" ? { uid } : {}),
+    ...(type === "pods" && typeof mirror === "string" && mirror ? { otherUids: [mirror] } : {}),
+  };
 }
 
 /** A new Resource tab inherits the Pane's active tab's Facet unless its address names one. */

@@ -25,14 +25,18 @@ another API group:
   the Resource's name. `kubectl describe` matches the UID exactly, which
   hides Events from components that write something else. The kubelet wrote
   a Node's name as the UID up to at least Kubernetes 1.30 and writes no UID
-  in 1.35, and hand-built references often have none. When the client does
-  not know the Resource's UID, because the Resource does not exist, every
-  incarnation matches.
+  in 1.35, and hand-built references often have none. The reference may also
+  hold another UID the client names for the same incarnation: the kubelet
+  writes a static Pod's Events with the hash in the mirror Pod's
+  `kubernetes.io/config.mirror` annotation, not with the mirror Pod's UID,
+  which is why `kubectl describe` shows no Events for a control-plane Pod.
+  When the client does not know the Resource's UID, because the Resource
+  does not exist, every incarnation matches.
 - **API group.** A kind is not unique across groups. When the reference
-  carries an `apiVersion` and its UID is not the Resource's, its group must be
-  the Resource Type's.
+  carries an `apiVersion` and its UID is not one of the Resource's, its group
+  must be the Resource Type's.
 
-The client supplies the UID from the Manifest it shows. The Engine could read
+The client supplies the UIDs from the Manifest it shows. The Engine could read
 it from its index, but the tab keeps showing the last Manifest of a deleted
 Resource, and its Events should stay those of the same incarnation.
 
@@ -47,6 +51,15 @@ Resource, and its Events should stay those of the same incarnation.
 - **One shared watch per Namespace.** It would serve several tabs with one
   list, at the price of holding a Namespace's Events in memory and of
   reference counting. Not worth it before the Timeline exists.
+- **Watching `default` and `kube-system` for a cluster-scoped Resource.** The
+  API server accepts its Events nowhere else, so two namespaced watches would
+  read far less than one over every Namespace, and would serve a user who may
+  read Events there but not everywhere. They are two watches with their own
+  permissions, errors, and retries to merge into one answer, such as when one
+  Namespace is refused and the other is not. One watch with one outcome is
+  what `kubectl describe node` does, and the Timeline will replace this
+  source. Worth revisiting if cluster-scoped tabs prove costly in a large
+  Cluster.
 
 ## Consequences
 
@@ -55,16 +68,17 @@ Resource, and its Events should stay those of the same incarnation.
   warnings. If the watches of hidden tabs become a cost, both should stop
   while a tab is hidden.
 - The API server does not cache Events, so each list reads the Namespace's
-  Events from etcd and filters them. That is the cost of one
-  `kubectl describe`, paid when a tab opens and again whenever its watch
-  cannot resume. A watch that has delivered nothing cannot resume once etcd
+  Events from etcd and filters them, and for a cluster-scoped Resource the
+  Events of every Namespace. That is the cost of one `kubectl describe`,
+  paid when a tab opens and again whenever its watch cannot resume. A watch that has delivered nothing cannot resume once etcd
   has compacted its resourceVersion, which took between 8 and 10 minutes
   against a test API server, because an uncached type sends no bookmarks.
   The watch therefore asks for a timeout of 30 to 60 minutes, so a quiet tab
   lists again about that often.
-- Events about a cluster-scoped Resource need permission to list Events in
-  every Namespace, as `kubectl describe node` does. A user without it sees
-  that they are not permitted, not an empty Facet.
+- Events about a cluster-scoped Resource need permission to list and watch
+  Events in every Namespace, as `kubectl describe node` needs to list them. A
+  user without it sees that they are not permitted, not an empty Facet. So
+  does a user who may list Events but not watch them.
 - An Event leaves the Facet when the Cluster deletes it, which by default is
   an hour after it was last updated. Keeping Events longer is the Timeline's
   job.
