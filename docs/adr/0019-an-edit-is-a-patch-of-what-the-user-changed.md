@@ -32,7 +32,8 @@ on the Cluster now.
   and none of them is a conflict.
 
 The user applies what they reviewed: the UI sends the review's own "before"
-and "after" as the edit. An overlap at that moment is therefore a change the
+and "desired" as the edit, plus the dry run's "after" as optional
+`Expected`. An overlap at that moment is therefore a change the
 user has not seen, and the review runs again and shows it.
 
 A list is compared as one field, because a JSON merge patch replaces a list
@@ -59,9 +60,16 @@ hears the result, the UI does not know whether it happened.
 - The Engine never abandons a write in flight. A lost socket or a `cancel`
   message stops a request only before its write is sent, when nothing has
   changed. A dry run is cancelled like a read.
-- Repeating a mutation is harmless. A repeated apply finds the Cluster
-  already holds every value and reports that. A delete carries the UID it
-  means, and finding nothing to delete is success.
+- A repeated apply first compares the live editable Manifest with optional
+  `Expected`, the review's dry-run result, using number-aware equality.
+  A match returns `Unchanged` with the live `resourceVersion` and writes
+  nothing, before refusing overlaps. This recognizes defaulting inside an
+  edited list and admission changes predicted by the dry run. Review ignores
+  `Expected`. Without it, an empty effective edit still returns `Unchanged`.
+  A delete carries the UID it means, and finding nothing to delete is success.
+- A real PATCH or DELETE error without an API status or an existing
+  `ErrorDetail` is `unavailable`, because the write may have landed even if
+  reading or decoding its answer failed.
 - The UI never reports a mutation as failed when the connection was lost. It
   says the outcome is unknown, waits for the connection, and sends the same
   request again while its owner still exists. A request rejected before an
@@ -71,6 +79,15 @@ hears the result, the UI does not know whether it happened.
   review closes. Ending or discarding the edit, closing its Tab, or unmounting
   its Facet stops checking and drops the repeated request. The discard prompt
   explains that the apply may already have reached the Cluster.
+- After a lost apply answer, a conflicting repeat reviews again only while
+  the dialog is open, warning that the edit may already have been applied.
+  Other refused repeats retain that warning too. If the dialog is closed,
+  the editor warns that hukube could not confirm the apply, without a
+  background review. The outcome remains unknown until an apply succeeds,
+  the user starts a new review with Review changes, or the edit is discarded.
+- A conflicting delete repeat after a lost answer warns that the Resource
+  may have been deleted and replaced. Other refusals say the earlier delete
+  may already have happened. Neither claims nothing was deleted.
 - A pending delete belongs to its confirmation. Its warning explains the
   unknown outcome, and Stop and close or Escape stops the resend. Ending
   checking cannot undo a write that has already reached the Cluster.
@@ -114,11 +131,15 @@ hears the result, the UI does not know whether it happened.
   what the Engine compared.
 - A Changeset is a list of these edits, reviewed and applied with one
   request per Resource. Nothing here needs to change for it.
-- A repeated apply answers `conflict` in one case: admission rewrote a value
-  the edit set. The review that follows shows the Cluster's value.
+- A repeat can still answer `conflict` if another writer changes an edited
+  field between the lost answer and the repeat, or admission differs from
+  the dry run. `Expected` cannot prove the history in those cases. A review
+  shows the Cluster as it is now, and retains the original unknown outcome.
 - YAML is parsed in the UI as kubectl parses it (YAML 1.1 types), so
   `0644` and `yes` mean what they mean to `kubectl apply`. Comments and
-  formatting are not part of a Resource and are not kept.
+  formatting are not part of a Resource and are not kept. Non-finite numbers
+  are rejected before JSON encoding. Literal `<<` keys are quoted when
+  rendering; merge keys still work in user-typed text.
 - A delete always sends a propagation policy, `Background` unless the user
   chooses another, because a Job or a ReplicationController deleted without
   one orphans what it owns.

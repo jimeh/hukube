@@ -137,6 +137,9 @@ func align(before, after []byte) []byte {
 	return after
 }
 
+// Equal compares JSON values, including numbers with different encodings.
+func Equal(a, b []byte) bool { return equal(a, b) }
+
 func equal(a, b []byte) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return len(a) == len(b)

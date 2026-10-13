@@ -150,12 +150,15 @@ means no edit is ignored without the user being told.
 
 The UI parses and renders YAML with one configuration of the `yaml` package:
 version 1.1, without the timestamp, binary, sexagesimal, set, and ordered-map
-tags. A user who types `defaultMode: 0644` or `enabled: yes` gets what
+tags. Rendering also excludes the merge tag and quotes a literal `<<` key;
+parsing keeps merge keys working in user-typed text. A user who types `defaultMode: 0644` or `enabled: yes` gets what
 `kubectl apply` would send. The reading view uses the same configuration, so
 it quotes strings such as `"yes"` and `"0644"` as `kubectl get -o yaml` does.
 
 The edited text must be one YAML document whose root is a mapping. Comments
-and formatting are not part of a Resource and are not kept.
+and formatting are not part of a Resource and are not kept. Non-finite numbers,
+including `.inf`, `.nan`, `-.inf`, and overflowing floats, are YAML issues
+at each scalar, including in nested mappings and lists. They cannot be reviewed.
 
 ### A review is a request, and an apply is the reviewed edit
 
@@ -205,6 +208,8 @@ type ResourceEdit struct {
 	// Base is the Manifest the edit started from, and Manifest the edited one.
 	Base     json.RawMessage `json:"base"`
 	Manifest json.RawMessage `json:"manifest"`
+	// Expected is the review's dry-run result, used to recognize a completed apply.
+	Expected json.RawMessage `json:"expected,omitempty"`
 }
 
 type EditReview struct {
@@ -315,6 +320,10 @@ Given `base`, `manifest`, and the live Resource `live`:
 
 `resource.apply` runs the same steps with these differences:
 
+- Before refusing overlaps, compare the live editable Manifest with the optional
+  `Expected` editable Manifest, using number-aware equality. If they match,
+  return `Unchanged` with the live `resourceVersion` and write nothing.
+  `resource.review` ignores `Expected`.
 - An overlap fails the request with `conflict`. Because the UI sends the
   review's `Before` and `Desired`, an overlap here is a change the user has
   not seen.
@@ -336,17 +345,24 @@ ADR-0019 records this.
   ends, with a 30 second limit. Cancelling a write in flight would make its
   outcome unknown, so the Engine does not.
 - A dry run is cancelled like any other read.
-- `resource.apply` repeated with the same params is harmless: after the
-  first one landed, `effective` is empty and the answer is `Unchanged`.
-  `resource.delete` carries the UID as a precondition, and "not found" is
-  success.
+- `resource.apply` repeated with the same params returns `Unchanged` if
+  the live editable Manifest matches `Expected`, or `effective` is empty.
+  `Expected` recognizes API server defaults and admission changes present in
+  the review's dry-run result. `resource.delete` carries the UID as a
+  precondition, and "not found" is success.
 - The UI therefore never reports an apply or a delete as failed after
   `disconnected`. It says the outcome is unknown, waits for the connection,
   and sends the same request again while its edit or confirmation still exists.
 
-One case answers imprecisely: when admission rewrote a value the edit set,
-the repeat sees that value as changed on the Cluster and fails with
-`conflict`. The review that follows shows the Cluster's value, which is true.
+A repeat remains imprecise when another writer changes an edited field
+between the lost answer and the repeat, or admission differs from the dry
+run. A `conflict` or refusal does not prove the earlier write never landed.
+The UI keeps the outcome unknown until an apply succeeds, the user starts
+a new review with Review changes, or the edit is discarded.
+
+A real PATCH or DELETE error that is neither an API status nor an existing
+`ErrorDetail` is `unavailable`: the API server did not answer, and the write
+may or may not have happened. This includes response read and decode failures.
 
 ### Cancelling a request
 
@@ -384,8 +400,8 @@ no behaviour there.
 
 ### Size
 
-The control socket's read limit becomes 8 MiB. An edit carries two copies of
-a Manifest, and the API server refuses a request body over 3 MiB.
+The control socket's read limit becomes 8 MiB. An apply can carry three copies of
+a Manifest, including `Expected`, and the API server refuses a request body over 3 MiB.
 
 `EngineConnection.request` measures the encoded message before sending. One
 over the limit is rejected with `too_large` and never sent, because sending
@@ -439,7 +455,8 @@ precondition.
   after a delete shows a `Terminating` badge, and the YAML Facet can edit
   `metadata.finalizers`.
 - A 409 on the UID precondition fails with `conflict`: the Resource was
-  replaced and nothing was deleted.
+  replaced and nothing was deleted by that attempt. After a lost answer,
+  the original Resource may already have been deleted and replaced.
 
 ## UI and UX
 
@@ -509,15 +526,19 @@ actions so the button remains focusable and receives pointer events.
 | Unsaved edits, the editable Manifest changes               | The text is not touched. The strip reads "ConfigMap web-config changed on the Cluster while you were editing. Review changes shows how your edit applies to it."                                                                                                        |
 | Unsaved edits, the Resource is deleted, or its UID changes | The text is not touched. The strip reads "ConfigMap web-config was deleted on the Cluster while you were editing. Your edits cannot be applied." (or "was replaced by a new ConfigMap of the same name"), with Copy YAML and Discard edits. Review changes is disabled. |
 
-The strip shows one notice, the first that applies of: deleted or replaced,
-a pending apply, the last review's refusal, a YAML error, changed on the
+The strip shows one notice, the first that applies of: an unconfirmed apply,
+deleted or replaced, a pending apply, the last review's refusal, a YAML error, changed on the
 Cluster, the editing hint. A pending apply says "An apply of this edit was
 in flight when the connection to the Engine was lost. hukube checks the
-result when it reconnects."
+result when it reconnects." Once a repeat ends without success, the strip
+warns: "hukube could not confirm whether your apply went through. Review
+changes shows the Cluster as it is now." It stays until an apply succeeds,
+Review changes starts a new review, or the edit is discarded. A closed
+review dialog never starts a background review after the repeat.
 
 The strip is at most 8rem tall and scrolls beyond that; text wraps anywhere.
 The editing hint is neutral with an information icon. Cluster changes and a
-pending apply use the warning token and a warning icon. Refusals, YAML errors,
+pending or unconfirmed apply use the warning token and a warning icon. Refusals, YAML errors,
 and deleted or replaced Resources use the destructive token and an error icon.
 Text uses the foreground token to keep it readable in both themes.
 
@@ -561,7 +582,9 @@ The dialog is as wide as the window allows up to 72rem and as tall up to
 Focus starts on Back to editing, so Enter cannot apply by accident. Escape
 and Back to editing return to the editor with the text and its undo history
 as they were. All modal dialogs make the window content inert until the
-last modal closes, in addition to Base UI's focus guards.
+last modal closes, in addition to Base UI's focus guards. Focus returns to
+the editor after the review's close commits and its animation completes,
+when the window content is no longer inert.
 
 | State                          | The dialog shows                                                                                                                                                                               | Apply                                          |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -584,8 +607,16 @@ While the review is open and not applying, a change of the live editable
 Manifest from the review's `Before` runs the review again after 300 ms. The
 old diff stays, dimmed, until the new one arrives.
 
-The apply sends the review's `Before` as `Base` and its `Desired` as
-`Manifest`. A review that runs again sends the edit's own base and text.
+The apply sends the review's `Before` as `Base`, its `Desired` as
+`Manifest`, and its `After` as `Expected` when present. A review that runs
+again sends the edit's own base and text.
+
+After a lost apply answer, a conflicting repeat reviews again only while
+the dialog is open. Its warning replaces the changed-while-reviewing line:
+"The connection was lost while this edit was being applied, so it may
+already have been applied. This review shows the Cluster as it is now."
+A refused repeat replaces "Nothing was applied." with "The connection was
+lost during an earlier attempt, so the edit may already have been applied."
 
 After an apply, Edit mode ends and the editor shows the live Manifest.
 
@@ -622,7 +653,10 @@ The confirmation is an alert dialog. From the top:
    - a Namespace: "This deletes every Resource in the Namespace: at least
      42 Resources." The count is the total of a Query for that Namespace;
    - a CustomResourceDefinition: "This deletes every Widget in the Cluster:
-     3 Resources.";
+     3 Resources." The count appears only when the Resource Type is known
+     and `ready`; otherwise it says "This deletes every Widget in the
+     Cluster. The number of Resources is not known." An unknown kind uses
+     "Resource of this type";
    - a Resource that owns others: "It owns 3 Resources: ReplicaSet (1) and
      Pod (2).", with the dependents choice;
    - a Resource with finalizers: "It has finalizers (a, b), so it stays
@@ -645,9 +679,15 @@ The confirmation is an alert dialog. From the top:
 | Deleted                        | The dialog closes. The tab shows `Terminating`, then `Deleted`, from the live Manifest.                                                                                                        |
 | Not permitted                  | "Not permitted" with the API server's message.                                                                                                                                                 |
 | Replaced                       | "This ConfigMap was replaced by a new one of the same name. Nothing was deleted."                                                                                                              |
-| The Cluster did not answer     | The message, with Try again.                                                                                                                                                                   |
+| The Cluster did not answer     | "The Cluster did not answer. The delete may or may not have happened.", with the API message and Try again.                                                                                    |
 | Connection lost while deleting | "Lost the connection to the Engine while deleting. The delete may or may not have reached the Cluster. hukube sends it again when it reconnects." Stop and close, or Escape, stops the resend. |
 | Not connected                  | "Reconnecting to the Engine…"; Delete is disabled. A raced unsent request says "Not connected to the Engine. Nothing was deleted."                                                             |
+
+After a lost delete answer, a conflicting repeat instead says "The
+connection was lost while deleting. The Resource may have been deleted and
+then replaced by a new one of the same name." Other refused repeats end
+with "The connection was lost during an earlier attempt, so the delete may
+already have happened." Neither claims nothing was deleted.
 
 A Resource with a `deletionTimestamp` shows a `Terminating` badge in the
 header, whose tooltip says "Waiting for finalizers: a, b", or "Waiting for the Cluster
@@ -948,3 +988,30 @@ DeploymentSpec.spec.replicas of type int32`. The shared mapper extracts
 - The success pill uses the foreground text and a success icon on the popover
   token. Warning and error strips retain foreground text, with token-colored
   backgrounds, borders, and icons, so the small text keeps its contrast.
+
+### Scoped review corrections
+
+- Applies carry the review's `After` as optional `Expected`. Comparing its
+  editable Manifest before overlap checking recognizes an apply that landed
+  with API server defaulting, including a default inside an edited list.
+  Another writer changing an edited field before a repeat, or admission
+  differing from the dry run, still leaves the original outcome unknown.
+- Unknown outcome and reconnect checking are separate states. Re-reviewing
+  after a conflict preserves uncertainty; Review changes deliberately starts
+  a new review. A closed dialog keeps an unconfirmed warning without a
+  background review. Delete retains uncertainty across refused repeats too.
+- Once a real PATCH or DELETE is sent, a non-status response failure is
+  `unavailable`, not a refusal. Controlled transport tests let the API server
+  finish the write before failing the response read or PATCH decode.
+- Non-finite YAML scalars are rejected at their node positions before JSON
+  encoding can turn them into removals. Rendering removes only the merge tag
+  from its schema and quotes literal `<<` mapping keys; parsing still supports
+  typed merge keys. Both reading and editing use this renderer.
+- Review close uses Base UI's `onOpenChangeComplete` to return focus after
+  the window loses `inert`. The end-to-end flow types without clicking after
+  Escape and verifies the existing undo history.
+- A CustomResourceDefinition confirmation states a Resource count only for a
+  known Resource Type in `ready`. Missing, syncing, forbidden, and failed
+  types say the count is not known.
+- The refusal end-to-end test creates a `pause` container using
+  `rancher/mirrored-pause:3.6`, already present in k3s.

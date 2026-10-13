@@ -992,9 +992,11 @@ test("reviews and applies ConfigMap edits, handles overlaps, and confirms deleti
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(editor.locator(".view-lines")).toContainText("reviewed");
-  await editor.click();
+  await expect(editor.getByRole("textbox", { name: "Resource YAML" })).toBeFocused();
   await page.keyboard.press("ControlOrMeta+Z");
   await expect(reviewButton).toBeDisabled();
+  await page.keyboard.type("# focus-returned");
+  await expect(editor.locator(".view-lines")).toContainText("focus-returned");
   await write("hello", true);
   await reviewButton.click();
   await expect(dialog.getByText("The Cluster accepts this edit.")).toBeVisible();
@@ -1072,7 +1074,7 @@ test("shows a readable unknown-field refusal and keeps the YAML editor usable", 
 }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const name = "e2e-refusal";
-  kubectl("-n", namespace, "create", "deployment", name, "--image=nginx:1");
+  kubectl("-n", namespace, "create", "deployment", name, "--image=rancher/mirrored-pause:3.6");
   await page.goto(`/#token=${engineToken}`);
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await page
@@ -1105,7 +1107,7 @@ test("shows a readable unknown-field refusal and keeps the YAML editor usable", 
   await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toHaveText(
     "No unsaved edits",
   );
-  const text = `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\nspec:\n  bogusField: 1\n  replicas: 1\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: nginx\n          image: nginx:1\n`;
+  const text = `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\nspec:\n  bogusField: 1\n  replicas: 1\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: pause\n          image: rancher/mirrored-pause:3.6\n`;
   await editor.getByRole("textbox", { name: "Resource YAML" }).focus();
   await expect
     .poll(() => editor.evaluate((element) => element.contains(document.activeElement)))

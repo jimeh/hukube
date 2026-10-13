@@ -24,6 +24,10 @@ export interface ResourceEdit {
    */
   base: { [key: string]: unknown };
   manifest: { [key: string]: unknown };
+  /**
+   * Expected is the review's dry-run result, used to recognize a completed apply.
+   */
+  expected?: { [key: string]: unknown };
 }
 /**
  * EditReview compares an edit with the Cluster and its dry-run answer.
@@ -102,7 +106,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "567f7b0e08f54e8f";
+export const Hash = "3cbed61d3f0a5d92";
 
 //////////
 // source: protocol.go

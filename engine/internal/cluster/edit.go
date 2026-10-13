@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -122,6 +123,15 @@ func (c *Cluster) runEdit(ctx context.Context, p protocol.ResourceEdit, apply bo
 		}
 		r := comparison.Review
 		r.Warnings = w.snapshot()
+		if apply && len(p.Expected) > 0 {
+			expected, err := edit.Editable(p.Expected)
+			if err != nil {
+				return r, protocol.ApplyResult{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeInvalid, Message: "Invalid expected Manifest: " + err.Error()}
+			}
+			if edit.Equal(r.Before, expected) {
+				return r, protocol.ApplyResult{ResourceVersion: live.GetResourceVersion(), Unchanged: true, Warnings: w.snapshot()}, nil
+			}
+		}
 		if apply && len(r.Overlaps) > 0 {
 			return r, protocol.ApplyResult{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeConflict, Message: "The Resource changed on the Cluster. Review the edit again before applying it."}
 		}
@@ -162,7 +172,7 @@ func (c *Cluster) runEdit(ctx context.Context, p protocol.ResourceEdit, apply bo
 				return r, protocol.ApplyResult{}, ctx.Err()
 			}
 			if apply {
-				return r, protocol.ApplyResult{}, err
+				return r, protocol.ApplyResult{}, writeError(err)
 			}
 			r.Refusal = apierror.Detail(err)
 			r.DryRunUnsupported = apierrors.IsBadRequest(err) && strings.Contains(err.Error(), "does not support dry run")
@@ -233,7 +243,20 @@ func (c *Cluster) Delete(ctx context.Context, p protocol.DeleteParams) error {
 		detail.Message = "The Resource was replaced by a Resource of the same name. Nothing was deleted."
 		return detail
 	}
-	return err
+	return writeError(err)
+}
+
+// Without an API answer, a sent write's outcome is unknown.
+func writeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var status apierrors.APIStatus
+	var detail *protocol.ErrorDetail
+	if errors.As(err, &status) || errors.As(err, &detail) {
+		return err
+	}
+	return &protocol.ErrorDetail{Code: protocol.ErrorCodeUnavailable, Message: err.Error(), Causes: []protocol.ErrorCause{}}
 }
 
 type accessKey struct {

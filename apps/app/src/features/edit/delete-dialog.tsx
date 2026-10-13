@@ -67,6 +67,7 @@ export function DeleteDialog({
   const [immediate, setImmediate] = useState(false);
   const [phase, setPhase] = useState<"ready" | "deleting" | "disconnected" | "failed">("ready");
   const [error, setError] = useState<ReturnType<typeof requestError>>();
+  const [unknownOutcome, setUnknownOutcome] = useState(false);
   const pending = useRef<DeleteParams | undefined>(undefined);
   const active = useRef(true);
   const currentPhase = useRef(phase);
@@ -95,6 +96,7 @@ export function DeleteDialog({
       } catch (failure) {
         if (!active.current || pending.current !== params) return;
         const detail = requestError(failure);
+        if (detail.code === "disconnected") setUnknownOutcome(true);
         if (detail.code === "not_connected" && checkingPending) {
           setPhase("disconnected");
           return;
@@ -135,6 +137,7 @@ export function DeleteDialog({
       setImmediate(false);
       setPropagation("background");
       setError(undefined);
+      setUnknownOutcome(false);
       setPhase("ready");
     }
   }
@@ -195,8 +198,10 @@ export function DeleteDialog({
           ))}
         {crd && (
           <p>
-            This deletes every {type?.kind ?? "Resource of this type"} in the Cluster:{" "}
-            {type?.count ?? 0} {type?.count === 1 ? "Resource" : "Resources"}.
+            This deletes every {type?.kind ?? "Resource of this type"} in the Cluster
+            {type?.state === "ready"
+              ? `: ${type.count} ${type.count === 1 ? "Resource" : "Resources"}.`
+              : ". The number of Resources is not known."}
           </p>
         )}
         {!!owned?.total && (
@@ -282,12 +287,26 @@ export function DeleteDialog({
               {error?.code === "forbidden"
                 ? "Not permitted"
                 : error?.code === "conflict"
-                  ? `This ${kind} was replaced by a new one of the same name. Nothing was deleted.`
+                  ? unknownOutcome
+                    ? "The connection was lost while deleting. The Resource may have been deleted and then replaced by a new one of the same name."
+                    : `This ${kind} was replaced by a new one of the same name. Nothing was deleted.`
                   : error?.code === "not_connected"
-                    ? "Not connected to the Engine. Nothing was deleted."
-                    : error?.message}
+                    ? unknownOutcome
+                      ? "Not connected to the Engine."
+                      : "Not connected to the Engine. Nothing was deleted."
+                    : error?.code === "unavailable"
+                      ? "The Cluster did not answer. The delete may or may not have happened."
+                      : error?.message}
             </p>
-            {error?.code === "forbidden" && <p>{error.message}</p>}
+            {(error?.code === "forbidden" || error?.code === "unavailable") && (
+              <p>{error.message}</p>
+            )}
+            {unknownOutcome && error?.code !== "conflict" && (
+              <p>
+                The connection was lost during an earlier attempt, so the delete may already have
+                happened.
+              </p>
+            )}
           </div>
         )}
         {connection !== "open" && <output>Reconnecting to the Engine…</output>}

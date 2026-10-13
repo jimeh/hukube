@@ -16,6 +16,8 @@ type ResourceEdit struct {
 	// Base is the Manifest the edit started from, and Manifest the edited one.
 	Base     json.RawMessage `json:"base" tstype:"{ [key: string]: unknown }"`
 	Manifest json.RawMessage `json:"manifest" tstype:"{ [key: string]: unknown }"`
+	// Expected is the review's dry-run result, used to recognize a completed apply.
+	Expected json.RawMessage `json:"expected,omitempty" tstype:"{ [key: string]: unknown }"`
 }
 
 // EditReview compares an edit with the Cluster and its dry-run answer.

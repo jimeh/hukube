@@ -26,6 +26,9 @@ describe("kubectl YAML", () => {
       boolean: true,
       null: null,
       list: ["yes", 1],
+      "<<": { a: 1 },
+      config: { "<<": { a: 1 }, b: 2 },
+      scalarMergeKey: { "<<": "literal" },
       data: Object.fromEntries([
         ["constructor", "safe"],
         ["__proto__", "literal"],
@@ -33,6 +36,37 @@ describe("kubectl YAML", () => {
     };
     expect(parseManifest(renderYaml(values)).object).toEqual(values);
   });
+  it("keeps YAML merge keys working in typed text", () => {
+    expect(parseManifest("base: &base { a: 1 }\nconfig: { <<: *base, b: 2 }").object).toEqual({
+      base: { a: 1 },
+      config: { a: 1, b: 2 },
+    });
+  });
+  it.each([".inf", ".nan", "-.inf", "1e400"])(
+    "rejects every non-finite %s at its scalar position in mappings and lists",
+    (value) => {
+      const result = parseManifest(
+        `config:\n  nested:\n    x: ${value}\n  list:\n    - ${value}\n`,
+      );
+      expect(result.object).toBeUndefined();
+      expect(result.issues).toEqual([
+        {
+          message: "A Manifest cannot hold this number (.inf, .nan, or a number too large).",
+          line: 3,
+          column: 8,
+          endLine: 3,
+          endColumn: 8 + value.length,
+        },
+        {
+          message: "A Manifest cannot hold this number (.inf, .nan, or a number too large).",
+          line: 5,
+          column: 7,
+          endLine: 5,
+          endColumn: 7 + value.length,
+        },
+      ]);
+    },
+  );
   it.each(["a: 1\na: 2", "a: 1\n---\nb: 2", "- one", "a: ["])(
     "rejects invalid Manifest %s with a position",
     (text) => {
