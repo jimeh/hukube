@@ -29,10 +29,9 @@ export function YamlFacet({ address, kind, manifest, lastObject, showing, contro
           <>
             <Tooltip>
               <TooltipTrigger
-                render={<Button variant="ghost" size="sm" />}
+                render={<Button variant="ghost" size="sm" disabled={yaml === undefined} />}
                 className="shrink-0 @max-[26rem]/switcher:size-7 @max-[26rem]/switcher:p-0"
                 aria-label="Search"
-                disabled={yaml === undefined}
                 onClick={() => editor.current?.search()}
               >
                 <HugeiconsIcon

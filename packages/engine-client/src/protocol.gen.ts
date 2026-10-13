@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "871f912a076c2f63";
+export const Hash = "55ec1fb4411e50dc";
 
 //////////
 // source: protocol.go
@@ -728,6 +728,11 @@ export interface LogStreamStatus {
    */
   pods: number /* int */;
   followed: number /* int */;
+  /**
+   * Loaded counts the followed Pods whose containers are known. Sources
+   * lists every container being read only once it equals Followed.
+   */
+  loaded: number /* int */;
 }
 /**
  * LogContainerKind is the list of a Pod's spec that holds a container.
