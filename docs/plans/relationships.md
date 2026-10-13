@@ -640,3 +640,49 @@ independent experience review.
 ## Unresolved questions
 
 None.
+
+## What changed while building
+
+The Engine follows phases 1 and 2 without a design change. The existing tygo
+generator emits the single-valued `RelationshipKind` as TypeScript `string`
+plus `RelationshipKindOwns`, even with `enum_style: "union"`. The direction
+and status enums generate unions. No generator workaround was added.
+
+## Measurements
+
+Measured on 2026-10-13, macOS arm64, Apple M3 Max, Go 1.27.1, with:
+
+```sh
+mise run test:engine -- -run '^$' -bench 'Benchmark(StoreOwners|RelatedLargeOwner)$' -benchmem -benchtime=2s -race=false
+```
+
+The Store benchmark builds 100,000 synthetic Pods through `Store.Apply`,
+with six labels each. In the ownership case, each Pod has one ReplicaSet
+owner reference, five Pods per ReplicaSet, with API version and kind
+interned. It measures retained heap after a GC while keeping the Store
+alive, subtracts the heap before construction, and reports heap bytes per
+Resource with `b.ReportMetric`. Both cases use the new `Meta` shape and
+share the six literal label keys and values; this is not the same fixture
+as the earlier throwaway probe.
+
+| Index holds                             | Heap bytes per Resource | Time to build 100,000 Pods |
+| --------------------------------------- | ----------------------- | -------------------------- |
+| Metadata and labels, without owners     | 580.0                   | 51.52 ms                   |
+| Owner references and reverse-index sets | 803.7                   | 78.46 ms                   |
+
+Ownership adds 223.7 retained heap bytes per Resource in this fixture,
+38.6% over the case without owners.
+
+`BenchmarkRelatedLargeOwner` recomputes `Related` for an owner of 10,000
+Pods using the default limits. It keeps the exact total of 10,000 and
+returns 100 Resource rows and one `more` row of 9,900:
+
+| Time per recompute | Allocated bytes per recompute | Allocations per recompute |
+| ------------------ | ----------------------------- | ------------------------- |
+| 32.19 ms           | 23,743,908                    | 30,811                    |
+
+The display limit bounds the answer's rows, but not the work of counting
+all descendants. These are synthetic, local measurements without Table
+fetches or control-socket JSON encoding, not a latency guarantee for a
+Cluster. The race detector is disabled only for the benchmarks; the Engine
+tests run with it enabled.

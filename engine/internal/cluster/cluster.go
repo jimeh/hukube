@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unique"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +28,7 @@ import (
 	"github.com/jimeh/hukube/engine/internal/kubeconfig"
 	"github.com/jimeh/hukube/engine/internal/notify"
 	"github.com/jimeh/hukube/engine/internal/protocol"
+	"github.com/jimeh/hukube/engine/internal/relationship"
 )
 
 // Resource Types whose changes can add or remove other Resource Types.
@@ -124,12 +126,15 @@ type Cluster struct {
 
 	// Index holds metadata for every Resource of every indexed type.
 	Index *index.Store
+	// Graph resolves ownership Relationships from indexed metadata.
+	Graph *relationship.Graph
 	// tables holds the Tables callers currently hold (see Table).
 	tables *tables
 
 	mu            sync.Mutex
 	status        protocol.ClusterStatus
 	types         map[protocol.TypeKey]*indexedType
+	kinds         map[groupKind]protocol.TypeKey
 	statusChanged notify.Signal
 	typesChanged  notify.Signal
 	rediscover    chan struct{}
@@ -198,6 +203,7 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 		types:      make(map[protocol.TypeKey]*indexedType),
 		rediscover: make(chan struct{}, 1),
 	}
+	c.Graph = relationship.New(c.Index, c)
 	c.tables = newTables(ctx, timing.TableLinger, func(ctx context.Context, key protocol.TypeKey, t *Table) {
 		runTable(ctx, t, c.tableSource(key, t), timing, log.With("type", key))
 	})
@@ -418,6 +424,7 @@ func (c *Cluster) discover(ctx context.Context, retryRefused bool) error {
 			c.startType(ctx, want)
 		}
 	}
+	c.rebuildKinds()
 	c.mu.Unlock()
 	c.typesChanged.Notify()
 	return nil
@@ -572,7 +579,12 @@ func toMeta(obj any) (index.Meta, error) {
 	if !ok {
 		return index.Meta{}, fmt.Errorf("unexpected object type %T", obj)
 	}
+	var owners []index.OwnerRef
+	for _, ref := range o.OwnerReferences {
+		owners = append(owners, index.OwnerRef{APIVersion: unique.Make(ref.APIVersion).Value(), Kind: unique.Make(ref.Kind).Value(), Name: ref.Name, UID: string(ref.UID), Controller: ref.Controller != nil && *ref.Controller})
+	}
 	return index.Meta{
+		Owners:          owners,
 		UID:             string(o.UID),
 		Namespace:       o.Namespace,
 		Name:            o.Name,
@@ -580,4 +592,40 @@ func toMeta(obj any) (index.Meta, error) {
 		ResourceVersion: o.ResourceVersion,
 		Labels:          o.Labels,
 	}, nil
+}
+
+// groupKind selects the Resource Type independently of API version.
+type groupKind struct{ group, kind string }
+
+// rebuildKinds must be called with c.mu held.
+func (c *Cluster) rebuildKinds() {
+	c.kinds = make(map[groupKind]protocol.TypeKey)
+	for key, t := range c.types {
+		k := groupKind{t.info.Group, t.info.Kind}
+		if old, ok := c.kinds[k]; !ok || key < old {
+			c.kinds[k] = key
+		}
+	}
+}
+
+// Type returns the discovered Resource Type with its current indexing state.
+func (c *Cluster) Type(key protocol.TypeKey) (protocol.ResourceType, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t, ok := c.types[key]
+	if !ok {
+		return protocol.ResourceType{}, false
+	}
+	return t.info, true
+}
+
+// TypeForKind returns the smallest type key serving kind in group.
+func (c *Cluster) TypeForKind(group, kind string) (protocol.ResourceType, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key, ok := c.kinds[groupKind{group, kind}]
+	if !ok {
+		return protocol.ResourceType{}, false
+	}
+	return c.types[key].info, true
 }
