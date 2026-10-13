@@ -39,7 +39,11 @@ type live[D any] struct {
 	stop    func()
 }
 
+// handleRequest registers a typed handler for a declared request.
 func handleRequest[P, R any](method protocol.Request[P, R], handler func(context.Context, *Server, P) (R, error)) {
+	if _, ok := requests[method.Name]; ok {
+		panic("server: duplicate request handler " + method.Name)
+	}
 	requests[method.Name] = func(ctx context.Context, srv *Server, raw json.RawMessage) (any, error) {
 		p, err := decode[P](raw)
 		if err != nil {
@@ -53,7 +57,11 @@ func handleRequest[P, R any](method protocol.Request[P, R], handler func(context
 	}
 }
 
+// handleTopic registers a typed handler for a declared subscription topic.
 func handleTopic[P, D any](method protocol.Topic[P, D], handler func(context.Context, *Server, P, func()) (*live[D], error)) {
+	if _, ok := topics[method.Name]; ok {
+		panic("server: duplicate topic handler " + method.Name)
+	}
 	topics[method.Name] = func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
 		p, err := decode[P](raw)
 		if err != nil {
