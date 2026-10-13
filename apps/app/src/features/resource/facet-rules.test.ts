@@ -94,3 +94,9 @@ describe("New Resource tab Facets", () => {
     expect(newResourceUri(uri, `${eventUri}#events`)).toBe(`${uri}#yaml`);
   });
 });
+
+it("inherits Related from the Pane's active Resource tab, even for Events", () => {
+  const uri = formatResourceUri({ ...address, type: "events" });
+  const active = formatResourceUri({ ...address, facet: "related" });
+  expect(newResourceUri(uri, active)).toBe(`${uri}#related`);
+});

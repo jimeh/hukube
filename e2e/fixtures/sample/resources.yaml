@@ -163,3 +163,18 @@ message: Namespace sample-shop is ready for sample Resources.
 type: Normal
 source:
   component: sample
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orphan-config
+  namespace: sample-shop
+  ownerReferences:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: retired
+      uid: 00000000-0000-0000-0000-000000000001
+    - apiVersion: legacy.example.com/v1
+      kind: Gadget
+      name: retired-gadget
+      uid: 00000000-0000-0000-0000-000000000002

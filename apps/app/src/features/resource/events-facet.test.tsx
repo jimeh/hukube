@@ -23,6 +23,8 @@ const props: FacetProps = {
   kind: "Pod",
   manifest: { stale: false },
   events: { stale: false },
+  related: { stale: false },
+  panelId: "resource",
   showing: true,
   controls: null,
 };
