@@ -1,4 +1,4 @@
-import type { ConnectionState, EngineEndpoint, StreamState } from "./client.ts";
+import type { ConnectionState, EngineEndpoint, StreamState, RequestErrorDetail } from "./client.ts";
 import type { RequestMethod, TopicMethod, StreamMethod } from "./methods.gen.ts";
 import type { ErrorDetail, StreamGap, StreamEnd } from "./protocol.gen.ts";
 
@@ -6,6 +6,7 @@ import type { ErrorDetail, StreamGap, StreamEnd } from "./protocol.gen.ts";
 export type ToWorker =
   | { kind: "connect"; endpoint: EngineEndpoint }
   | { kind: "request"; id: number; method: RequestMethod; params: unknown }
+  | { kind: "cancel"; id: number }
   | { kind: "subscribe"; id: number; method: TopicMethod; params: unknown }
   | { kind: "update"; id: number; count: number; params: unknown }
   | { kind: "unsubscribe"; id: number }
@@ -23,6 +24,6 @@ export type FromWorker =
   | { kind: "stream-end"; id: number; end: StreamEnd }
   | { kind: "state"; state: ConnectionState }
   | { kind: "result"; id: number; data: unknown }
-  | { kind: "failure"; id: number; code: string; message: string }
+  | { kind: "failure"; id: number; error: RequestErrorDetail }
   | { kind: "data"; id: number; count: number; data: unknown }
   | { kind: "error"; id: number; count: number; error: ErrorDetail };

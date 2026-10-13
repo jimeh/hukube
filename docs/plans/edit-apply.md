@@ -1,6 +1,6 @@
 # Plan: edit, apply, and delete a Resource
 
-Status: planned. Decisions are recorded in ADR-0019 and ADR-0020.
+Status: Part 1 implemented; Part 2 planned. Decisions are recorded in ADR-0019 and ADR-0020.
 
 ## Outcome
 
@@ -749,3 +749,59 @@ connection lost during an apply.
 None that block the work. Two choices are recorded for Jim to confirm at the
 end: `dev:tailnet` is read-only unless asked otherwise, and a write in flight
 is never cancelled.
+
+## What changed while building
+
+Part 1 implements the settled contract. These details were left to the
+implementation:
+
+- Manifest values generate as TypeScript mappings of `unknown`, like
+  `ResourceData.Object`. `request(method, params, { signal })` is the public
+  cancellation API. `RequestErrorDetail` widens the protocol error with the
+  client-only `disconnected` code; Worker failures carry it in `error`.
+- The pinned `json-patch/v5` version is `v5.9.11`, promoted from indirect to
+  direct without adding or updating another dependency. Its patch builder
+  preserves numbers as `json.Number`, but compares their literal encodings.
+  The comparison retains an original encoding when two values are numerically
+  equal. Decimal comparison uses significant digits and an exponent, so a
+  huge exponent cannot cause an equally huge allocation. RFC 7386 patch
+  construction and application remain the library's job.
+- A patch that adds an empty object counts that object's path as edited.
+  Otherwise a real patch such as `{"data":{}}` would look empty to the apply
+  path. Lists and removals remain single leaf paths.
+- `json-patch.Equal` in this version panics when comparing two JSON `null`
+  values. The comparison uses decoded values with exact decimal equality
+  instead. The regression is covered by the server-field tests, which include
+  a null `deletionTimestamp`.
+- A request waits for initial discovery, but an unknown Resource Type fails
+  immediately once discovery is ready. It does not wait indefinitely for a
+  CRD that might appear later, as the existing Resource subscription does.
+- Missing delete propagation means `background`; an unknown value is
+  `invalid`. An empty delete UID is also `invalid`, rather than allowing an
+  unguarded delete. `Immediate` is ignored outside the core `pods` type.
+- Access answers are cached per Cluster, preferred group/version/resource,
+  Namespace, name, and verb. Discovery's verbs are checked before cached
+  answers. Indeterminate answers are cached for the same 30 seconds as
+  decisions. Expired entries are removed when storing a fresh answer.
+  Read-only access is answered before resolving a Cluster.
+- The write client's REST timeout is cleared. `Timing.WriteTimeout` supplies
+  the whole write's limit, independently of a kubeconfig's request timeout.
+  Successful writes keep their successful answer even if the request context
+  ended while they were in flight.
+- API error mapping is shared by Cluster review refusals and the server in
+  `internal/apierror`, so they retain the same code, reason, and causes.
+  End-of-stream transport errors (`EOF` and `UnexpectedEOF`) are
+  `unavailable`. A deleted Resource keeps the API server's structured detail
+  while adding the edit-specific explanation.
+- Abort listeners are removed on completion, cancellation, and disconnection.
+  Closing `WorkerEngineClient` also rejects its pending requests with
+  `disconnected`, since terminating its Worker prevents any later answer.
+- The control socket now accepts 8 MiB. The stream socket retains its existing
+  4 MiB limit; subscriptions and streams have no new behavior.
+
+The envtest API server confirmed field ownership, strict validation causes,
+container defaulting during dry runs, and delete finalizers and grace periods.
+No material contradiction with the settled contract was found. Admission
+change coverage uses container defaulting; unsupported dry runs, repeated
+409s, warnings, and indeterminate access reviews use controlled HTTP boundaries.
+No MutatingAdmissionPolicy or real Cluster was needed.

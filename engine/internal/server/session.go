@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -15,8 +16,9 @@ import (
 )
 
 const (
-	readLimit    = 4 << 20
-	writeTimeout = 10 * time.Second
+	// streamReadLimit bounds a stream socket's client messages, which are small.
+	streamReadLimit = 4 << 20
+	writeTimeout    = 10 * time.Second
 )
 
 // minEmitInterval bounds how often one subscription sends data. Changes that
@@ -32,7 +34,9 @@ type session struct {
 	out *outbox
 
 	// subs is only accessed by the read loop.
-	subs map[uint64]*subscription
+	subs       map[uint64]*subscription
+	requestsMu sync.Mutex
+	requests   map[uint64]context.CancelFunc
 }
 
 type subscription struct {
@@ -47,8 +51,8 @@ type subscriptionParams struct {
 }
 
 func newSession(srv *Server, conn *websocket.Conn) *session {
-	conn.SetReadLimit(readLimit)
-	return &session{srv: srv, conn: conn, out: newOutbox(), subs: make(map[uint64]*subscription)}
+	conn.SetReadLimit(protocol.MaxClientMessageBytes)
+	return &session{srv: srv, conn: conn, out: newOutbox(), subs: make(map[uint64]*subscription), requests: make(map[uint64]context.CancelFunc)}
 }
 
 func (s *session) run(ctx context.Context) {
@@ -83,14 +87,44 @@ func (s *session) handle(ctx context.Context, msg protocol.ClientMessage) {
 			s.out.error(msg.ID, 0, badRequest(fmt.Errorf("unknown request %q", msg.Method)))
 			return
 		}
+		requestCtx, cancel := context.WithCancel(ctx)
+		s.requestsMu.Lock()
+		if s.requests == nil {
+			s.requests = make(map[uint64]context.CancelFunc)
+		}
+		if _, exists := s.requests[msg.ID]; exists {
+			s.requestsMu.Unlock()
+			cancel()
+			s.out.error(msg.ID, 0, badRequest(fmt.Errorf("request %d already exists", msg.ID)))
+			return
+		}
+		s.requests[msg.ID] = cancel
+		s.requestsMu.Unlock()
 		go func() {
-			result, err := handler(ctx, s.srv, msg.Params)
+			defer func() {
+				cancel()
+				s.requestsMu.Lock()
+				delete(s.requests, msg.ID)
+				s.requestsMu.Unlock()
+			}()
+			if err := requestCtx.Err(); err != nil {
+				s.out.error(msg.ID, 0, err)
+				return
+			}
+			result, err := handler(requestCtx, s.srv, msg.Params)
 			if err != nil {
 				s.out.error(msg.ID, 0, err)
 				return
 			}
 			s.out.push(protocol.ServerMessage{ID: msg.ID, Type: protocol.ServerTypeResult, Data: result})
 		}()
+
+	case protocol.ClientTypeCancel:
+		s.requestsMu.Lock()
+		if cancel := s.requests[msg.ID]; cancel != nil {
+			cancel()
+		}
+		s.requestsMu.Unlock()
 
 	case protocol.ClientTypeSubscribe:
 		t, ok := topics[msg.Method]

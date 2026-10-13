@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EngineConnection, type SocketLike } from "./connection.ts";
-import { Hash, type ClientMessage, type ServerMessage } from "./protocol.gen.ts";
+import {
+  Hash,
+  MaxClientMessageBytes,
+  type ClientMessage,
+  type ServerMessage,
+} from "./protocol.gen.ts";
 
 class FakeSocket implements SocketLike {
   sent: ClientMessage[] = [];
@@ -298,4 +303,88 @@ describe("subscription revisions", () => {
     expect(error).toHaveBeenCalledWith({ code: "internal", message: "current" });
     expect(latest().sent[1]).toMatchObject({ type: "update", rev: 1 });
   });
+});
+
+it("keeps structured request errors", async () => {
+  const conn = connect();
+  latest().open();
+  const promise = conn.request("clusters.list", undefined);
+  const error = {
+    code: "invalid" as const,
+    message: "invalid replicas",
+    reason: "Invalid",
+    causes: [
+      { field: "spec.replicas", reason: "FieldValueInvalid", message: "must be nonnegative" },
+    ],
+  };
+  latest().receive({ id: latest().sent[0]!.id, type: "error", error });
+  await expect(promise).rejects.toMatchObject(error);
+  conn.close();
+});
+
+it("cancels requests and ignores their late answers", async () => {
+  const conn = connect();
+  latest().open();
+  const controller = new AbortController();
+  const rejected = vi.fn<(error: unknown) => void>();
+  const resolved = vi.fn<(value: unknown) => void>();
+  const promise = conn.request("clusters.list", undefined, { signal: controller.signal });
+  const settled = promise.then(resolved, rejected);
+  const id = latest().sent[0]!.id;
+  controller.abort();
+  expect(latest().sent.at(-1)).toEqual({ id, type: "cancel" });
+  await settled;
+  expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ code: "cancelled" }));
+  latest().receive({ id, type: "result", data: [] });
+  latest().receive({ id, type: "error", error: { code: "invalid", message: "late" } });
+  await Promise.resolve();
+  expect(resolved).not.toHaveBeenCalled();
+  expect(rejected).toHaveBeenCalledOnce();
+  conn.close();
+});
+
+it("does not send an already cancelled request or cancel a finished request", async () => {
+  const conn = connect();
+  latest().open();
+  const controller = new AbortController();
+  controller.abort();
+  await expect(
+    conn.request("clusters.list", undefined, { signal: controller.signal }),
+  ).rejects.toMatchObject({ code: "cancelled" });
+  expect(latest().sent).toEqual([]);
+  const active = new AbortController();
+  const promise = conn.request("clusters.list", undefined, { signal: active.signal });
+  latest().receive({ id: latest().sent[0]!.id, type: "result", data: [] });
+  await promise;
+  active.abort();
+  expect(latest().sent).toHaveLength(1);
+  conn.close();
+});
+
+it("checks the UTF-8 size before sending and keeps the socket open", async () => {
+  const conn = connect();
+  latest().open();
+  const oversized = conn.request("settings.put", {
+    key: "large",
+    value: "é".repeat(MaxClientMessageBytes / 2),
+  });
+  expect(latest().sent).toEqual([]);
+  await expect(oversized).rejects.toMatchObject({ code: "too_large" });
+  expect(conn.getState()).toBe("open");
+  const overhead = new TextEncoder().encode(
+    JSON.stringify({
+      id: 2,
+      type: "request",
+      method: "settings.put",
+      params: { key: "large", value: "" },
+    }),
+  ).byteLength;
+  const promise = conn.request("settings.put", {
+    key: "large",
+    value: "x".repeat(MaxClientMessageBytes - overhead),
+  });
+  expect(latest().sent).toHaveLength(1);
+  latest().receive({ id: latest().sent[0]!.id, type: "result" });
+  await promise;
+  conn.close();
 });

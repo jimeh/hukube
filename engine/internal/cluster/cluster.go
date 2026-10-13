@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	authclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
@@ -48,6 +49,8 @@ type Timing struct {
 	HealthPeriod    time.Duration
 	HealthTimeout   time.Duration
 	ObjectRetry     time.Duration
+	WriteTimeout    time.Duration
+	AccessCache     time.Duration
 	// TableLinger is how long a type's Table stays watched after its last
 	// caller releases it.
 	TableLinger time.Duration
@@ -62,6 +65,8 @@ var DefaultTiming = Timing{
 	HealthPeriod:    30 * time.Second,
 	HealthTimeout:   10 * time.Second,
 	ObjectRetry:     2 * time.Second,
+	WriteTimeout:    30 * time.Second,
+	AccessCache:     30 * time.Second,
 	TableLinger:     30 * time.Second,
 }
 
@@ -118,12 +123,16 @@ type Cluster struct {
 	disc   discovery.DiscoveryInterface
 	// probe checks reachability with a short timeout; disc has none, because
 	// the clients sharing its configuration hold long-lived watches.
-	probe discovery.DiscoveryInterface
-	meta  metadata.Interface
-	dyn   dynamic.Interface
-	core  coreclient.CoreV1Interface
-	logs  coreclient.CoreV1Interface
-	table rest.Interface
+	probe    discovery.DiscoveryInterface
+	meta     metadata.Interface
+	dyn      dynamic.Interface
+	writes   dynamic.Interface
+	auth     authclient.AuthorizationV1Interface
+	accessMu sync.Mutex
+	access   map[accessKey]cachedAccess
+	core     coreclient.CoreV1Interface
+	logs     coreclient.CoreV1Interface
+	table    rest.Interface
 
 	// Index holds metadata for every Resource of every indexed type.
 	Index *index.Store
@@ -162,6 +171,7 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 	cfg.Burst = 200
 	cfg.UserAgent = "hukube"
 	cfg.WarningHandler = rest.NoWarnings{}
+	cfg.WarningHandlerWithContext = rest.NoWarnings{}
 
 	disc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
@@ -196,6 +206,17 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 	if err != nil {
 		return nil, fmt.Errorf("table client: %w", err)
 	}
+	writeCfg := rest.CopyConfig(cfg)
+	writeCfg.WarningHandlerWithContext = warningHandler{}
+	writeCfg.Timeout = 0
+	writes, err := dynamic.NewForConfig(writeCfg)
+	if err != nil {
+		return nil, fmt.Errorf("write client: %w", err)
+	}
+	auth, err := authclient.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("access client: %w", err)
+	}
 	c := &Cluster{
 		id:         id,
 		log:        log,
@@ -204,6 +225,9 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 		probe:      probe,
 		meta:       meta,
 		dyn:        dyn,
+		writes:     writes,
+		auth:       auth,
+		access:     make(map[accessKey]cachedAccess),
 		core:       core,
 		logs:       logs,
 		table:      table,
