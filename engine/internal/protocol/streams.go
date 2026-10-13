@@ -132,6 +132,10 @@ type LogCursor struct {
 
 // LogStreamStatus is what a Log Stream reads right now.
 type LogStreamStatus struct {
+	// Ready reports that the stream has found its Resource and knows the
+	// containers of the Pods it reads. Until then the other fields are empty
+	// because nothing is known yet, not because there is nothing.
+	Ready      bool           `json:"ready"`
 	Sources    []LogSource    `json:"sources"`
 	Containers []LogContainer `json:"containers"`
 	// Pods counts the Pods the Resource owns, and Followed those being read.

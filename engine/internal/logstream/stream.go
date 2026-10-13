@@ -116,7 +116,7 @@ type stream struct {
 	tail                         int64
 	batch                        []record
 	batchBytes                   int
-	first                        bool
+	first, ready                 bool
 	started, batchAt, lastStatus time.Time
 	lastJSON                     []byte
 	fatal                        chan error
@@ -273,6 +273,9 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 				s.tail = int64(max(50, min(1000, 2000/max(1, count))))
 				close(initial)
 				initialDone = true
+				s.mu.Lock()
+				s.ready = true
+				s.mu.Unlock()
 			}
 		}
 		if p.Previous && selected && initialDone {
@@ -407,6 +410,7 @@ func (s *stream) removePod(pod *followedPod) {
 
 func (s *stream) statusLocked(force bool) time.Duration {
 	value := emptyStatus()
+	value.Ready = s.ready
 	value.Pods, value.Followed = s.pods, s.followed
 	value.Containers = append(value.Containers, s.names...)
 	for _, source := range s.sources {

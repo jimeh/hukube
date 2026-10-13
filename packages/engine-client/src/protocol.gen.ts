@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "18a0113fc2f7813b";
+export const Hash = "6d5b211a8af86bca";
 
 //////////
 // source: protocol.go
@@ -711,6 +711,12 @@ export interface LogCursor {
  * LogStreamStatus is what a Log Stream reads right now.
  */
 export interface LogStreamStatus {
+  /**
+   * Ready reports that the stream has found its Resource and knows the
+   * containers of the Pods it reads. Until then the other fields are empty
+   * because nothing is known yet, not because there is nothing.
+   */
+  ready: boolean;
   sources: LogSource[];
   containers: LogContainer[];
   /**
