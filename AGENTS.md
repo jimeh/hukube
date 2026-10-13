@@ -27,6 +27,28 @@ the background on a free port. It prints the URL with its token, also saved in
 change and stop it with `mise run dev:verify:stop`; do not `pkill -f`, which
 can match your own shell. It never touches the clusters in your kubeconfig.
 
+## Designing features
+
+- **Plan the UI and UX.** For anything a user sees or touches, the plan says
+  where each control goes and why, which common pattern or comparable tool it
+  follows, how the keyboard and the pointer reach it, and what the empty,
+  loading, and error states show. Placement decided while coding is rarely
+  where a user looks.
+- **Follow common patterns.** A user should understand a feature from the
+  tools they already know. Put a control where the thing it acts on is:
+  column actions belong on the column header, not in a list's filter toolbar.
+- **Use established packages for solved problems.** Do not hand-roll a common
+  interaction or component, such as drag-and-drop, menus, virtual lists,
+  editors, or terminals, to avoid a dependency. The hand-rolled version costs
+  more to own and usually does less. Check a package's current version and
+  maintenance first, and say in the plan why nothing fit before writing your
+  own.
+- **Review the running app before calling a feature done.** Use it as a new
+  user would, in both themes and at more than one width. Fix what would
+  confuse or slow a user, or looks unfinished. Tests do not judge this.
+- **Ask before adding a key binding.** Shortcuts are scarce, and one taken
+  casually is not there for the feature that needs it.
+
 ## Layout
 
 - `engine/`: Go Engine. `internal/protocol` is the wire contract.
@@ -76,6 +98,9 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   `--args --no-sandbox`.
 - **Test clusters:** the e2e k3d cluster's kubeconfig is written to
   `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
+- **End-to-end lists:** tests share one Engine and one Workspace within a run,
+  so a test finds lists earlier tests opened. Scope each list's locators to its
+  tab panel.
 - **envtest:** without `KUBEBUILDER_ASSETS`, `go test` reports `ok` for the
   `cluster` and `server` packages without running any of their tests, unit
   tests included; use `mise run test:engine`.

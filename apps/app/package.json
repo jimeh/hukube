@@ -9,6 +9,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dnd-kit/collision": "0.5.0",
+    "@dnd-kit/dom": "0.5.0",
+    "@dnd-kit/react": "0.5.0",
     "@hugeicons/core-free-icons": "^4.3.5",
     "@hugeicons/react": "^1.1.10",
     "@hukube/engine-client": "workspace:*",
