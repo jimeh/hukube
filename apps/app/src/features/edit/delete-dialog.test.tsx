@@ -215,6 +215,21 @@ it.each(["button", "Escape"])("drops a pending delete on %s, before reconnect", 
   await act(async () => {});
   expect(h.requests).toHaveBeenCalledOnce();
 });
+it("keeps a delete's outcome unknown after the Cluster did not answer", async () => {
+  const h = setup("pods", new EngineRequestError({ code: "unavailable", message: "EOF" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await screen.findByText("The Cluster did not answer. The delete may or may not have happened.");
+  // The first delete may have landed and a controller made a new Resource of the same name.
+  h.setAnswer(new EngineRequestError({ code: "conflict", message: "replaced" }));
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(
+    await screen.findByText(
+      "The answer to an earlier attempt was lost. The Resource may have been deleted and then replaced by a new one of the same name.",
+    ),
+  ).toBeDefined();
+  expect(screen.queryByText(/Nothing was deleted/)).toBeNull();
+  expect(h.requests).toHaveBeenCalledTimes(2);
+});
 it.each([false, true])("explains finalizers (terminating: %s)", (terminating) => {
   setup("configmaps", undefined, undefined, {
     metadata: {
@@ -289,8 +304,8 @@ it.each(["conflict", "forbidden", "invalid", "not_found"] as const)(
     await waitFor(() =>
       expect(alert.textContent).toContain(
         code === "conflict"
-          ? "The connection was lost while deleting. The Resource may have been deleted and then replaced by a new one of the same name."
-          : "The connection was lost during an earlier attempt, so the delete may already have happened.",
+          ? "The answer to an earlier attempt was lost. The Resource may have been deleted and then replaced by a new one of the same name."
+          : "The answer to an earlier attempt was lost, so the delete may already have happened.",
       ),
     );
     expect(alert.textContent).not.toContain("Nothing was deleted");
