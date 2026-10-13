@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { EngineConnection, type SocketLike } from "./connection.ts";
-import { Hash, type StreamClientMessage } from "./protocol.gen.ts";
+import { Hash, ExecInputFrame, ExecInputWindow, type StreamClientMessage } from "./protocol.gen.ts";
 import type { StreamListener } from "./client.ts";
 import { frame, status, source } from "./log-test-fixtures.ts";
 
 class Socket implements SocketLike {
   sent: StreamClientMessage[] = [];
+  binary: Uint8Array[] = [];
   binaryType = "";
   onopen: SocketLike["onopen"] = null;
   onclose: SocketLike["onclose"] = null;
@@ -14,7 +15,11 @@ class Socket implements SocketLike {
     readonly url: string,
     readonly protocols: string[],
   ) {}
-  send(value: string) {
+  send(value: string | Uint8Array<ArrayBuffer>) {
+    if (value instanceof Uint8Array) {
+      this.binary.push(value);
+      return;
+    }
     this.sent.push(JSON.parse(value) as StreamClientMessage);
   }
   close() {
@@ -195,4 +200,135 @@ it("holds back a stream that was paused before its first socket opened", async (
   expect(sockets).toHaveLength(before);
   stream.resume();
   expect(sockets).toHaveLength(before + 1);
+});
+
+const execParams = {
+  cluster: "c",
+  namespace: "ns",
+  pod: "web",
+  uid: "uid",
+  container: "main",
+  cols: 80,
+  rows: 24,
+};
+const execListener = (): StreamListener<"pod.exec"> => ({
+  event: () => {},
+  data: () => {},
+  gap: () => {},
+  end: () => {},
+  state: vi.fn<() => void>(),
+});
+
+it("sends a 1 MiB paste in order within the acknowledged input window", async () => {
+  const conn = connect();
+  const stream = conn.openStream("pod.exec", execParams, execListener());
+  await Promise.resolve();
+  const socket = sockets[1]!;
+  const input = Uint8Array.from({ length: 1 << 20 }, (_, index) => index % 251);
+  stream.write(input);
+  stream.resize(132, 43);
+  expect(socket.binary).toHaveLength(0);
+  socket.hello();
+  expect(socket.sent).toEqual([
+    { type: "open", method: "pod.exec", params: execParams },
+    { type: "resize", cols: 132, rows: 43 },
+  ]);
+  let received = 0;
+  let count = 0;
+  while (received < input.length) {
+    const batch = socket.binary.slice(count);
+    expect(batch.length).toBeGreaterThan(0);
+    let bytes = 0;
+    for (const inputFrame of batch) {
+      expect(inputFrame[0]).toBe(0);
+      expect(inputFrame.byteLength - 1).toBeLessThanOrEqual(ExecInputFrame);
+      expect(inputFrame.subarray(1)).toEqual(
+        input.subarray(received + bytes, received + bytes + inputFrame.byteLength - 1),
+      );
+      bytes += inputFrame.byteLength - 1;
+    }
+    expect(bytes).toBe(ExecInputWindow);
+    count = socket.binary.length;
+    received += bytes;
+    socket.receive({ type: "ack", bytes: received });
+  }
+  expect(received).toBe(input.length);
+  const before = sockets.length;
+  stream.pause();
+  expect(sockets).toHaveLength(before);
+  stream.resize(100, 30);
+  expect(socket.sent.at(-1)).toEqual({ type: "resize", cols: 100, rows: 30 });
+  conn.close();
+});
+
+it("loses an opened Exec Session without starting a second shell, but retries before open", async () => {
+  const conn = connect();
+  const observe = execListener();
+  const stream = conn.openStream("pod.exec", execParams, observe);
+  await Promise.resolve();
+  sockets[1]!.close();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(sockets).toHaveLength(3);
+  const socket = sockets[2]!;
+  socket.hello();
+  socket.close();
+  expect(observe.state).toHaveBeenLastCalledWith("lost");
+  stream.resume();
+  stream.write(new Uint8Array([42]));
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(sockets).toHaveLength(3);
+  expect(socket.binary).toHaveLength(0);
+  conn.close();
+});
+
+it("delivers Exec bytes and acknowledges only contiguous settled listeners, including rejection", async () => {
+  const conn = connect();
+  const observe = execListener();
+  const resolves: (() => void)[] = [];
+  const data: Uint8Array[] = [];
+  observe.data = (bytes) => {
+    data.push(bytes);
+    return new Promise<void>((resolve) => resolves.push(resolve));
+  };
+  conn.openStream("pod.exec", execParams, observe);
+  await Promise.resolve();
+  const socket = sockets[1]!;
+  socket.hello();
+  socket.receive(new Uint8Array([1, 255, 0, 128]).buffer);
+  socket.receive(new Uint8Array([1, 42]).buffer);
+  expect(data).toEqual([new Uint8Array([255, 0, 128]), new Uint8Array([42])]);
+  const acks = () => socket.sent.filter((message) => message.type === "ack");
+  resolves[1]!();
+  await Promise.resolve();
+  expect(acks()).toEqual([]);
+  resolves[0]!();
+  await Promise.resolve();
+  expect(acks()).toEqual([{ type: "ack", bytes: 6 }]);
+  observe.data = () => Promise.reject(new Error("parser failure"));
+  socket.receive(new Uint8Array([1, 3]).buffer);
+  await Promise.resolve();
+  expect(acks().at(-1)).toEqual({ type: "ack", bytes: 8 });
+  observe.data = () => {
+    throw new Error("listener failure");
+  };
+  socket.receive(new Uint8Array([1, 5]).buffer);
+  expect(acks().at(-1)).toEqual({ type: "ack", bytes: 10 });
+  conn.close();
+});
+
+it("shares the eight socket cap between sessions and Log Streams", async () => {
+  const conn = connect();
+  const sessions = Array.from({ length: 8 }, () =>
+    conn.openStream("pod.exec", execParams, execListener()),
+  );
+  const observe = listener();
+  conn.openStream("resource.logs", params, observe);
+  await Promise.resolve();
+  expect(sockets).toHaveLength(9);
+  expect(observe.state).toHaveBeenLastCalledWith("waiting");
+  sessions[0]!.pause();
+  expect(sockets).toHaveLength(9);
+  sessions[0]!.close();
+  expect(sockets).toHaveLength(10);
+  conn.close();
 });

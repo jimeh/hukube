@@ -155,7 +155,7 @@ func run() error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return httpSrv.Shutdown(shutdownCtx)
+	return errors.Join(srv.Shutdown(shutdownCtx), httpSrv.Shutdown(shutdownCtx))
 }
 
 // listenLoopback listens on addr, refusing non-loopback addresses because the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -11,15 +12,20 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/jimeh/hukube/engine/internal/execsession"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 )
 
 type streamLimits struct {
 	queue, window, texts int
 	open, write, drain   time.Duration
+	stall                time.Duration
 }
 
-var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second}
+// streamWriteFrame is the most a frame made by streamQueue.write holds.
+const streamWriteFrame = 32 << 10
+
+var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second, 30 * time.Second}
 
 type streamOutput[E any] struct {
 	frame func([]byte, int)
@@ -27,6 +33,8 @@ type streamOutput[E any] struct {
 }
 
 type streamHandler func(context.Context, *Server, json.RawMessage, *streamQueue) protocol.StreamEnd
+
+var streamInputs = map[protocol.Method]bool{}
 
 var streams = map[protocol.Method]streamHandler{}
 
@@ -64,10 +72,15 @@ type streamQueue struct {
 	finished, overflow bool
 	limits             streamLimits
 	wake               chan struct{}
+	changed            chan struct{}
+	dropping           bool
+	waiting            int
+	input              *execsession.Input
+	sizes              *execsession.Sizes
 }
 
 func newStreamQueue(limits streamLimits) *streamQueue {
-	return &streamQueue{limits: limits, wake: make(chan struct{}, 1), lastAck: time.Now()}
+	return &streamQueue{limits: limits, wake: make(chan struct{}, 1), changed: make(chan struct{}), lastAck: time.Now()}
 }
 
 func (q *streamQueue) signal() {
@@ -86,6 +99,20 @@ func (q *streamQueue) text(msg protocol.StreamServerMessage) {
 	q.signal()
 }
 
+// acknowledgeInput reports the total input passed on. Only the latest total
+// matters, so one that is still queued is replaced, and a client that holds
+// output back cannot grow the queue by typing.
+func (q *streamQueue) acknowledgeInput(total uint64) {
+	q.mu.Lock()
+	if n := len(q.items); n > 0 && q.items[n-1].msg.Type == protocol.StreamServerTypeAck {
+		q.items[n-1].msg.Bytes = total
+		q.mu.Unlock()
+		return
+	}
+	q.mu.Unlock()
+	q.text(protocol.StreamServerMessage{Type: protocol.StreamServerTypeAck, Bytes: total})
+}
+
 func (q *streamQueue) frame(data []byte, records int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -97,6 +124,67 @@ func (q *streamQueue) frame(data []byte, records int) {
 	q.bytes += len(data)
 	q.drop(q.limits.queue)
 	q.signal()
+}
+
+// write waits for room in the output window, dropping only after a stall.
+func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
+	written := 0
+	for len(data) > 0 {
+		n := min(len(data), streamWriteFrame, q.limits.window-1)
+		if n <= 0 {
+			return written, io.ErrShortWrite
+		}
+		frame := append([]byte{protocol.StreamChannelStdout}, data[:n]...)
+		q.mu.Lock()
+		blockedAt := time.Now()
+		for !q.dropping && q.bytes+int(q.sent-q.acked)+len(frame) > q.limits.window && !q.finished && !q.overflow {
+			changed := q.changed
+			remaining := q.limits.stall - time.Since(maxTime(blockedAt, q.lastAck))
+			if remaining <= 0 {
+				q.dropping = true
+				break
+			}
+			q.waiting++
+			q.mu.Unlock()
+			timer := time.NewTimer(remaining)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				q.mu.Lock()
+				q.waiting--
+				q.mu.Unlock()
+				return written, ctx.Err()
+			case <-changed:
+				timer.Stop()
+			case <-timer.C:
+			}
+			q.mu.Lock()
+			q.waiting--
+		}
+		if q.finished || q.overflow || ctx.Err() != nil {
+			q.mu.Unlock()
+			if ctx.Err() == nil {
+				<-ctx.Done()
+			}
+			return written, io.ErrClosedPipe
+		}
+		q.items = append(q.items, streamItem{data: frame})
+		q.bytes += len(frame)
+		if q.dropping {
+			q.drop(q.limits.window)
+		}
+		q.mu.Unlock()
+		q.signal()
+		written += n
+		data = data[n:]
+	}
+	return written, nil
+}
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // drop replaces the oldest data with a gap at its position, preserving text.
@@ -137,6 +225,9 @@ func (q *streamQueue) acknowledge(n uint64) bool {
 	}
 	if n > q.acked {
 		q.acked, q.lastAck = n, time.Now()
+		q.dropping = false
+		close(q.changed)
+		q.changed = make(chan struct{})
 	}
 	q.signal()
 	return true
@@ -144,7 +235,13 @@ func (q *streamQueue) acknowledge(n uint64) bool {
 
 func (q *streamQueue) end(end protocol.StreamEnd) {
 	q.mu.Lock()
+	if q.finished {
+		q.mu.Unlock()
+		return
+	}
 	q.finished = true
+	close(q.changed)
+	q.changed = make(chan struct{})
 	q.lastAck = time.Now()
 	q.items = append(q.items, streamItem{msg: protocol.StreamServerMessage{Type: protocol.StreamServerTypeEnd, End: &end}})
 	q.texts++
@@ -227,22 +324,48 @@ func (s *Server) runStream(ctx context.Context, conn *websocket.Conn, limits str
 	if err != nil {
 		return
 	}
+	producerCtx, stopProducer := context.WithCancel(ctx)
+	defer stopProducer()
 	q := newStreamQueue(limits)
+	if streamInputs[open.Method] {
+		q.input = execsession.NewInput(q.acknowledgeInput)
+		q.sizes = execsession.NewSizes()
+	}
 	if open.Type != protocol.StreamClientTypeOpen {
 		q.end(streamError(badRequest(fmt.Errorf("first message must be open"))))
 	} else if handler, ok := streams[open.Method]; !ok {
 		q.end(streamError(badRequest(fmt.Errorf("unknown stream %q", open.Method))))
 	} else {
-		go func() { q.end(handler(ctx, s, open.Params, q)) }()
+		go func() { q.end(handler(producerCtx, s, open.Params, q)) }()
 	}
 	go func() {
-		defer cancel()
 		for {
-			var msg protocol.StreamClientMessage
-			if wsjson.Read(ctx, conn, &msg) != nil {
+			typ, data, err := conn.Read(ctx)
+			if err != nil {
+				cancel()
 				return
 			}
-			if msg.Type != protocol.StreamClientTypeAck || !q.acknowledge(msg.Bytes) {
+			valid := false
+			if typ == websocket.MessageBinary {
+				valid = q.input != nil && len(data) > 1 && data[0] == protocol.StreamChannelStdin && q.input.Write(data[1:])
+			} else {
+				var msg protocol.StreamClientMessage
+				if json.Unmarshal(data, &msg) == nil {
+					switch msg.Type {
+					case protocol.StreamClientTypeAck:
+						valid = q.acknowledge(msg.Bytes)
+					case protocol.StreamClientTypeResize:
+						if q.sizes != nil && msg.Cols > 0 && msg.Rows > 0 {
+							q.sizes.Resize(msg.Cols, msg.Rows)
+							valid = true
+						}
+					}
+				}
+			}
+			if !valid {
+				q.end(streamError(badRequest(fmt.Errorf("invalid stream input"))))
+				stopProducer()
+				// Keep the writer alive long enough to deliver the refusal.
 				return
 			}
 		}
