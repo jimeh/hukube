@@ -798,6 +798,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await expect(newest).toBeVisible();
   await pod.getByRole("tab", { name: "YAML", exact: true }).click();
   await assertEditorKeys(page, pod, pod.locator(".monaco-editor:visible"));
+  expect(await unexpectedEditorKeyBindings(page)).toEqual([]);
 
   await open(`deployment/${name}`);
   const workload = page.getByRole("tabpanel", { name, exact: true });
@@ -861,4 +862,57 @@ async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Pr
   ).toBe(false);
   await expect(find).toBeHidden();
   await page.keyboard.press("Escape");
+}
+
+// What an editor may bind: Monaco's own text navigation, find, and the log
+// viewer's versions of find. Anything else a Monaco feature brings along has
+// to be removed in apps/app/src/lib/monaco.ts.
+const allowedEditorCommands =
+  /^(cursor\w*|deleteLeft|deleteRight|removeSecondaryCursors|cancelSelection|undo|redo|tab|outdent|lineBreakInsert|scroll(Page|Line)(Up|Down)|editor\.action\.selectAll|editor\.cancelOperation|actions\.find|editor\.action\.(next|previous)MatchFindAction|toggleFind(CaseSensitive|WholeWord|Regex|InSelection)|closeFindWidget|vs\.editor\.ICodeEditor:\d+:hukube\.logs\.\w+)$/;
+
+/** Lists the commands Monaco has a key for that are not allowed one. */
+async function unexpectedEditorKeyBindings(page: Page): Promise<string[]> {
+  // Monaco has no public list of its key bindings, so this reads the resolver
+  // of a live editor's keybinding service. The app's chunks are imported again
+  // to reach the module, which gives the instances the page already runs.
+  const bound = await page.evaluate(async () => {
+    interface Resolver {
+      getKeybindings(): {
+        command: string | null;
+        resolvedKeybinding?: { getUserSettingsLabel(): string | null };
+      }[];
+    }
+    interface Editor {
+      _standaloneKeybindingService?: { _getResolver(): Resolver };
+    }
+    for (const { name } of performance.getEntriesByType("resource")) {
+      if (!name.endsWith(".js")) continue;
+      const module = (await import(/* @vite-ignore */ name)) as Record<string, unknown>;
+      for (const value of Object.values(module)) {
+        const editors = (
+          value as { editor?: { getEditors?: () => Editor[] } } | null
+        )?.editor?.getEditors?.();
+        // oxlint-disable-next-line no-underscore-dangle -- Monaco's private names.
+        const service = editors?.[0]?._standaloneKeybindingService;
+        // oxlint-disable-next-line no-underscore-dangle -- Monaco's private names.
+        const resolver = service?._getResolver();
+        if (resolver)
+          return resolver
+            .getKeybindings()
+            .map(
+              (item) =>
+                [
+                  item.command ?? "",
+                  item.resolvedKeybinding?.getUserSettingsLabel() ?? "",
+                ] as const,
+            );
+      }
+    }
+    return undefined;
+  });
+  expect(bound, "Monaco's keybinding service was not found").toBeDefined();
+  expect(bound!.length).toBeGreaterThan(20);
+  return bound!
+    .filter(([command]) => !allowedEditorCommands.test(command))
+    .map(([command, keys]) => `${command} (${keys})`);
 }

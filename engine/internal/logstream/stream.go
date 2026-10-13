@@ -291,6 +291,12 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 				}
 			}
 			if done {
+				// A reader that was refused reports it and then finishes.
+				select {
+				case err := <-s.fatal:
+					return finish(protocol.StreamEndReasonError, err)
+				default:
+				}
 				return finish(protocol.StreamEndReasonComplete, nil)
 			}
 		}
@@ -459,8 +465,10 @@ func (s *stream) flushLocked() {
 	if len(s.batch) == 0 {
 		return
 	}
-	// Readers publish their source before opening a request.
-	s.statusLocked(false)
+	// A frame must not use a source its client has not been told of, so the
+	// status goes first whatever the interval says. Batches are no more
+	// frequent than statuses may be.
+	s.statusLocked(true)
 	frame := []byte{protocol.StreamChannelStdout}
 	count := 0
 	for _, r := range merge(s.batch) {

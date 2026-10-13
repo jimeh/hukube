@@ -40,6 +40,7 @@ export function LogToolbar({
   previous,
   hasPrevious,
   disabled,
+  ended = false,
   focus,
   select,
   setPrevious,
@@ -50,6 +51,8 @@ export function LogToolbar({
   previous: boolean;
   hasPrevious: boolean;
   disabled: boolean;
+  /** Whether the Resource is gone: its lines can still be read, but nothing new can be chosen. */
+  ended?: boolean;
   /** The control that takes focus when the toolbar mounts, after the user's choice replaced it. */
   focus?: "container" | "previous";
   select: (value: string) => void;
@@ -109,7 +112,7 @@ export function LogToolbar({
             onValueChange={(value) => {
               if (value !== null) select(value);
             }}
-            disabled={disabled}
+            disabled={disabled || ended}
           >
             <SelectTrigger
               ref={containerTrigger}
@@ -148,8 +151,10 @@ export function LogToolbar({
           TransactionHistoryIcon,
           previous,
           setPrevious,
-          !previous && !hasPrevious,
-          !previous && !hasPrevious ? "Previous run: no container has restarted" : "Previous run",
+          ended || (!previous && !hasPrevious),
+          !ended && !previous && !hasPrevious
+            ? "Previous run: no container has restarted"
+            : "Previous run",
           previousToggle,
         )}
         <div className="min-w-1 flex-1" />

@@ -435,6 +435,11 @@ func (r *containerReader) read(options *corev1.PodLogOptions, instance string, c
 		return sent, errStuck
 	default:
 	}
+	// A resumed response repeats the cursor's own line. One that ends without
+	// a timed line no longer holds it, so what followed it may be gone too.
+	if err == nil && resuming && firstTimed {
+		r.gap()
+	}
 	var text *responseText
 	if errors.As(err, &text) {
 		// The kubelet's own error text, which can carry any bytes.

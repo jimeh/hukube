@@ -50,7 +50,8 @@ export class LogCodec {
     });
     // A Pod that is gone cannot be resumed, so its cursors would only grow the
     // next open. A status that is not ready lists nothing and proves nothing.
-    if (status.ready) {
+    // Nor does one that is ready before a slow Pod's containers are known.
+    if (status.ready && new Set(sources.map((source) => source.podUid)).size >= status.followed) {
       const current = new Set(sources.map((source) => source.id));
       for (const id of this.#cursors.keys()) if (!current.has(id)) this.#cursors.delete(id);
     }
