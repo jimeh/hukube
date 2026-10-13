@@ -377,6 +377,25 @@ func TestLogPrevious(t *testing.T) {
 	}
 }
 
+func TestLogPreviousRefusedIsNotComplete(t *testing.T) {
+	// The reader reports the refusal and finishes at once. Both reach the
+	// stream together, and the refusal must win whichever it sees first.
+	for range 50 {
+		pod := pod("pod", "main")
+		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "main-0"}
+		f, g := newFake(pod)
+		f.open = func(context.Context, string, *corev1.PodLogOptions) (io.ReadCloser, error) {
+			return nil, apierrors.NewForbidden(corev1.Resource("pods/log"), "pod", errors.New("no"))
+		}
+		p := targetParams()
+		p.Previous = true
+		_, end, _ := start(t, f, g, p)
+		if e := awaitEnd(t, end); e.Reason != protocol.StreamEndReasonError || e.Error == nil || e.Error.Code != protocol.ErrorCodeForbidden {
+			t.Fatalf("a refused previous run ended as %+v", e)
+		}
+	}
+}
+
 func TestLogRestartAndCrashLoop(t *testing.T) {
 	p := pod("pod", "main")
 	f, g := newFake(p)
@@ -398,9 +417,9 @@ func TestLogRestartAndCrashLoop(t *testing.T) {
 			return secondR, nil
 		}
 		// The old run is read once more when its status changed only after its
-		// response ended. It has nothing more to give.
+		// response ended. It repeats the cursor's line and has nothing more.
 		if o.SinceTime != nil {
-			return textBody(""), nil
+			return textBody(line(2, "last")), nil
 		}
 		return textBody(line(3, "new run")), nil
 	}
@@ -419,6 +438,10 @@ func TestLogRestartAndCrashLoop(t *testing.T) {
 	waiting.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
 	waiting.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ContainerID: "main-1", Reason: "Error", ExitCode: 1}}
 	f.update(waiting)
+	// A resumed response starts with the cursor's own line, as sinceTime is inclusive.
+	if _, err := io.WriteString(secondW, line(2, "last")); err != nil {
+		t.Fatal(err)
+	}
 	secondW.Close()
 	out.await(t, func(r []record, s protocol.LogStreamStatus) bool {
 		return len(r) == 3 && r[2].flags == protocol.LogRecordFlagExited && s.Sources[0].Reason == "CrashLoopBackOff"
@@ -511,6 +534,9 @@ func TestLogResumeTable(t *testing.T) {
 		{"previous", "main-1", line(2, "held") + line(3, "rest"), true, false, "rest|exited|current"},
 		{"older", "main-0", line(3, "current"), false, false, "gap|current"},
 		{"failed-previous", "main-1", "", true, true, "gap|current"},
+		// A response without the cursor's own line proves nothing about what followed it.
+		{"same-emptied", "main-2", "", false, false, "gap"},
+		{"previous-emptied", "main-1", "", true, false, "gap|exited|current"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := pod("pod", "main")
@@ -786,7 +812,11 @@ func TestLogTargetStates(t *testing.T) {
 			out, end, _ := start(t, f, g, targetParams())
 			e := awaitEnd(t, end)
 			_, s := out.snapshot()
-			if e.Reason != tt.reason || (e.Error != nil && e.Error.Code != tt.code) || s.Sources == nil || s.Containers == nil {
+			code := protocol.ErrorCode("")
+			if e.Error != nil {
+				code = e.Error.Code
+			}
+			if e.Reason != tt.reason || code != tt.code || s.Sources == nil || s.Containers == nil {
 				t.Fatalf("target state=%+v status=%+v", e, s)
 			}
 		})

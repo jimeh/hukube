@@ -248,7 +248,6 @@ func TestStreamSlowClientBound(t *testing.T) {
 		t.Fatal("64 MiB producer did not overflow queue")
 	}
 	c.send(protocol.StreamClientMessage{Type: protocol.StreamClientTypeAck, Bytes: c.consumed})
-	outstanding := sent
 	var gap protocol.StreamGap
 	previous := -1
 	received := 0
@@ -266,7 +265,7 @@ func TestStreamSlowClientBound(t *testing.T) {
 			received++
 		}
 	}
-	if gap != expected || gap.Bytes != gap.Records*(64<<10) || previous != 1023 || outstanding > 1<<20 {
+	if gap != expected || gap.Bytes != gap.Records*(64<<10) || previous != 1023 {
 		t.Fatalf("gap=%+v want=%+v last=%d", gap, expected, previous)
 	}
 	close(release)

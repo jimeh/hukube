@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SocketLike } from "./connection.ts";
+import { frame, status } from "./log-test-fixtures.ts";
 import { Hash, type ClientMessage, type ServerMessage } from "./protocol.gen.ts";
 import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
@@ -81,6 +82,38 @@ describe("connection Worker", () => {
     const error = { code: "internal" as const, message: "current" };
     socket.receive({ id: 1, type: "error", rev: 1, error });
     expect(scope.postMessage).toHaveBeenLastCalledWith({ kind: "error", id: 7, count: 3, error });
+  });
+
+  it("acknowledges a stream's frame to the Engine only after the main thread has", async () => {
+    send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+    FakeSocket.latest.open();
+    send({
+      kind: "stream-open",
+      id: 9,
+      method: "resource.logs",
+      params: { cluster: "c", type: "pods", name: "web", uid: "uid" },
+    });
+    // The stream's own socket opens in a microtask.
+    await Promise.resolve();
+    const socket = FakeSocket.latest;
+    const receive = (data: unknown) => socket.onmessage?.(new MessageEvent("message", { data }));
+    socket.onopen?.(new Event("open"));
+    receive(JSON.stringify({ type: "hello", hello: { protocol: Hash } }));
+    receive(JSON.stringify({ type: "event", event: status }));
+    const bytes = frame().byteLength;
+    receive(frame());
+    const posted = scope.postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.kind === "stream-data");
+    expect(posted).toMatchObject({ kind: "stream-data", id: 9, bytes });
+    const acks = () =>
+      (socket.sent as unknown as { type: string; bytes?: number }[]).filter(
+        (message) => message.type === "ack",
+      );
+    expect(acks()).toEqual([]);
+    if (posted?.kind !== "stream-data") throw new Error("no stream data was posted");
+    send({ kind: "stream-ack", id: 9, token: posted.token, bytes });
+    expect(acks()).toEqual([{ type: "ack", bytes }]);
   });
 
   it("does not post socket data or errors for a superseded revision", () => {

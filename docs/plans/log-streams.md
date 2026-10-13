@@ -1055,6 +1055,31 @@ blank frames when scrolled away during a burst, a hover with a line's full
 Pod name and date, opening a Pod from its origin, and arrow keys within the
 toolbar.
 
+**After the code review**
+
+- **A previous run's lines stay.** They were cleared when its status became
+  ready, which since the experience review comes after the lines. They are
+  now replaced only when a second socket for the same run delivers.
+- **A resumed response without the cursor's line gives a gap record,** also
+  when it holds nothing at all. Only a first line after the cursor did.
+- **A refused previous run ends as `forbidden`,** not `complete`. The reader
+  reported the refusal and finished, and the stream could see the finish
+  first.
+- **A status goes out before every batch that needs it,** whatever the
+  status interval says, so a frame never names a source its client has not
+  been told of.
+- **A status that is ready before a slow Pod's containers are known** no
+  longer makes the client forget that Pod's cursor or call the Pod gone.
+  Both wait for a status that lists every followed Pod.
+- **A deleted Resource keeps its timestamps, wrap, and search,** and loses
+  only the container and previous-run choices.
+- **A stream paused before its first socket opened stays paused.**
+- **Every key an editor binds is listed by the end-to-end test,** which
+  reads the keybinding service of a live editor and fails on a command that
+  is not allowed. It found more to remove than reading Monaco's find
+  feature had: a quick input and an action menu that nothing opens, and a
+  hover chord that starts with Ctrl or Cmd+K.
+
 **Key bindings**
 
 Loading Monaco's find and clipboard features binds more than search. These
@@ -1080,10 +1105,15 @@ Every binding of these commands is removed: `actions.findWithSelection`
 `editor.action.selectAllMatches` (Alt+Enter), `history.showPrevious` and
 `history.showNext` (Up and Down in the find box), `leaveEditorMessage`, and
 the cut, copy, and paste commands, whose keys the browser handles itself,
-and `editor.action.showContextMenu` (Shift+F10), which the context menu
-feature binds. Copy still works.
+`editor.action.showContextMenu` (Shift+F10), which the context menu
+feature binds, `workbench.action.showHover` (Ctrl or Cmd+K, then Ctrl or
+Cmd+I), every `quickInput.` command, and the action menu's commands
+(`hideCodeActionWidget`, `selectNextCodeAction`, and seven like them). Copy
+still works.
 
-The end-to-end test checks, in both editors, that Ctrl or Cmd+K opens the Go
+The end-to-end test lists every command an editor has a key for and allows
+Monaco's text navigation, the commands above, and nothing else. It also
+checks, in both editors, that Ctrl or Cmd+K opens the Go
 to Resource palette, that nothing handles Ctrl or Cmd+J, that Escape returns
 focus to the editor, and that Ctrl or Cmd+F outside an editor is left to the
 browser.

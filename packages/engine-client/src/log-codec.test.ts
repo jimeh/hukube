@@ -58,6 +58,20 @@ it("stops resuming a container once a ready status no longer lists it", () => {
   codec.beginSocket();
   codec.event({ ...status, ready: false, sources: [] });
   expect(codec.params(params).resume).toHaveLength(1);
-  codec.event({ ...status, sources: [] });
+  codec.event({ ...status, sources: [], pods: 0, followed: 0 });
   expect(codec.params(params).resume).toEqual([]);
+});
+it("keeps the cursor of a Pod whose containers a ready status does not list yet", () => {
+  const codec = new LogCodec();
+  const params = { cluster: "c", type: "deployments.apps", name: "web", uid: "uid" };
+  const other = { ...source, id: 8, pod: "web-b", podUid: "uid2" };
+  const both = { ...status, sources: [source, other], pods: 2, followed: 2 };
+  codec.event(both);
+  codec.decode(frame(7));
+  codec.decode(frame(8));
+  // Two Pods are followed and one is listed: the other is late, not gone.
+  codec.event({ ...both, sources: [source] });
+  expect(codec.params(params).resume).toHaveLength(2);
+  codec.event({ ...both, sources: [source], pods: 1, followed: 1 });
+  expect(codec.params(params).resume).toHaveLength(1);
 });

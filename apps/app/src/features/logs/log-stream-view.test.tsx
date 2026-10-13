@@ -338,14 +338,23 @@ it("shares display toggles, enables previous only after a restart, searches, and
   event();
   expect(screen.getByText("No previous run")).toBeDefined();
   expect(screen.getByRole("button", { name: "Previous run" }).hasAttribute("disabled")).toBe(false);
-  event({ ...ready, sources: [{ ...source, previous: true }] });
+  // The Engine sends a run's lines before it says it is ready.
+  const restarted = { ...ready, sources: [{ ...source, previous: true }] };
+  event({ ...restarted, ready: false });
   line("old");
+  event(restarted);
+  // Timestamps are still on from the toggle above.
+  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   expect(screen.getByText("The previous run of constructor.")).toBeDefined();
+  // A second socket sends the run again, and its lines replace the first's
+  // once they arrive, not before.
   act(() => latest().listener.state?.("reconnecting"));
-  event({ ...ready, ready: false });
-  expect(screen.getByRole("textbox").textContent).toContain("old");
-  event();
-  expect(screen.queryByRole("textbox")).toBeNull();
+  event({ ...ready, ready: false, sources: [] });
+  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
+  event({ ...restarted, ready: false });
+  line("old again");
+  event(restarted);
+  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old again");
   act(() => latest().listener.end({ reason: "complete" }));
   act(() => {
     vi.advanceTimersByTime(60_000);
@@ -410,4 +419,33 @@ it("says that a previous run's logs are gone instead of promising lines", () => 
   expect(screen.getByText("No lines from the previous run")).toBeDefined();
   expect(screen.getByText("Its logs are no longer available: unable to retrieve")).toBeDefined();
   expect(screen.queryByText(/keeps trying|appear here/)).toBeNull();
+});
+
+it("keeps the display controls of a deleted Resource and takes away its choices", () => {
+  mount();
+  event({
+    ...ready,
+    sources: [{ ...source, previous: true }],
+    containers: [...ready.containers, { name: "sidecar", kind: "container" }],
+  });
+  line();
+  act(() => latest().listener.end({ reason: "deleted" }));
+  expect(screen.getByRole("textbox").textContent).toBe("hello");
+  for (const name of ["Timestamps", "Wrap", "Search"])
+    expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("combobox", { name: "Container" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Previous run" }).hasAttribute("disabled")).toBe(true);
+});
+
+it("does not call a Pod gone because a status came before its containers were known", () => {
+  mount({ target: { ...props.target, type: "deployments.apps" }, kind: "Deployment" });
+  const other = { ...source, id: 1, pod: "web-b", podUid: "uid2" };
+  event({ ...ready, sources: [source, other], pods: 2, followed: 2 });
+  line();
+  // A resumed stream is ready after a second, with one Pod's manifest still on its way.
+  event({ ...ready, sources: [source], pods: 2, followed: 2 });
+  event({ ...ready, sources: [source, other], pods: 2, followed: 2 });
+  expect(screen.getByRole("textbox").textContent).not.toMatch(/is gone|following Pod/);
+  event({ ...ready, sources: [source], pods: 1, followed: 1 });
+  expect(screen.getByRole("textbox").textContent).toContain("··· Pod web-b is gone ···");
 });
