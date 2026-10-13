@@ -56,8 +56,12 @@ Resource, and its Events should stay those of the same incarnation.
   while a tab is hidden.
 - The API server does not cache Events, so each list reads the Namespace's
   Events from etcd and filters them. That is the cost of one
-  `kubectl describe`, paid when a tab opens and when its watch has to list
-  again.
+  `kubectl describe`, paid when a tab opens and again whenever its watch
+  cannot resume. A watch that has delivered nothing cannot resume once etcd
+  has compacted its resourceVersion, which took between 8 and 10 minutes
+  against a test API server, because an uncached type sends no bookmarks.
+  The watch therefore asks for a timeout of 30 to 60 minutes, so a quiet tab
+  lists again about that often.
 - Events about a cluster-scoped Resource need permission to list Events in
   every Namespace, as `kubectl describe node` does. A user without it sees
   that they are not permitted, not an empty Facet.
