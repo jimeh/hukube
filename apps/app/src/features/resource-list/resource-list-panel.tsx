@@ -21,6 +21,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useDeferredValue,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,7 @@ import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
 import { ColumnHeaders } from "./column-header.tsx";
+import { columnRevealDelta } from "./column-reveal.ts";
 import { CustomizeColumns, type ColumnMenuProps } from "./column-menu.tsx";
 import { resolveColumnLayout, shownSort } from "./column-layout.ts";
 import {
@@ -122,6 +124,27 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   if (grown !== widths) setWidths(grown);
   const layout = gridLayout(columns, grown, resolved.spare);
   const gridColumns: CSSProperties = { gridTemplateColumns: layout.template };
+  const [reveal, setReveal] = useState<{ id: string; menu: Element | null }>();
+  useLayoutEffect(() => {
+    if (!reveal) return;
+    const scroll = scrollRef.current;
+    const header = Array.from(scroll?.querySelectorAll<HTMLElement>("[data-column-id]") ?? []).find(
+      (element) => element.dataset.columnId === reveal.id,
+    );
+    if (scroll && header) {
+      const bounds = scroll.getBoundingClientRect();
+      const actions = scroll.querySelector("[data-column-actions]")?.getBoundingClientRect();
+      const left = bounds.left + scroll.clientLeft;
+      // The browser stops at the list's end, where the last column can still
+      // sit under the open checklist until it closes.
+      scroll.scrollLeft += columnRevealDelta(
+        header.getBoundingClientRect(),
+        { left, right: Math.min(left + scroll.clientWidth, actions?.left ?? Infinity) },
+        reveal.menu?.getBoundingClientRect(),
+      );
+    }
+    setReveal(undefined);
+  }, [reveal, resolved.shown]);
   const columnMenu: ColumnMenuProps = {
     layout: resolved,
     allNamespaces: namespace === allNamespaces,
@@ -130,6 +153,7 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
       onInteract();
       void put(value);
     },
+    onShow: (id, menu) => setReveal({ id, menu }),
   };
 
   const open = (row: Row | undefined, preview: boolean) => {

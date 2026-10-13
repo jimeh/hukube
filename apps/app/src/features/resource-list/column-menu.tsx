@@ -17,6 +17,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { MoreHorizontalIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useRef } from "react";
 
 import { showColumn, type ResolvedColumnLayout, type StoredColumnLayout } from "./column-layout.ts";
 
@@ -25,6 +26,7 @@ export interface ColumnMenuProps {
   allNamespaces: boolean;
   hasStored: boolean;
   onEdit: (layout: StoredColumnLayout | null) => void;
+  onShow: (id: string, menu: Element | null) => void;
 }
 
 /** One checklist, rendered through either menu's primitives. */
@@ -33,6 +35,7 @@ export function ColumnMenuItems({
   allNamespaces,
   hasStored,
   onEdit,
+  onShow,
   context = false,
 }: ColumnMenuProps & { context?: boolean }) {
   const Group = context ? ContextMenuGroup : DropdownMenuGroup;
@@ -40,9 +43,10 @@ export function ColumnMenuItems({
   const Separator = context ? ContextMenuSeparator : DropdownMenuSeparator;
   const Item = context ? ContextMenuItem : DropdownMenuItem;
   const shown = new Set(layout.shown.map((column) => column.id));
+  const groupRef = useRef<HTMLDivElement>(null);
   return (
     <>
-      <Group>
+      <Group ref={groupRef}>
         {layout.available.map((column) => (
           <CheckboxItem
             key={column.id}
@@ -54,7 +58,10 @@ export function ColumnMenuItems({
             }
             onCheckedChange={(checked) => {
               const value = showColumn(layout, column.id, checked);
-              if (value !== undefined) onEdit(value);
+              if (value !== undefined) {
+                onEdit(value);
+                if (checked) onShow(column.id, groupRef.current?.closest('[role="menu"]') ?? null);
+              }
             }}
           >
             {column.name}
@@ -75,7 +82,8 @@ export function ColumnMenuItems({
 export function CustomizeColumns({ loaded, ...menu }: ColumnMenuProps & { loaded: boolean }) {
   return (
     <div
-      className="sticky right-0 z-10 -mr-3 flex items-center justify-center border-l bg-background"
+      data-column-actions
+      className="sticky right-0 z-10 -mr-3 flex w-11 items-center justify-center justify-self-end border-l bg-background"
       style={{ gridColumn: "-2 / -1" }}
     >
       <DropdownMenu>
