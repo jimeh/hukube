@@ -31,10 +31,13 @@ type RelatedSection struct {
 	// as owners, and "out" for those it points to.
 	Direction RelatedDirection `json:"direction"`
 	Rows      []RelatedRow     `json:"rows"`
-	Total     int              `json:"total"`
-	Truncated bool             `json:"truncated,omitempty"`
+	// Total counts distinct owners on the followed paths, resolved or not,
+	// or every owned descendant in an outgoing section.
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated,omitempty"`
 }
 
+// RelatedRow is a Resource, unresolved owner reference, or omitted group in a section.
 type RelatedRow struct {
 	Depth  int           `json:"depth"`
 	Status RelatedStatus `json:"status"`
@@ -52,6 +55,7 @@ type RelatedRow struct {
 	More int `json:"more,omitempty"`
 }
 
+// RelatedType describes the Columns carried by rows of one Resource Type.
 type RelatedType struct {
 	Type    TypeKey  `json:"type"`
 	Columns []Column `json:"columns"`

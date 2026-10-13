@@ -370,8 +370,13 @@ whether there is anything behind it before a user opens it.
   when it is above 0, and `999+` above 999. No icon: the Events entry's
   warning icon calls for attention, and a count of related Resources is only
   information.
-- **Accessible name.** `Related, 12 Resources`, or `Related` without a count.
-- No count while the answer is an error or `found` is false.
+- **Accessible name.** `Related, 12 Resources`, `Related, 1 Resource`, or
+  `Related` without a count.
+- **What it counts.** The answer's `total`: the owners the Resource's
+  references name, resolved or not, and everything it owns.
+- **No count** while there is no value, while `found` is false, and while
+  the error is `forbidden`. Another error leaves the count of the value the
+  tab still holds, as the States table says.
 
 ### A switcher that does not fit
 
@@ -411,6 +416,8 @@ One scrolling area. Each section has a heading row in the style of the
 Events header (`h-7`, `px-3`, bottom border, muted `text-xs`), then its rows.
 The owners section comes first.
 
+- **Sections.** The Facet shows the sections whose Relationship is `owns`
+  and skips any other, which a later layer adds.
 - **Headings.** `Owned by` for the owners, and `Owns` with the section's
   total in muted text for the owned.
 - **Indentation means "owns", everywhere.** A row is owned by the row it is
@@ -434,10 +441,12 @@ The owners section comes first.
 - **A reference that did not resolve** has the reference's kind and name in
   muted text and the reason on its second line (see States). It is not a
   link.
-- **A `more` row** has one line of muted text:
-  `2,900 more Pod Resources are not shown.`
-- **Truncated owners.** A muted line under the section: `Not every owner is
-shown.`
+- **A `more` row** has one line of muted text, indented as the Resources it
+  counts: `2,900 more Pod Resources are not shown.`, or
+  `1 more Pod Resource is not shown.`
+- **Truncated owners.** A muted line under the owners section when it is
+  `truncated`: `Not every owner is shown.` The owned section's `truncated`
+  shows nothing more, because its `more` rows already say what is left out.
 - **Types that cannot be listed.** When the Cluster has types in state
   `forbidden`, a muted line under the last section says
   `Resources of 12 Resource Types your credentials cannot list are not
@@ -498,26 +507,30 @@ cost one, plus the way back, for a user who is walking the chain.
 
 ### States
 
-| State                                                         | What shows                                                                                                                                                                                      |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading: no value and no error                                | A heading skeleton and three two-line skeleton rows, marked busy. No count.                                                                                                                     |
-| `found` is false and the Manifest shows the Resource          | The same skeleton: the index has not caught up with the Manifest's watch.                                                                                                                       |
-| Nothing related                                               | `Nothing related`. `No Resource owns this <Kind>, and it owns none. Owners and owned Resources appear here as they change.` The line about types that cannot be listed follows when it applies. |
-| Populated                                                     | The sections. The count shows.                                                                                                                                                                  |
-| A large owner                                                 | 100 Resources of a type under one owner and a `more` row. The heading holds the full count.                                                                                                     |
-| A reference to a Resource that is gone (`missing`)            | Second line: `Not found. No <Kind> with this name and UID exists.`                                                                                                                              |
-| A reference to a kind the Cluster does not serve (`unserved`) | Second line: `This Cluster does not serve <apiVersion> <Kind>.`                                                                                                                                 |
-| A reference to a type the user may not list (`forbidden`)     | Second line: `Your credentials cannot list <type>.`                                                                                                                                             |
-| A reference to a type the Cluster refused (`failed`)          | Second line: `The Cluster cannot list <type>.`                                                                                                                                                  |
-| A reference to a type still loading (`syncing`)               | Second line: `Loading <type>…`                                                                                                                                                                  |
-| Not permitted (`forbidden` error)                             | `Not permitted`. `Your credentials cannot list <type>, so hukube cannot tell what this <Kind> is related to.` No count.                                                                         |
-| Another error, no value yet                                   | `Related Resources unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                |
-| Another error, with a value                                   | A line above the sections in the destructive color, `Related Resources may be out of date: <message>`. The rows and the count stay.                                                             |
-| The Cluster is unreachable                                    | The status bar says so, as today. The index keeps what it last saw, so the rows stay.                                                                                                           |
-| The connection to the Engine is lost                          | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                          |
-| The Resource is deleted while open, or was never found        | The header's `Deleted` or `Not found` badge. `Nothing related`. `This <Kind> does not exist right now. Related Resources appear here if it is created.` No count.                               |
-| The Resource is created again                                 | The new incarnation's sections. What the old one owned is not owned by it.                                                                                                                      |
-| The window is out of date                                     | Frozen by the root layout, as everything else.                                                                                                                                                  |
+In a row about a reference, `<Kind>`, `<apiVersion>`, and `<type>` are the
+row's own. In a notice, `<Kind>` is the kind of the tab's Resource and
+`<type>` its type key.
+
+| State                                                                                                        | What shows                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading: no value and no error                                                                               | A heading skeleton and three two-line skeleton rows, marked busy. No count.                                                                                                                     |
+| `found` is false and the Manifest's answer is not `deleted`                                                  | The same skeleton, whether the Manifest has answered or not: the index has not caught up with the Manifest's watch. No count.                                                                   |
+| Nothing related                                                                                              | `Nothing related`. `No Resource owns this <Kind>, and it owns none. Owners and owned Resources appear here as they change.` The line about types that cannot be listed follows when it applies. |
+| Populated                                                                                                    | The sections. The count shows.                                                                                                                                                                  |
+| A large owner                                                                                                | 100 Resources of a type under one owner and a `more` row. The heading holds the full count.                                                                                                     |
+| A reference to a Resource that is gone (`missing`)                                                           | Second line: `Not found. No <Kind> with this name and UID exists.`                                                                                                                              |
+| A reference to a kind the Cluster does not serve (`unserved`)                                                | Second line: `This Cluster does not serve <apiVersion> <Kind>.`                                                                                                                                 |
+| A reference to a type the user may not list (`forbidden`)                                                    | Second line: `Your credentials cannot list <type>.`                                                                                                                                             |
+| A reference to a type the Cluster refused (`failed`)                                                         | Second line: `The Cluster cannot list <type>.`                                                                                                                                                  |
+| A reference to a type still loading (`syncing`)                                                              | Second line: `Loading <type>…`                                                                                                                                                                  |
+| Not permitted (`forbidden` error)                                                                            | `Not permitted`. `Your credentials cannot list <type>, so hukube cannot tell what this <Kind> is related to.` Replaces any rows. No count.                                                      |
+| Another error, no value yet                                                                                  | `Related Resources unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                |
+| Another error, with a value                                                                                  | A line above the sections in the destructive color, `Related Resources may be out of date: <message>`. The rows and the count stay.                                                             |
+| The Cluster is unreachable                                                                                   | The status bar says so, as today. The index keeps what it last saw, so the rows stay.                                                                                                           |
+| The connection to the Engine is lost                                                                         | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                          |
+| `found` is false and the Manifest's answer is `deleted`: the Resource was deleted while open, or never found | The header's `Deleted` or `Not found` badge. `Nothing related`. `This <Kind> does not exist right now. Related Resources appear here if it is created.` No count.                               |
+| The Resource is created again                                                                                | The new incarnation's sections. What the old one owned is not owned by it.                                                                                                                      |
+| The window is out of date                                                                                    | Frozen by the root layout, as everything else.                                                                                                                                                  |
 
 Every text the Cluster supplies is rendered as text. Kinds, type keys, and
 column names are compared by value or held in a `Map`, never used as keys of
@@ -677,9 +690,15 @@ Ownership adds 223.7 retained heap bytes per Resource in this fixture,
 Pods using the default limits. It keeps the exact total of 10,000 and
 returns 100 Resource rows and one `more` row of 9,900:
 
-| Time per recompute | Allocated bytes per recompute | Allocations per recompute |
-| ------------------ | ----------------------------- | ------------------------- |
-| 32.19 ms           | 23,743,908                    | 30,811                    |
+| Measurement | Time per recompute | Allocated bytes per recompute | Allocations per recompute |
+| ----------- | ------------------ | ----------------------------- | ------------------------- |
+| Before      | 32.19 ms           | 23,743,908                    | 30,811                    |
+| After       | 12.98 ms           | 6,447,487                     | 10,619                    |
+
+The four graph corrections reduce time by 2.48 times and allocated bytes by
+3.68 times. The time target of three times was not reached; no further
+restructuring was attempted. The after measurement runs the same benchmark
+and flags, with `-bench 'BenchmarkRelatedLargeOwner$'` only.
 
 The display limit bounds the answer's rows, but not the work of counting
 all descendants. These are synthetic, local measurements without Table

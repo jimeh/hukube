@@ -581,16 +581,22 @@ func toMeta(obj any) (index.Meta, error) {
 	}
 	var owners []index.OwnerRef
 	for _, ref := range o.OwnerReferences {
-		owners = append(owners, index.OwnerRef{APIVersion: unique.Make(ref.APIVersion).Value(), Kind: unique.Make(ref.Kind).Value(), Name: ref.Name, UID: string(ref.UID), Controller: ref.Controller != nil && *ref.Controller})
+		owners = append(owners, index.OwnerRef{
+			APIVersion: unique.Make(ref.APIVersion).Value(),
+			Kind:       unique.Make(ref.Kind).Value(),
+			Name:       ref.Name,
+			UID:        string(ref.UID),
+			Controller: ref.Controller != nil && *ref.Controller,
+		})
 	}
 	return index.Meta{
-		Owners:          owners,
 		UID:             string(o.UID),
 		Namespace:       o.Namespace,
 		Name:            o.Name,
 		CreatedAt:       o.CreationTimestamp.Time,
 		ResourceVersion: o.ResourceVersion,
 		Labels:          o.Labels,
+		Owners:          owners,
 	}, nil
 }
 
