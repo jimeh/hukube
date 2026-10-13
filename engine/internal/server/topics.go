@@ -174,40 +174,20 @@ func init() {
 			return nil, err
 		}
 
-		var (
-			mu      sync.Mutex
-			latest  *protocol.ResourceData
-			lastErr error
-		)
-		wctx, cancel := context.WithCancel(ctx)
-		c.WatchObject(wctx, p,
-			func(d protocol.ResourceData) {
-				mu.Lock()
-				latest, lastErr = &d, nil
-				mu.Unlock()
-				notify()
-			},
-			func(err error) {
-				mu.Lock()
-				lastErr = err
-				mu.Unlock()
-				notify()
-			},
-		)
-		return &live[protocol.ResourceData]{
-			compute: func() (protocol.ResourceData, bool, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				if lastErr != nil {
-					return protocol.ResourceData{}, false, lastErr
-				}
-				if latest == nil {
-					return protocol.ResourceData{}, false, nil
-				}
-				return *latest, true, nil
-			},
-			stop: cancel,
-		}, nil
+		return watchValue(ctx, notify, func(ctx context.Context, emit func(protocol.ResourceData), onErr func(error)) {
+			c.WatchObject(ctx, p, emit, onErr)
+		}), nil
+	})
+
+	handleTopic(protocol.TopicResourceEvents, func(ctx context.Context, srv *Server, p protocol.ResourceEventsParams, notify func()) (*live[protocol.ResourceEvents], error) {
+		c, err := srv.cfg.Clusters.Get(p.Cluster)
+		if err != nil {
+			return nil, err
+		}
+
+		return watchValue(ctx, notify, func(ctx context.Context, emit func(protocol.ResourceEvents), onErr func(error)) {
+			c.WatchEvents(ctx, p, emit, onErr)
+		}), nil
 	})
 
 	handleTopic(protocol.TopicSettingsWatch, func(ctx context.Context, srv *Server, p protocol.SettingKey, notify func()) (*live[protocol.Setting], error) {
@@ -222,6 +202,46 @@ func init() {
 			stop: forward(ctx, notify, func() (<-chan struct{}, func()) { return srv.cfg.Settings.Watch(p.Key) }),
 		}, nil
 	})
+}
+
+// watchValue holds a watch's latest value or error until the subscription stops.
+func watchValue[D any](ctx context.Context, notify func(), start func(context.Context, func(D), func(error))) *live[D] {
+	var (
+		mu      sync.Mutex
+		latest  *D
+		lastErr error
+	)
+	wctx, cancel := context.WithCancel(ctx)
+	start(wctx,
+		func(d D) {
+			mu.Lock()
+			latest, lastErr = &d, nil
+			mu.Unlock()
+			notify()
+		},
+		func(err error) {
+			mu.Lock()
+			lastErr = err
+			mu.Unlock()
+			notify()
+		},
+	)
+	return &live[D]{
+		compute: func() (D, bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if lastErr != nil {
+				var zero D
+				return zero, false, lastErr
+			}
+			if latest == nil {
+				var zero D
+				return zero, false, nil
+			}
+			return *latest, true, nil
+		},
+		stop: cancel,
+	}
 }
 
 // finders holds Finders between find subscriptions. Typing restarts a find

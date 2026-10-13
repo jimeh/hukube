@@ -299,6 +299,40 @@ type ResourceData struct {
 	Deleted bool            `json:"deleted,omitempty"`
 }
 
+// ResourceEventsParams selects the Events about one incarnation of a Resource.
+type ResourceEventsParams struct {
+	Cluster   string  `json:"cluster"`
+	Type      TypeKey `json:"type"`
+	Namespace string  `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	// UID selects the Resource incarnation, allowing empty and name-as-UID references.
+	// An empty UID selects every incarnation of the Resource.
+	UID string `json:"uid,omitempty"`
+}
+
+// ResourceEvents is the current set of Events about a Resource, with uncapped counts.
+type ResourceEvents struct {
+	// Events holds the newest Events, newest first, at most 500.
+	Events []ResourceEvent `json:"events"`
+	// Total and Warnings count every Event about the Resource.
+	Total    int `json:"total"`
+	Warnings int `json:"warnings"`
+}
+
+// ResourceEvent is one Kubernetes Event normalized across recorder formats.
+type ResourceEvent struct {
+	UID      string    `json:"uid"`
+	Type     string    `json:"type"`
+	Reason   string    `json:"reason"`
+	Message  string    `json:"message"`
+	Count    int       `json:"count"`
+	LastSeen time.Time `json:"lastSeen" tstype:"string"`
+	// Reporter is the component that reported the Event, such as
+	// "kubelet", and ReporterInstance where it ran, such as a Node's name.
+	Reporter         string `json:"reporter,omitempty"`
+	ReporterInstance string `json:"reporterInstance,omitempty"`
+}
+
 // SettingKey selects a stored setting.
 type SettingKey struct {
 	Key string `json:"key"`

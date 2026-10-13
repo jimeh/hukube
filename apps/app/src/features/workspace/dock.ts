@@ -21,6 +21,8 @@ interface OpenPanelOptions<P> {
   preview: boolean;
   /** The panel this one was opened from; the new panel opens in a Pane beside it. */
   beside?: string;
+  /** Derives params from the Preview Tab being replaced, when there is one. */
+  replacePreviewParams?: (params: P, previous: unknown) => P;
 }
 
 /**
@@ -32,7 +34,7 @@ interface OpenPanelOptions<P> {
  */
 export function openPanel<P extends { preview?: boolean }>(
   api: DockviewApi,
-  { id, component, title, params, preview, beside }: OpenPanelOptions<P>,
+  { id, component, title, params, preview, beside, replacePreviewParams }: OpenPanelOptions<P>,
 ): void {
   const existing = api.getPanel(id);
   if (existing) {
@@ -57,7 +59,12 @@ export function openPanel<P extends { preview?: boolean }>(
     component,
     title,
     tabComponent: "tab",
-    params: { ...params, preview },
+    params: {
+      ...(previous && replacePreviewParams
+        ? replacePreviewParams(params, previous.params)
+        : params),
+      preview,
+    },
     ...(position ? { position } : {}),
   });
   previous?.api.close();

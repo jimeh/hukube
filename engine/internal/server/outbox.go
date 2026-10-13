@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sync"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/jimeh/hukube/engine/internal/cluster"
 	"github.com/jimeh/hukube/engine/internal/kubeconfig"
 	"github.com/jimeh/hukube/engine/internal/protocol"
@@ -91,6 +93,8 @@ func toProtocolError(err error) *protocol.ErrorDetail {
 	switch {
 	case errors.As(err, &pe):
 		return pe
+	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
+		return &protocol.ErrorDetail{Code: protocol.ErrorCodeForbidden, Message: err.Error()}
 	case errors.Is(err, kubeconfig.ErrUnknownCluster), errors.Is(err, cluster.ErrUnknownType):
 		return &protocol.ErrorDetail{Code: protocol.ErrorCodeNotFound, Message: err.Error()}
 	default:

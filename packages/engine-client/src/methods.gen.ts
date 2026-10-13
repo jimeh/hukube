@@ -9,6 +9,8 @@ import type {
   QueryParams,
   QueryResult,
   ResourceData,
+  ResourceEvents,
+  ResourceEventsParams,
   ResourceRef,
   ResourceType,
   Setting,
@@ -26,6 +28,7 @@ export interface Topics {
   "resources.query": { params: QueryParams; data: QueryResult };
   "resources.find": { params: FindParams; data: FindResult };
   "resource.get": { params: ResourceRef; data: ResourceData };
+  "resource.events": { params: ResourceEventsParams; data: ResourceEvents };
   "settings.watch": { params: SettingKey; data: Setting };
 }
 
