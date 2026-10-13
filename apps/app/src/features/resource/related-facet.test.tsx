@@ -60,6 +60,7 @@ function show(
 }
 afterEach(() => {
   cleanup();
+  workspace.status = undefined;
   vi.clearAllMocks();
   vi.useRealTimers();
 });
@@ -81,21 +82,72 @@ describe("Related states", () => {
       );
     },
   );
-  it("explains nothing related and includes forbidden Resource Types", () => {
-    const types = new Map([
-      ["constructor", { state: "forbidden" } as ResourceType],
-      ["pods", { state: "ready" } as ResourceType],
-    ]);
-    show({ stale: false, data: empty }, {}, types);
-    expect(screen.getByText("Nothing related")).toBeDefined();
+  it("explains no owners or owned Resources when all types can be listed", () => {
+    show({ stale: false, data: empty });
+    expect(screen.getByText("No owners or owned Resources")).toBeDefined();
     expect(
       screen.getByText(
         "No Resource owns this Deployment, and it owns none. Owners and owned Resources appear here as they change.",
       ),
     ).toBeDefined();
+    expect(screen.queryByText(/Resources of .* your credentials cannot list/)).toBeNull();
+  });
+  it.each([1, 2])(
+    "qualifies the empty state for %s forbidden types without a bottom line",
+    (count) => {
+      const types = new Map(
+        Array.from({ length: count }, (_, index) => [
+          String(index),
+          { state: "forbidden" } as ResourceType,
+        ]),
+      );
+      const { container } = show({ stale: false, data: empty }, {}, types);
+      expect(screen.getByText("No owners or owned Resources")).toBeDefined();
+      const omitted = `Resources of ${count} ${count === 1 ? "Resource Type" : "Resource Types"} your credentials cannot list are not shown.`;
+      expect(
+        screen.getByText(
+          `No Resource that your credentials can list owns this Deployment or is owned by it. ${omitted}`,
+        ),
+      ).toBeDefined();
+      expect(screen.queryByText(omitted, { exact: true })).toBeNull();
+      expect(container.querySelector("p.px-3.py-2.text-muted-foreground")).toBeNull();
+    },
+  );
+  it("keeps the forbidden types line under populated sections", () => {
+    show(
+      { stale: false, data: populated },
+      {},
+      new Map([["constructor", { state: "forbidden" } as ResourceType]]),
+    );
     expect(
       screen.getByText("Resources of 1 Resource Type your credentials cannot list are not shown."),
     ).toBeDefined();
+  });
+  it.each([empty, populated])("warns about a failed Cluster above content: %j", (data) => {
+    workspace.status = { phase: "failed", message: "connection refused" };
+    const view = show({ stale: false, data });
+    expect(
+      screen.getByText("Related Resources may be out of date: connection refused"),
+    ).toBeDefined();
+    workspace.status = { phase: "failed" };
+    view.rerender(panel({ stale: false, data }));
+    expect(
+      screen.getByText("Related Resources may be out of date: the Cluster cannot be reached"),
+    ).toBeDefined();
+    view.rerender(
+      panel({ stale: true, data, error: { code: "internal", message: "topic failed" } }),
+    );
+    expect(screen.getAllByText(/Related Resources may be out of date:/)).toHaveLength(1);
+    expect(screen.getByText("Related Resources may be out of date: topic failed")).toBeDefined();
+  });
+  it("keeps failed Cluster warnings out of permission and unavailable notices", () => {
+    workspace.status = { phase: "failed", message: "offline" };
+    const view = show({ stale: false, error: { code: "forbidden", message: "denied" } });
+    expect(screen.getByText("Not permitted")).toBeDefined();
+    expect(screen.queryByText(/may be out of date/)).toBeNull();
+    view.rerender(panel({ stale: false, error: { code: "internal", message: "topic failed" } }));
+    expect(screen.getByText("Related Resources unavailable")).toBeDefined();
+    expect(screen.queryByText(/may be out of date/)).toBeNull();
   });
   it("explains a deleted or never-found Resource and follows recreation", () => {
     const view = show(
@@ -196,9 +248,9 @@ describe("Related states", () => {
     ]);
     expect(screen.getByText("This Pod")).toBeDefined();
     expect(screen.getByText("Not every owner is shown.")).toBeDefined();
-    expect(screen.getByText("2,900 more Pod Resources are not shown.")).toBeDefined();
+    expect(screen.getByText("2,900 Pod Resources are not shown.")).toBeDefined();
     expect(screen.getByText("2,901")).toBeDefined();
-    expect(screen.getByRole("row", { name: /2,900 more/ }).style.paddingLeft).toBe("140px");
+    expect(screen.getByRole("row", { name: /2,900/ }).style.paddingLeft).toBe("140px");
     expect(screen.getByRole("row", { name: /This Pod/ }).getAttribute("aria-level")).toBe("2");
     expect(screen.queryByText("ignored")).toBeNull();
     view.rerender(
@@ -210,8 +262,39 @@ describe("Related states", () => {
         },
       }),
     );
-    expect(screen.getByText("1 more Pod Resource is not shown.")).toBeDefined();
+    expect(screen.getByText("1 Pod Resource is not shown.")).toBeDefined();
   });
+  it.each([1, 30])(
+    "names %s omitted Resources only as older when siblings of that type were shown",
+    (count) => {
+      const more = { ...row, depth: 1, status: "more" as const, more: count };
+      const data = (rows: RelatedRow[]) => ({
+        ...populated,
+        total: count,
+        sections: [{ ...populated.sections[0]!, rows }],
+      });
+      const noun = count === 1 ? "Resource is" : "Resources are";
+      const owner = { ...row, type: "replicasets.apps", name: "owner" };
+      const view = show({ stale: false, data: data([owner, { ...row, depth: 1 }, more]) });
+      expect(screen.getByText(`${count} older Pod ${noun} not shown.`)).toBeDefined();
+      // Another owner's same-type child, a deeper child, a different type, and an unresolved sibling do not qualify.
+      view.rerender(
+        panel({
+          stale: false,
+          data: data([
+            owner,
+            { ...row, depth: 1 },
+            { ...owner, name: "other" },
+            { ...row, depth: 2 },
+            { ...row, depth: 1, type: "jobs.batch" },
+            { ...row, depth: 1, status: "missing" },
+            more,
+          ]),
+        }),
+      );
+      expect(screen.getByText(`${count} Pod ${noun} not shown.`)).toBeDefined();
+    },
+  );
   it("renders hostile type keys, names, and columns as text, skipping cells without values", () => {
     const hostile = "<script>text</script>";
     const data: Related = {
@@ -240,12 +323,35 @@ describe("Related states", () => {
         },
       ],
     };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(createdAt).getTime() + 10_000);
     const { container } = show({ stale: false, data });
     expect(screen.getByTitle(hostile).textContent).toBe(hostile);
     const line = screen.getByTitle(/other · .* · constructor 0 · toString false · Name/);
     expect(line.textContent).toMatch(
       /^other · \d+s · constructor 0 · toString false · Name <script>text<\/script>$/,
     );
+    expect(line.classList.contains("truncate")).toBe(true);
+    expect(line.classList.contains("text-muted-foreground")).toBe(true);
+    for (const [label, value] of [
+      ["constructor", "0"],
+      ["toString", "false"],
+      ["Name", hostile],
+    ]) {
+      const valueElement = [...line.querySelectorAll(".text-foreground")].find(
+        (element) => element.textContent === value,
+      )!;
+      expect(valueElement).toBeDefined();
+      expect(valueElement.previousElementSibling?.textContent).toBe(label);
+      expect(valueElement.previousElementSibling?.classList.contains("text-foreground")).toBe(
+        false,
+      );
+    }
+    expect(
+      screen.getByRole("row", {
+        name: `constructor ${hostile} ${line.textContent}`,
+      }),
+    ).toBeDefined();
     expect(container.querySelector("script")).toBeNull();
   });
   it("advances the age of retained rows with the shared clock", async () => {
@@ -322,6 +428,57 @@ describe("Related navigation", () => {
     expect(workspace.openResource).toHaveBeenCalledTimes(4);
     expect(grid.tabIndex).toBe(0);
   });
+  it.each(["click", "double-click", "Enter", " "])(
+    "focuses only the newly mounted Related Facet at the opened address: %s",
+    (action) => {
+      show({ stale: false, data: populated });
+      if (action === "click" || action === "double-click") {
+        fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 1 });
+        if (action === "double-click")
+          fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 2 });
+      } else {
+        fireEvent.keyDown(screen.getByRole("treegrid"), { key: "ArrowDown" });
+        fireEvent.keyDown(screen.getByRole("treegrid"), { key: action });
+      }
+      cleanup();
+      const opened = { cluster: "c", type: "pods", namespace: "shop", name: "web" };
+      for (const difference of [
+        { cluster: "other" },
+        { type: "other" },
+        { namespace: "other" },
+        { name: "other" },
+      ]) {
+        show({ stale: false, data: populated }, { address: { ...opened, ...difference } });
+        expect(document.activeElement).not.toBe(screen.getByRole("treegrid"));
+        cleanup();
+      }
+      const focus = vi.spyOn(HTMLElement.prototype, "focus");
+      show({ stale: false, data: populated }, { address: opened });
+      expect(document.activeElement).toBe(screen.getByRole("treegrid"));
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      expect(screen.getByRole("treegrid").getAttribute("aria-activedescendant")).toBeNull();
+      expect(screen.getByRole("row", { name: /Pod web/ }).getAttribute("aria-selected")).toBe(
+        "false",
+      );
+      focus.mockRestore();
+      cleanup();
+      show({ stale: false, data: populated }, { address: opened });
+      expect(document.activeElement).not.toBe(screen.getByRole("treegrid"));
+    },
+  );
+  it("leaves focus alone when the opened Resource's Facet mounts long after the row was used", () => {
+    vi.useFakeTimers();
+    show({ stale: false, data: populated });
+    fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 1 });
+    cleanup();
+    // A tab that was already open mounts nothing, so the record must not wait for a later one.
+    vi.advanceTimersByTime(2000);
+    show(
+      { stale: false, data: populated },
+      { address: { cluster: "c", type: "pods", namespace: "shop", name: "web" } },
+    );
+    expect(document.activeElement).not.toBe(screen.getByRole("treegrid"));
+  });
   it("makes a regular tab of what a double-click's first click opened, in whichever Facet gets the second", () => {
     show({ stale: false, data: populated });
     fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 1 });
@@ -386,6 +543,19 @@ describe("Related navigation", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(
       screen.getByRole("row", { name: /Pod web/ }).id,
     );
+  });
+  it("keeps keyboard selection below its sticky section heading", () => {
+    show({ stale: false, data: populated });
+    const grid = screen.getByRole("treegrid");
+    const resource = screen.getByRole("row", { name: /Pod web/ });
+    const heading = screen.getByRole("columnheader", { name: "Owns" }).parentElement!;
+    grid.getBoundingClientRect = () => ({ top: 100, bottom: 200 }) as DOMRect;
+    resource.getBoundingClientRect = () => ({ top: 100, bottom: 148 }) as DOMRect;
+    heading.getBoundingClientRect = () => ({ height: 28 }) as DOMRect;
+    grid.scrollTop = 50;
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.scrollTop).toBe(22);
+    expect(resource.getAttribute("aria-selected")).toBe("true");
   });
   it("retains selection when rows arrive above it and clears it when its path leaves", () => {
     const view = show({ stale: false, data: populated });
