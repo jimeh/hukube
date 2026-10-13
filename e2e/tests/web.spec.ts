@@ -335,11 +335,43 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     const lastCell = panel.getByRole("grid").getByRole("row").first().getByRole("gridcell").last();
     const cell = (await lastCell.boundingBox())!;
     expect(cell.x + cell.width).toBeLessThanOrEqual(customize.x);
-    const end = (await ports.boundingBox())!;
-    await page.mouse.move(end.x + end.width - 2, end.y + end.height / 2, { steps: 8 });
+    await page.mouse.move(customize.x + customize.width / 2, first.y + first.height / 2, {
+      steps: 8,
+    });
+    await page.mouse.move(customize.x + customize.width / 2 + 3, first.y + first.height / 2, {
+      steps: 3,
+    });
+    await expect(ports.locator("..").locator("[data-column-drop-marker]")).toBeVisible();
     await page.mouse.up();
     await expect(headers).toHaveText([...edited.slice(1), "Name"]);
     await expect(panel.locator("[data-column-drop-marker]")).toHaveCount(0);
+
+    // Showing a default-hidden column reveals it without moving vertically.
+    await scroller.evaluate((element) => {
+      element.scrollLeft = 0;
+    });
+    const topBeforeShow = await scroller.evaluate((element) => element.scrollTop);
+    await columns.click();
+    await page.getByRole("menuitemcheckbox", { name: "Selector", exact: true }).click();
+    const selector = panel.getByRole("columnheader", { name: "Selector", exact: true });
+    await expect
+      .poll(async () => {
+        const header = await selector.boundingBox();
+        const list = await scroller.boundingBox();
+        const pinned = await columns.locator("..").boundingBox();
+        return (
+          !!header &&
+          !!list &&
+          !!pinned &&
+          header.x >= list.x &&
+          header.x + header.width <= pinned.x
+        );
+      })
+      .toBe(true);
+    expect(await scroller.evaluate((element) => element.scrollTop)).toBe(topBeforeShow);
+    await expect(
+      page.getByRole("menuitemcheckbox", { name: "Selector", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
   } finally {
     await page.keyboard.press("Escape");
     await page.mouse.up();

@@ -8,9 +8,11 @@ import {
   PointerSensor,
   PreventSelection,
   Scroller,
+  type DragMoveEvent,
+  type DragOverEvent,
 } from "@dnd-kit/dom";
 import { DragDropProvider } from "@dnd-kit/react";
-import { isSortableOperation, useSortable } from "@dnd-kit/react/sortable";
+import { useSortable } from "@dnd-kit/react/sortable";
 import type { Sort } from "@hukube/engine-client";
 import {
   ContextMenu,
@@ -33,6 +35,7 @@ import {
   type StoredColumnLayout,
 } from "./column-layout.ts";
 import type { ListColumn } from "./columns.ts";
+import { dropEdge, dropPosition, headerCollision, type DropEdge } from "./column-drag.ts";
 import { ColumnMenuItems, type ColumnMenuProps } from "./column-menu.tsx";
 
 const sensors = [
@@ -48,6 +51,15 @@ const plugins = [
   PreventSelection,
 ];
 
+/** The header edge a drop would land on, while the pointer is level with the row. */
+function dropAt(operation: DragMoveEvent["operation"]) {
+  const bounds = operation.target?.shape?.boundingRectangle;
+  const pointer = operation.position.current;
+  if (!operation.target || !bounds || pointer.y < bounds.top || pointer.y > bounds.bottom)
+    return undefined;
+  return { id: String(operation.target.id), edge: dropEdge(pointer.x, bounds) };
+}
+
 interface ColumnHeadersProps extends ColumnMenuProps {
   sort: Sort;
   onSort: (sort: Sort) => void;
@@ -59,11 +71,14 @@ export function ColumnHeaders({
   sort,
   onSort,
   onEdit,
+  onShow,
   scrollRef,
   allNamespaces,
   hasStored,
 }: ColumnHeadersProps & { scrollRef: RefObject<HTMLDivElement | null> }) {
-  const [marker, setMarker] = useState<{ id: string; edge: "left" | "right" }>();
+  const [marker, setMarker] = useState<{ id: string; edge: DropEdge }>();
+  const updateMarker = ({ operation }: DragMoveEvent | DragOverEvent) =>
+    setMarker(dropAt(operation));
   return (
     <DragDropProvider
       sensors={sensors}
@@ -78,23 +93,22 @@ export function ColumnHeaders({
       onDragStart={({ operation }) => {
         if (operation.source) setMarker({ id: String(operation.source.id), edge: "left" });
       }}
-      onDragOver={({ operation }) => {
-        if (!isSortableOperation(operation)) return setMarker(undefined);
-        const { source, target } = operation;
-        if (!source || !target) return setMarker(undefined);
-        setMarker({
-          id: String(target.id),
-          edge: target.index > source.index ? "right" : "left",
-        });
-      }}
+      onDragOver={updateMarker}
+      onDragMove={updateMarker}
       onDragEnd={({ operation, canceled }) => {
         setMarker(undefined);
-        if (canceled || !isSortableOperation(operation)) return;
-        const { source, target } = operation;
-        if (!source || !target) return;
+        const at = dropAt(operation);
+        if (canceled || !operation.source || !at) return;
         // Resolve the destination against the layout current at release.
-        const position = layout.shown.findIndex((column) => column.id === target.id);
-        const value = moveColumnTo(layout, String(source.id), position);
+        const source = String(operation.source.id);
+        const position = dropPosition(
+          layout.shown.map((column) => column.id),
+          source,
+          at.id,
+          at.edge,
+        );
+        if (position === undefined) return;
+        const value = moveColumnTo(layout, source, position);
         if (value !== undefined) onEdit(value);
       }}
     >
@@ -107,6 +121,7 @@ export function ColumnHeaders({
           sort={sort}
           onSort={onSort}
           onEdit={onEdit}
+          onShow={onShow}
           allNamespaces={allNamespaces}
           hasStored={hasStored}
           marker={marker?.id === column.id ? marker.edge : undefined}
@@ -124,13 +139,14 @@ function ColumnHeader({
   sort,
   onSort,
   onEdit,
+  onShow,
   marker,
   allNamespaces,
   hasStored,
 }: ColumnHeadersProps & {
   column: ListColumn;
   index: number;
-  marker: "left" | "right" | undefined;
+  marker: DropEdge | undefined;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const targetRef = useRef<HTMLDivElement>(null);
@@ -139,6 +155,7 @@ function ColumnHeader({
     target: targetRef,
     id: column.id,
     index,
+    collisionDetector: headerCollision,
     plugins: [],
     transition: null,
   });
@@ -167,23 +184,27 @@ function ColumnHeader({
                 if (event.defaultPrevented) return;
                 onSort({ ...by, desc: active ? !sort.desc : false });
               }}
-              className={cn(
-                "flex h-full w-full min-w-0 items-center gap-1 text-left font-sans text-xs outline-none select-none hover:text-foreground focus-visible:text-foreground data-[dnd-placeholder]:opacity-40",
-                column.numeric && "justify-end",
-                isDragging &&
-                  "rounded-md bg-background px-2 text-foreground shadow-md ring-1 ring-border",
-              )}
+              className="group/header h-full w-full min-w-0 rounded-sm text-left font-sans text-xs outline-none select-none hover:text-foreground focus-visible:text-foreground focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-solid focus-visible:outline-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset data-[dnd-dragging]:outline-none data-[dnd-dragging]:ring-0"
             />
           }
         >
-          <span className="truncate">{column.name}</span>
-          {active && (
-            <HugeiconsIcon
-              icon={sort.desc ? ArrowDown01Icon : ArrowUp01Icon}
-              strokeWidth={2}
-              className="size-3"
-            />
-          )}
+          <span
+            className={cn(
+              "flex h-full min-w-0 items-center gap-1 group-data-[dnd-dragging]/header:w-fit",
+              column.numeric && "justify-end",
+              isDragging &&
+                "group-data-[dnd-dragging]/header:translate-y-8 group-data-[dnd-dragging]/header:rounded-md group-data-[dnd-dragging]/header:bg-background group-data-[dnd-dragging]/header:px-2 group-data-[dnd-dragging]/header:text-foreground group-data-[dnd-dragging]/header:shadow-md group-data-[dnd-dragging]/header:ring-1 group-data-[dnd-dragging]/header:ring-border",
+            )}
+          >
+            <span className="truncate">{column.name}</span>
+            {active && (
+              <HugeiconsIcon
+                icon={sort.desc ? ArrowDown01Icon : ArrowUp01Icon}
+                strokeWidth={2}
+                className="size-3"
+              />
+            )}
+          </span>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuGroup>
@@ -213,6 +234,7 @@ function ColumnHeader({
             allNamespaces={allNamespaces}
             hasStored={hasStored}
             onEdit={onEdit}
+            onShow={onShow}
           />
         </ContextMenuContent>
       </ContextMenu>
