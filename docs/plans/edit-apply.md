@@ -1,6 +1,8 @@
 # Plan: edit, apply, and delete a Resource
 
-Status: Parts 1 and 2 implemented; parent browser review pending. Decisions are recorded in ADR-0019 and ADR-0020.
+Status: implemented, not merged yet. "What changed while building" lists where
+the result differs from the text below, and "Follow-ups" what was left for
+later. Decisions are recorded in ADR-0019 and ADR-0020.
 
 ## Outcome
 
@@ -1021,3 +1023,34 @@ DeploymentSpec.spec.replicas of type int32`. The shared mapper extracts
   types say the count is not known.
 - The refusal end-to-end test creates a `pause` container using
   `rancher/mirrored-pause:3.6`, already present in k3s.
+
+## Follow-ups
+
+Found by the experience review and the code reviews, and left out of this
+work:
+
+- **Editing shortcuts.** Comment toggle, move line, and indent do nothing in
+  the editor. Each would claim a key binding, which is Jim's decision.
+- **Edit and Delete from a list.** A list row has no context menu. Deleting
+  from a list is a non-goal here.
+- **The list's highlight after a delete** moves to the next row, because it
+  follows a row index and not the open Resource.
+- **A read-only Engine has no standing indicator.** The disabled controls say
+  why.
+- **A draft does not take in changes from the Cluster.** The review applies
+  the edit to the current Resource, but the editor keeps the values it
+  started from, with no way to reload them.
+- **Permissions are asked once per Resource tab,** so one granted later shows
+  only after the tab is reopened.
+- **An unanswered apply drops the API server's message.** The review shows
+  only "The Cluster did not answer".
+- **An unanswered first delete repeats itself.** After "The Cluster did not
+  answer. The delete may or may not have happened." the confirmation also
+  says an earlier attempt's answer was lost, when there was no earlier
+  attempt.
+- **A keystroke can land between a live change and the editor's update,** a
+  window of a few milliseconds in clean Edit mode. The edit would then revert
+  the Cluster's change, and the review's diff would show it. Not reproduced.
+- **A large integer in an untouched field** can be listed as changed on the
+  Cluster, because the base passes through the browser. Nothing wrong is
+  written.
