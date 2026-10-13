@@ -2,8 +2,8 @@ import {
   LineCounter,
   isMap,
   parseDocument,
-  stringify,
-  type Document,
+  Document,
+  visit,
   type ParseOptions,
   type DocumentOptions,
   type SchemaOptions,
@@ -31,7 +31,17 @@ export const yamlOptions: ParseOptions &
   aliasDuplicateObjects: false,
 };
 export function renderYaml(object: Record<string, unknown>): string {
-  return stringify(object, yamlOptions);
+  // Rendering has literal keys; only user-typed YAML can contain merge keys.
+  const document = new Document(object, yamlOptions);
+  document.schema.tags = document.schema.tags.filter(
+    (tag) => tag.tag !== "tag:yaml.org,2002:merge",
+  );
+  visit(document, {
+    Scalar: (key, node) => {
+      if (key === "key" && node.value === "<<") node.type = "QUOTE_DOUBLE";
+    },
+  });
+  return document.toString(yamlOptions);
 }
 export interface YamlIssue {
   message: string;
@@ -59,6 +69,20 @@ export function parseManifest(text: string): ParsedManifest {
       endLine: end.line,
       endColumn: end.col,
     };
+  });
+  visit(document, {
+    Scalar: (_key, node) => {
+      if (typeof node.value !== "number" || Number.isFinite(node.value) || !node.range) return;
+      const start = lines.linePos(node.range[0]);
+      const end = lines.linePos(node.range[1]);
+      issues.push({
+        message: "A Manifest cannot hold this number (.inf, .nan, or a number too large).",
+        line: start.line,
+        column: start.col,
+        endLine: end.line,
+        endColumn: end.col,
+      });
+    },
   });
   if (!issues.length && !isMap(document.contents))
     issues.push({

@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/jimeh/hukube/engine/internal/apierror"
+	"github.com/jimeh/hukube/engine/internal/edit"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 	"github.com/jimeh/hukube/engine/internal/testenv"
 )
@@ -122,6 +124,106 @@ func TestEditApplyAndRepeat(t *testing.T) {
 		t.Fatalf("repeat wrote again: first %+v, repeat %+v", result, again)
 	}
 }
+
+func TestEditRepeatWithExpectedDefaults(t *testing.T) {
+	c := connect(t)
+	ctx := context.Background()
+	ns := createNamespace(t, kubernetes.NewForConfigOrDie(cfg))
+	client, live := createEditResource(t, ns, "services", `{"apiVersion":"v1","kind":"Service","metadata":{"name":"expected"},"spec":{"ports":[{"port":80}]}}`)
+	p := resourceEdit(t, "services", live, func(obj map[string]any) {
+		spec := obj["spec"].(map[string]any)
+		spec["ports"] = append(spec["ports"].([]any), map[string]any{"port": int64(81), "name": "extra"})
+		spec["ports"].([]any)[0].(map[string]any)["name"] = "original"
+	})
+	r, err := c.Review(ctx, p)
+	if err != nil || r.Refusal != nil {
+		t.Fatalf("review: %+v, error: %v", r, err)
+	}
+	if edit.Equal(r.After, r.Desired) {
+		t.Fatal("dry run did not default the edited list")
+	}
+	p.Base, p.Manifest, p.Expected = r.Before, r.Desired, r.After
+	p.Expected = json.RawMessage(strings.ReplaceAll(string(p.Expected), `"port":81`, `"port":81.0`))
+	first, err := c.Apply(ctx, p)
+	if err != nil || first.Unchanged {
+		t.Fatalf("first apply: %+v, error: %v", first, err)
+	}
+	repeated, err := c.Apply(ctx, p)
+	if err != nil || !repeated.Unchanged || repeated.ResourceVersion != first.ResourceVersion {
+		t.Fatalf("repeat with expected: %+v, error: %v, first: %+v", repeated, err, first)
+	}
+	after, err := client.Get(ctx, p.Name, metav1.GetOptions{})
+	if err != nil || after.GetResourceVersion() != first.ResourceVersion {
+		t.Fatalf("repeat moved resourceVersion: %v, error: %v", after, err)
+	}
+	// Review ignores Expected, even when it is not a Manifest.
+	p.Expected = json.RawMessage(`false`)
+	if _, err := c.Review(ctx, p); err != nil {
+		t.Fatal("review used Expected", err)
+	}
+	p.Expected = nil
+	_, err = c.Apply(ctx, p)
+	expectCode(t, err, protocol.ErrorCodeConflict)
+}
+
+func TestSentWriteResponseFailure(t *testing.T) {
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		failures := []string{"read"}
+		// client-go does not decode the body of a successful DELETE response.
+		if method == http.MethodPatch {
+			failures = append(failures, "decode")
+		}
+		for _, failure := range failures {
+			t.Run(method+"/"+failure, func(t *testing.T) {
+				ctx := context.Background()
+				ns := createNamespace(t, kubernetes.NewForConfigOrDie(cfg))
+				client, live := createEditResource(t, ns, "configmaps", `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"lost-answer"},"data":{"a":"old"}}`)
+				p := resourceEdit(t, "configmaps", live, func(obj map[string]any) { obj["data"].(map[string]any)["a"] = "new" })
+				var sent atomic.Bool
+				config := rest.CopyConfig(cfg)
+				config.WrapTransport = func(next http.RoundTripper) http.RoundTripper {
+					return mutationTransport(func(request *http.Request) (*http.Response, error) {
+						response, err := next.RoundTrip(request)
+						if err == nil && request.Method == method {
+							sent.Store(true)
+							_ = response.Body.Close()
+							if failure == "read" {
+								response.Body = failedResponseBody{}
+							} else {
+								response.Body = io.NopCloser(strings.NewReader(`{"broken":`))
+							}
+						}
+						return response, err
+					})
+				}
+				c := connectAs(t, config, testTiming())
+				var err error
+				if method == http.MethodPatch {
+					_, err = c.Apply(ctx, p)
+				} else {
+					err = c.Delete(ctx, protocol.DeleteParams{Type: p.Type, Namespace: ns, Name: p.Name, UID: p.UID})
+				}
+				expectCode(t, err, protocol.ErrorCodeUnavailable)
+				if !sent.Load() {
+					t.Fatal("write did not reach the API server")
+				}
+				after, err := client.Get(ctx, p.Name, metav1.GetOptions{})
+				if method == http.MethodDelete {
+					if !apierrors.IsNotFound(err) {
+						t.Fatalf("delete did not land: %v", err)
+					}
+				} else if err != nil || after.Object["data"].(map[string]any)["a"] != "new" {
+					t.Fatalf("apply did not land: %v, error: %v", after, err)
+				}
+			})
+		}
+	}
+}
+
+type failedResponseBody struct{}
+
+func (failedResponseBody) Read([]byte) (int, error) { return 0, errors.New("response body failed") }
+func (failedResponseBody) Close() error             { return nil }
 
 func TestEditReviewDefaultingAndRefusal(t *testing.T) {
 	c := connect(t)
