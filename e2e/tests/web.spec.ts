@@ -120,11 +120,11 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
   await page.goto(`/#token=${engineToken}`);
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   const sidebar = page.getByRole("complementary", { name: "Resource types" });
-  await sidebar.getByRole("button", { name: /^Pod \d+$/ }).click();
-  const panel = page.getByRole("tabpanel", { name: "pods" });
+  await sidebar.getByRole("button", { name: /^Service \d+$/ }).click();
+  const panel = page.getByRole("tabpanel", { name: "services" });
   const headers = panel.getByRole("columnheader");
   const columns = panel.getByRole("button", { name: "Columns", exact: true });
-  const defaults = ["Name", "Namespace", "Ready", "Status", "Restarts", "Node", "Age"];
+  const defaults = ["Name", "Namespace", "Type", "Cluster-IP", "External-IP", "Port(s)", "Age"];
   // Read through another client so optimistic rendering cannot stand in for
   // persistence, including when resetting before the page closes.
   const expectSaved = async (expected: string[], resetToDefault = false) => {
@@ -133,9 +133,9 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       await other.goto(`${page.url()}#token=${engineToken}`);
       await other
         .getByRole("complementary", { name: "Resource types" })
-        .getByRole("button", { name: /^Pod \d+$/ })
+        .getByRole("button", { name: /^Service \d+$/ })
         .click();
-      const otherPanel = other.getByRole("tabpanel", { name: "pods" });
+      const otherPanel = other.getByRole("tabpanel", { name: "services" });
       await expect(otherPanel.getByRole("columnheader")).toHaveText(expected);
       if (resetToDefault) {
         await otherPanel.getByRole("button", { name: "Columns", exact: true }).click();
@@ -161,10 +161,11 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     const name = (await headers.first().boundingBox())!;
     await page.mouse.move(name.x + name.width / 2, name.y + name.height / 2);
     await page.mouse.down();
-    await page.mouse.move(name.x + name.width / 2 + 20, name.y + name.height / 2);
+    await page.mouse.move(name.x + name.width / 2 + 20, name.y + name.height / 2, { steps: 8 });
     await expect(panel.locator("[data-column-drop-marker]")).toBeVisible();
     await page.mouse.up();
     await expect(headers).toHaveText(defaults);
+    await expect(headers.first()).toHaveAttribute("aria-sort", "ascending");
     await columns.click();
     await expect(page.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
     await page.keyboard.press("Escape");
@@ -174,9 +175,11 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       await other.goto(`${page.url()}#token=${engineToken}`);
       await other
         .getByRole("complementary", { name: "Resource types" })
-        .getByRole("button", { name: /^Pod \d+$/ })
+        .getByRole("button", { name: /^Service \d+$/ })
         .click();
-      const otherHeaders = other.getByRole("tabpanel", { name: "pods" }).getByRole("columnheader");
+      const otherHeaders = other
+        .getByRole("tabpanel", { name: "services" })
+        .getByRole("columnheader");
       await expect(otherHeaders).toHaveText(defaults);
 
       await columns.click();
@@ -184,7 +187,7 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       await expect(
         page.getByRole("menuitemcheckbox", { name: "Namespace", exact: true }),
       ).toHaveAttribute("aria-checked", "false");
-      const withoutNamespace = ["Name", "Ready", "Status", "Restarts", "Node", "Age"];
+      const withoutNamespace = ["Name", "Type", "Cluster-IP", "External-IP", "Port(s)", "Age"];
       await expect(headers).toHaveText(withoutNamespace);
       await expect(otherHeaders).toHaveText(withoutNamespace);
       await page.keyboard.press("Escape");
@@ -192,51 +195,128 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       await other.close();
     }
 
-    const node = panel.getByRole("columnheader", { name: "Node", exact: true });
-    const ready = panel.getByRole("columnheader", { name: "Ready", exact: true });
-    const start = (await node.boundingBox())!;
-    const destination = (await ready.boundingBox())!;
-    await node.click();
-    await expect(node).toHaveAttribute("aria-sort", "ascending");
+    const externalIP = panel.getByRole("columnheader", { name: "External-IP", exact: true });
+    const type = panel.getByRole("columnheader", { name: "Type", exact: true });
+    const press = (await externalIP.boundingBox())!;
+    await page.mouse.move(press.x + press.width / 2, press.y + press.height / 2);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(externalIP).toHaveAttribute("aria-sort", "ascending");
     await panel.getByRole("columnheader", { name: "Name", exact: true }).click();
 
-    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(destination.x + 2, destination.y + destination.height / 2);
-    await expect(panel.locator("[data-column-drop-marker]")).toBeVisible();
+    {
+      const start = (await externalIP.boundingBox())!;
+      await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+      await page.mouse.down();
+      const destination = (await type.boundingBox())!;
+      await page.mouse.move(destination.x + 2, destination.y + destination.height / 2, {
+        steps: 12,
+      });
+    }
+    await expect(type.locator("..").locator("[data-column-drop-marker]")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(panel.locator("[data-column-drop-marker]")).toHaveCount(0);
     await page.mouse.up();
-    await expect(headers).toHaveText(["Name", "Ready", "Status", "Restarts", "Node", "Age"]);
-    await expect(node).toHaveAttribute("aria-sort", "none");
+    await expect(headers).toHaveText([
+      "Name",
+      "Type",
+      "Cluster-IP",
+      "External-IP",
+      "Port(s)",
+      "Age",
+    ]);
+    await expect(externalIP).toHaveAttribute("aria-sort", "none");
 
-    await node.focus();
-    await node.press("Enter");
-    await expect(node).toHaveAttribute("aria-sort", "ascending");
+    await externalIP.focus();
+    await externalIP.press("Enter");
+    await expect(externalIP).toHaveAttribute("aria-sort", "ascending");
     await panel.getByRole("columnheader", { name: "Name", exact: true }).click();
-    await expect(node).toHaveAttribute("aria-sort", "none");
+    await expect(externalIP).toHaveAttribute("aria-sort", "none");
 
-    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(destination.x + 2, destination.y + destination.height / 2);
-    await expect(panel.locator("[data-column-drop-marker]")).toBeVisible();
+    {
+      const start = (await externalIP.boundingBox())!;
+      await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+      await page.mouse.down();
+      const destination = (await type.boundingBox())!;
+      await page.mouse.move(destination.x + 2, destination.y + destination.height / 2, {
+        steps: 12,
+      });
+    }
+    await expect(type.locator("..").locator("[data-column-drop-marker]")).toBeVisible();
     await page.mouse.up();
-    await expect(headers).toHaveText(["Name", "Node", "Ready", "Status", "Restarts", "Age"]);
-    await expect(node).toHaveAttribute("aria-sort", "none");
+    await expect(headers).toHaveText([
+      "Name",
+      "External-IP",
+      "Type",
+      "Cluster-IP",
+      "Port(s)",
+      "Age",
+    ]);
+    await expect(externalIP).toHaveAttribute("aria-sort", "none");
+
+    await externalIP.click();
+    await expect(externalIP).toHaveAttribute("aria-sort", "ascending");
+    await externalIP.press("Space");
+    await expect(externalIP).toHaveAttribute("aria-sort", "descending");
+    await expect(panel.locator("[data-column-drop-marker]")).toHaveCount(0);
+    await panel.getByRole("columnheader", { name: "Name", exact: true }).click();
 
     const age = panel.getByRole("columnheader", { name: "Age", exact: true });
     await age.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Move left" }).click();
-    await expect(headers).toHaveText(["Name", "Node", "Ready", "Status", "Age", "Restarts"]);
+    await expect(headers).toHaveText([
+      "Name",
+      "External-IP",
+      "Type",
+      "Cluster-IP",
+      "Age",
+      "Port(s)",
+    ]);
     await age.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Move left" }).click();
-    const edited = ["Name", "Node", "Ready", "Age", "Status", "Restarts"];
+    const edited = ["Name", "External-IP", "Type", "Age", "Cluster-IP", "Port(s)"];
     await expect(headers).toHaveText(edited);
 
     await expectSaved(edited);
     await page.reload();
     await expect(headers).toHaveText(edited);
+
+    // Scroll to a column that was outside the list when the drag started.
+    await page.setViewportSize({ width: 760, height: 900 });
+    const scroller = panel.locator(".overflow-auto");
+    await expect
+      .poll(async () => {
+        const rect = (await scroller.boundingBox())!;
+        return rect.x + rect.width;
+      })
+      .toBeLessThanOrEqual(760);
+    const bounds = (await scroller.boundingBox())!;
+    const ports = panel.getByRole("columnheader", { name: "Port(s)", exact: true });
+    expect((await ports.boundingBox())!.x).toBeGreaterThan(bounds.x + bounds.width);
+    const scrollTop = await scroller.evaluate((element) => element.scrollTop);
+    const first = (await headers.first().boundingBox())!;
+    await page.mouse.move(first.x + first.width / 2, first.y + first.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width - 4, first.y + first.height / 2, { steps: 16 });
+    await expect(panel.locator("[data-column-drop-marker]")).toBeVisible();
+    await expect.poll(() => scroller.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        scroller.evaluate(
+          (element) => element.scrollWidth - element.clientWidth - element.scrollLeft,
+        ),
+      )
+      .toBeLessThanOrEqual(1);
+    expect(await scroller.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+    const end = (await ports.boundingBox())!;
+    await page.mouse.move(end.x + end.width - 2, end.y + end.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect(headers).toHaveText([...edited.slice(1), "Name"]);
+    await expect(panel.locator("[data-column-drop-marker]")).toHaveCount(0);
   } finally {
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await page.setViewportSize({ width: 1440, height: 900 });
     await reset();
   }
 });
