@@ -42,7 +42,7 @@ import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
-import { ColumnHeader } from "./column-header.tsx";
+import { ColumnHeaders } from "./column-header.tsx";
 import { resolveColumnLayout, showColumn, shownSort } from "./column-layout.ts";
 import {
   cellText,
@@ -267,11 +267,10 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
               className="sticky top-0 z-10 grid h-7 shrink-0 gap-x-3 border-b bg-background px-3 text-muted-foreground"
               style={gridColumns}
             >
-              {columns.map((column) => (
-                <ColumnHeader
-                  key={column.id}
-                  column={column}
+              {stored !== undefined && (
+                <ColumnHeaders
                   layout={resolved}
+                  scrollRef={scrollRef}
                   sort={effectiveSort}
                   onSort={setSort}
                   onEdit={(value) => {
@@ -279,7 +278,7 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
                     void put(value);
                   }}
                 />
-              ))}
+              )}
             </div>
 
             <div
