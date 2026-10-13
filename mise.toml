@@ -306,8 +306,8 @@ depends = ["e2e:cluster"]
 run = '''
 kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/crds.yaml
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for condition=established --timeout 30s \
-  crd/widgets.sample.hukube.dev
-kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/resources.yaml
+  crd/widgets.sample.hukube.dev crd/gadgets.sample.hukube.dev
+kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/resources.yaml -f e2e/fixtures/sample/edit.yaml
 '''
 
 [tasks."dev:verify"]

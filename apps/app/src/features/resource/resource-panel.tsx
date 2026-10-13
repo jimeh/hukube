@@ -1,9 +1,19 @@
-import { useSubscription } from "@hukube/engine-client/react";
+import { useSubscription, useConnectionState } from "@hukube/engine-client/react";
 import { formatResourceUri, parseResourceUri, type Facet } from "@hukube/k8s";
 import { Badge } from "@hukube/ui/components/badge";
 import { Tabs, TabsContent } from "@hukube/ui/components/tabs";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useEffect, useState } from "react";
+
+import { useResourceAccess } from "../edit/use-access.ts";
+import { DeleteDialog } from "../edit/delete-dialog.tsx";
+import { metadata } from "../edit/yaml.ts";
+import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { pinPanel } from "../workspace/dock.ts";
+import { Button } from "@hukube/ui/components/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
+import { Delete02Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 
 import type { ResourcePanelParams } from "@/features/workspace/dock.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
@@ -36,6 +46,20 @@ export function ResourcePanel({
   const [lastObject, setLastObject] = useState<Record<string, unknown>>();
   if (manifest.data?.object && manifest.data.object !== lastObject)
     setLastObject(manifest.data.object);
+  const access = useResourceAccess(
+    address
+      ? {
+          cluster: address.cluster,
+          type: address.type,
+          namespace: address.namespace,
+          name: address.name,
+        }
+      : undefined,
+    !!lastObject,
+  );
+  const connection = useConnectionState();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const dirty = useUnsavedEdits((state) => state.entries.has(api.id));
   const [panelVisible, setPanelVisible] = useState(api.isVisible ?? true);
   useEffect(() => {
     const subscription = api.onDidVisibilityChange?.((event) => setPanelVisible(event.isVisible));
@@ -84,7 +108,19 @@ export function ResourcePanel({
     related,
     panelId: api.id,
     controls,
+    editAccess: access?.edit,
+    onEdit: () => pinPanel(api, params),
   };
+  const meta = metadata(manifest.data?.object);
+  const finalizers = Array.isArray(meta["finalizers"]) ? meta["finalizers"].map(String) : [];
+  const deleteReason =
+    manifest.data?.deleted || !lastObject
+      ? "The Resource is not available."
+      : connection !== "open"
+        ? "Reconnecting to the Engine"
+        : access?.delete.allowed === false
+          ? (access.delete.reason ?? "Not permitted")
+          : undefined;
   const choose = (value: string) => {
     const facet = resolveFacet(value as Facet, target);
     api.updateParameters({ ...params, uri: formatResourceUri({ ...address, facet }) });
@@ -111,7 +147,43 @@ export function ResourcePanel({
         {manifest.data?.deleted && (
           <Badge variant="destructive">{lastObject ? "Deleted" : "Not found"}</Badge>
         )}
+        {!!meta["deletionTimestamp"] && (
+          <Tooltip>
+            <TooltipTrigger render={<Badge variant="secondary" tabIndex={0} />}>
+              Terminating
+            </TooltipTrigger>
+            <TooltipContent>
+              {finalizers.length ? `Waiting for: ${finalizers.join(", ")}` : "Waiting for deletion"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                className="ml-auto shrink-0 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Delete"
+                disabled={!!deleteReason}
+                focusableWhenDisabled
+                onClick={() => setDeleteOpen(true)}
+              />
+            }
+          >
+            <HugeiconsIcon icon={Delete02Icon} />
+          </TooltipTrigger>
+          <TooltipContent>{deleteReason ?? "Delete"}</TooltipContent>
+        </Tooltip>
       </header>
+      <DeleteDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        address={address}
+        kind={kind}
+        object={lastObject}
+        related={related.data}
+      />
       <Tabs value={selected} onValueChange={choose} className="min-h-0 flex-1 gap-0">
         <FacetSwitcher
           available={available}
@@ -120,6 +192,7 @@ export function ResourcePanel({
           shared={shared}
           onChoose={choose}
           setControls={setControls}
+          dirty={dirty}
         />
         {available.map(
           ({ id, View }) =>

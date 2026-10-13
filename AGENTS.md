@@ -117,6 +117,14 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   buffer keeps every character an edit adds, a lone `\r` in inserted text
   starts a line, and the view moves when lines above it are deleted
   (ADR-0018).
+- **Edit reviews and writes:** reviews and access requests are cancellable;
+  apply and delete requests must never receive an AbortSignal. A disconnected
+  write has an unknown outcome. Keep its params and repeat them when the
+  Engine reconnects. Delete confirmations retain the UID they opened for,
+  even if the live Manifest is replaced while the dialog is open.
+- **YAML parsing:** rendering and parsing use `features/edit/yaml.ts`, which
+  matches kubectl's YAML 1.1 scalar rules. Using `yaml` defaults changes the
+  meaning of values such as `0644` and `yes`.
 - **Panels attach late:** dockview can run a panel's effects before it
   attaches the panel's element, and a detached element resolves every CSS
   custom property to nothing. Check `isConnected` before reading styles.
