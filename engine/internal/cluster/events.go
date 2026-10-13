@@ -35,12 +35,16 @@ const (
 // A type the connected Cluster does not serve is reported through onErr while
 // waiting for it to appear.
 //
-// Failed lists or watch starts are passed to onErr and retried with a delay
-// from Timing.ObjectRetry up to Timing.RetryMax. Held Events survive a failure;
-// the next completed list emits them again to clear the error. An expired
-// resourceVersion is handled by the Reflector without reporting it to onErr.
+// A failed list, and a watch that cannot start, are passed to onErr and
+// retried with a delay from Timing.ObjectRetry up to Timing.RetryMax, which
+// goes back to its start once a watch has started. Held Events survive a
+// failure; the next completed list emits them again to clear the error. Two
+// cases are not reported: an expired resourceVersion, which the next list
+// answers, and a 429 at the start of a watch, which the Reflector retries by
+// itself.
 // Events are selected by kind, name, Namespace, incarnation, and API group,
-// including references with no UID or the Resource's name as UID (ADR-0014).
+// including references with no UID, the Resource's name as UID, or one of the
+// params' other UIDs (ADR-0014).
 func (c *Cluster) WatchEvents(
 	ctx context.Context, p protocol.ResourceEventsParams,
 	emit func(protocol.ResourceEvents), onErr func(error),
