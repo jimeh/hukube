@@ -689,12 +689,28 @@ plus `RelationshipKindOwns`, even with `enum_style: "union"`. The direction
 and status enums generate unions. No generator workaround was added.
 
 A double-click on a related Resource is handled as two clicks. The first
-click opens a Preview Tab in the same Pane, which replaces the content under
-the pointer, so the second click lands in another tab's Related Facet and no
-`dblclick` reaches the row. The Facet therefore remembers what a click
-opened, and a second click of the same burst (`detail` of 2) opens that
-Resource as a regular tab, wherever in a Related Facet it lands. A click
-opens its Preview Tab at once, with no delay to wait for a second.
+click opens a Preview Tab in the same Pane, or brings forward a tab that was
+already open, which replaces the content under the pointer. The second click
+therefore lands in whatever Facet that tab shows, and no `dblclick` reaches
+the row. A click on a row records what it opened for one second. A second
+click of the same burst (`detail` of 2) anywhere in a Resource tab opens the
+recorded Resource as a regular tab. A click opens its Preview Tab at once,
+with no delay to wait for a second.
+
+Two code reviews found these, and they are fixed:
+
+- **Row keys.** Two references that did not resolve and share a name, such
+  as two kinds the Cluster does not serve, had one key in the Facet, so a row
+  could stay after its reference left. A row's key now includes its UID,
+  kind, and API version.
+- **A double-click on a Resource whose tab was open on another Facet** did
+  not make a regular tab of it, because only the Related Facet handled the
+  second click. The Resource tab handles it now, and the record expires.
+- **The switcher** brought the showing tab back into view on every live
+  update, which undid a manual scroll. It now does so only when the Facets,
+  the selection, or the layout change.
+- **A Resource that names itself as its owner** got an owners section that
+  held only itself. It now has none.
 
 An independent review of the running app found eight UI corrections:
 

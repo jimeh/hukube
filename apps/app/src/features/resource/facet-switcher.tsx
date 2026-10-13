@@ -76,12 +76,14 @@ export function FacetSwitcher({
       container.removeEventListener("scroll", measureEdges);
     };
   }, [reveal, measureEdges]);
+  // A new array of the same Facets arrives with every live update, which must not undo a scroll.
+  const facetIds = available.map((facet) => facet.id).join(" ");
   useLayoutEffect(() => {
     reveal();
     measureEdges();
-    // Tab content, selection, and button visibility change geometry. Scrolling must not reveal the tab.
+    // The Facets, the selection, and the button change geometry. Scrolling must not reveal the tab.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [available, selected, overflow, reveal, measureEdges]);
+  }, [facetIds, selected, overflow, reveal, measureEdges]);
   return (
     <div className="@container/switcher flex h-8 shrink-0 items-center gap-2 border-b px-3">
       <div

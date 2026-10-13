@@ -265,7 +265,10 @@ func DefaultLimits() Limits { return Limits{MaxPerType, MaxOwned, MaxOwnerPaths}
 func (g *Graph) Related(node Node, limits Limits) []protocol.RelatedSection {
 	sections := []protocol.RelatedSection{}
 	if len(node.Meta.Owners) > 0 {
-		sections = append(sections, g.ownerSection(node, limits.OwnerPaths))
+		// A Resource that only names itself has no owner to show.
+		if owners := g.ownerSection(node, limits.OwnerPaths); owners.Total > 0 {
+			sections = append(sections, owners)
+		}
 	}
 	if total := g.countOwned(node); total > 0 {
 		sections = append(sections, g.ownedSection(node, limits, total))

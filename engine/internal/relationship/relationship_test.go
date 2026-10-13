@@ -175,7 +175,20 @@ func TestOwnershipOddShapes(t *testing.T) {
 	if merged.Total != 3 || len(merged.Rows) != 5 || merged.Rows[0].Name != "top" || merged.Rows[1].Depth != 1 || merged.Rows[3].Depth != 1 {
 		t.Fatalf("shared owner paths = %+v", merged)
 	}
-	for _, size := range []int{2, 3} {
+	// names lists a section's rows as name and status, in display order.
+	names := func(section protocol.RelatedSection) string {
+		out := []string{}
+		for _, row := range section.Rows {
+			out = append(out, fmt.Sprintf("%d:%s:%s", row.Depth, row.Name, row.Status))
+		}
+		return fmt.Sprint(out)
+	}
+	for size, want := range map[int][]string{
+		// A Resource that names only itself has no owner and owns nothing.
+		1: {},
+		2: {"[0:1:found 1:0:self]", "[0:1:found]"},
+		3: {"[0:2:found 1:1:found 2:0:self]", "[0:2:found 1:1:found]"},
+	} {
 		t.Run(fmt.Sprintf("loop of %d", size), func(t *testing.T) {
 			g, _ := fixture()
 			nodes := []Node{}
@@ -185,16 +198,15 @@ func TestOwnershipOddShapes(t *testing.T) {
 			for i := range nodes {
 				nodes[i] = add(g, "pods", fmt.Sprint(i), nodes[(i+1)%size])
 			}
-			sections := g.Related(nodes[0], DefaultLimits())
 			if len(g.AllOwned(nodes[0])) != size-1 {
 				t.Fatal("loop repeated root or a descendant")
 			}
-			for _, s := range sections {
-				for _, row := range s.Rows {
-					if row.Name == "0" && row.Status != protocol.RelatedStatusSelf {
-						t.Fatalf("root repeated: %+v", s)
-					}
-				}
+			got := []string{}
+			for _, section := range g.Related(nodes[0], DefaultLimits()) {
+				got = append(got, names(section))
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("sections = %v, want %v", got, want)
 			}
 		})
 	}
