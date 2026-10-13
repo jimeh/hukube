@@ -298,9 +298,12 @@ func TestForbiddenTypesRecoverWhenGranted(t *testing.T) {
 		rt, _ := typeState(c, "configmaps")
 		return rt.State == protocol.TypeStateReady && rt.Count > 0, fmt.Sprintf("%+v", rt)
 	})
-	if rt, _ := typeState(c, "secrets"); rt.State != protocol.TypeStateForbidden {
-		t.Errorf("secrets state = %q, want forbidden", rt.State)
-	}
+	// The periodic refresh restarts a refused type, which is syncing until the
+	// Cluster refuses it again.
+	eventually(t, func() (bool, string) {
+		rt, _ := typeState(c, "secrets")
+		return rt.State == protocol.TypeStateForbidden, fmt.Sprintf("%+v", rt)
+	})
 	eventually(t, func() (bool, string) {
 		columns, cells := snapshot(t, table)
 		return len(columns) > 0 && len(cells) > 0, fmt.Sprintf("columns %+v, %d rows", columns, len(cells))
