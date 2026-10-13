@@ -90,7 +90,7 @@ export function ReviewDialog({
           {state?.changed && (
             <p className="text-warning">
               {state.unknownOutcome
-                ? "The connection was lost while this edit was being applied, so it may already have been applied. This review shows the Cluster as it is now."
+                ? "The answer to an earlier apply of this edit was lost, so it may already have been applied. This review shows the Cluster as it is now."
                 : "The Resource changed on the Cluster while you were reviewing. Nothing was applied."}
             </p>
           )}
@@ -109,7 +109,7 @@ export function ReviewDialog({
               {state?.phase === "refused" && (
                 <p>
                   {state.unknownOutcome
-                    ? "The connection was lost during an earlier attempt, so the edit may already have been applied."
+                    ? "The answer to an earlier attempt was lost, so the edit may already have been applied."
                     : "Nothing was applied."}
                 </p>
               )}
@@ -129,8 +129,8 @@ export function ReviewDialog({
               </p>
               {state.unknownOutcome && (
                 <p>
-                  The connection was lost during an earlier attempt, so the edit may already have
-                  been applied.
+                  The answer to an earlier attempt was lost, so the edit may already have been
+                  applied.
                 </p>
               )}
               {!["too_large", "not_found"].includes(state.error?.code ?? "") && (
