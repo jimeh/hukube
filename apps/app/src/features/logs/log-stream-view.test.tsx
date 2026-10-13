@@ -101,6 +101,8 @@ const line = (text = "hello") =>
 beforeEach(() => {
   opened = [];
   vi.useFakeTimers();
+  // The fixture's lines are from this day. A line from another day shows its date.
+  vi.setSystemTime(new Date(2026, 9, 13, 12));
   search.mockClear();
   useLogSettings.setState({ timestamps: false, wrap: true });
 });
