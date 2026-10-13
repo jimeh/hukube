@@ -167,13 +167,16 @@ function createWindow(url: URL = appUrl("/")!) {
     },
   });
   win.webContents.on("will-prevent-unload", (event) => {
+    // The UI prevents an unload for unsaved edits and for running Exec
+    // Sessions, and this process cannot tell which, so the prompt names both.
     const response = dialog.showMessageBoxSync(win, {
       type: "warning",
-      buttons: ["Cancel", "Discard"],
+      buttons: ["Cancel", "Discard and end"],
       defaultId: 0,
       cancelId: 0,
-      message: "Discard unsaved edits?",
-      detail: "Your edits have not been applied.",
+      message: "Discard edits and end Exec Sessions?",
+      detail:
+        "This window has edits that have not been applied, or an Exec Session that is running. A command still running in a container may keep running.",
       noLink: true,
     });
     if (response === 1) event.preventDefault();
@@ -207,7 +210,10 @@ ipcMain.on("hukube:open-external", (event, url: unknown) => {
   if (fromUi(event) && typeof url === "string") openExternal(url);
 });
 
-app.on("before-quit", () => {
+// The Engine stops only once every window has agreed to close. Stopping it
+// in before-quit ended Exec Sessions before their window could ask, and left
+// a window whose close was cancelled without an Engine.
+app.on("will-quit", () => {
   quitting = true;
   engine?.kill();
 });

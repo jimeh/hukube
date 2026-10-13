@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { execKey, execKeyLabels, type ExecKeyAction } from "./keys.ts";
+import { execKey, execKeyLabels, opensGoToResource, type ExecKeyAction } from "./keys.ts";
 
 const event = (key: string, mac: boolean, shiftKey = false) => ({
   key,
@@ -38,6 +38,17 @@ describe.each([true, false])("Exec Session keys, macOS=%s", (mac) => {
     expect(execKey(mac, event("f", mac, !mac), false, false)).toBe("find");
     expect(execKey(mac, event("k", mac, !mac), false, false)).toBe("goToResource");
     expect(execKey(mac, event("j", mac), false, false)).toBe("leave");
+  });
+  it("opens Go to Resource from a terminal by the session's rule, or the window's once it ended", () => {
+    const palette = event("k", mac, !mac);
+    const windowKey = event("k", mac);
+    // Live: only the session's key. On macOS the two are the same key.
+    expect(opensGoToResource(mac, palette, false, true, false)).toBe(true);
+    expect(opensGoToResource(mac, windowKey, false, true, true)).toBe(mac);
+    // Ended: the window's key works again, and the session's still does.
+    expect(opensGoToResource(mac, windowKey, false, false, true)).toBe(true);
+    expect(opensGoToResource(mac, palette, false, false, false)).toBe(true);
+    expect(opensGoToResource(mac, event("x", mac), false, false, false)).toBe(false);
   });
   it("labels each key the table gives the Host", () => {
     const labels = execKeyLabels(mac);

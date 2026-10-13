@@ -34,6 +34,13 @@ const codecs: { [M in StreamMethod]: () => StreamCodec<M> } = {
   "pod.exec": () => new ExecCodec(),
 };
 
+/**
+ * The most input a stream holds for a process that is not reading it. A write
+ * beyond this is refused and reported, so a container that never reads cannot
+ * take the window's memory one paste at a time.
+ */
+export const streamInputPendingLimit = 8 << 20;
+
 /** The Worker defers consumption until its main-thread listener returns. */
 export type StreamDelivery<M extends StreamMethod> = (
   data: StreamData[M],
@@ -114,6 +121,7 @@ class SocketStream implements EngineStream {
   #closed = false;
   #opened = false;
   #input: { data: Uint8Array; offset: number }[] = [];
+  #inputPending = 0;
   #inputSent = 0;
   #inputAcked = 0;
   #size?: { cols: number; rows: number };
@@ -159,7 +167,12 @@ class SocketStream implements EngineStream {
   }
   write(data: Uint8Array): void {
     if (this.#codec.resumable || this.#closed || this.#ended || !data.byteLength) return;
+    if (this.#inputPending + data.byteLength > streamInputPendingLimit) {
+      this.listener.inputDropped?.(data.byteLength);
+      return;
+    }
     this.#input.push({ data, offset: 0 });
+    this.#inputPending += data.byteLength;
     this.#flushInput();
   }
   resize(cols: number, rows: number): void {
@@ -182,6 +195,7 @@ class SocketStream implements EngineStream {
       frame.set(pending.data.subarray(pending.offset, pending.offset + size), 1);
       this.#socket.send(frame);
       this.#inputSent += size;
+      this.#inputPending -= size;
       pending.offset += size;
       if (pending.offset === pending.data.byteLength) this.#input.shift();
     }
@@ -192,6 +206,7 @@ class SocketStream implements EngineStream {
     const socket = this.#socket;
     this.#socket = undefined;
     this.#input = [];
+    this.#inputPending = 0;
     socket?.close();
   }
   #end(end: StreamEnd): void {
@@ -316,6 +331,7 @@ class SocketStream implements EngineStream {
       if (this.#opened && !this.#codec.resumable) {
         this.#ended = true;
         this.#input = [];
+        this.#inputPending = 0;
         this.pool.release(this);
         this.state("lost");
         return;

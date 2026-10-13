@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { EngineConnection, type SocketLike } from "./connection.ts";
 import { Hash, ExecInputFrame, ExecInputWindow, type StreamClientMessage } from "./protocol.gen.ts";
 import type { StreamListener } from "./client.ts";
+import { streamInputPendingLimit } from "./streams.ts";
 import { frame, status, source } from "./log-test-fixtures.ts";
 
 class Socket implements SocketLike {
@@ -217,6 +218,35 @@ const execListener = (): StreamListener<"pod.exec"> => ({
   gap: () => {},
   end: () => {},
   state: vi.fn<() => void>(),
+});
+
+it("refuses and reports input beyond what may wait for a process that is not reading", async () => {
+  const conn = connect();
+  const dropped = vi.fn<(bytes: number) => void>();
+  const stream = conn.openStream("pod.exec", execParams, {
+    ...execListener(),
+    inputDropped: dropped,
+  });
+  await Promise.resolve();
+  const socket = sockets[1]!;
+  socket.hello();
+  const mebibyte = 1 << 20;
+  // Nothing is acknowledged, so only the window leaves and the rest waits.
+  for (let count = 0; count < streamInputPendingLimit / mebibyte; count++)
+    stream.write(new Uint8Array(mebibyte));
+  expect(dropped).not.toHaveBeenCalled();
+  stream.write(new Uint8Array(mebibyte));
+  expect(dropped).toHaveBeenCalledExactlyOnceWith(mebibyte);
+  const sent = () => socket.binary.reduce((total, input) => total + input.byteLength - 1, 0);
+  expect(sent()).toBe(ExecInputWindow);
+  // What was accepted is still sent whole once the process reads again.
+  for (let acked = 0; acked < streamInputPendingLimit; acked = sent())
+    socket.receive({ type: "ack", bytes: sent() });
+  expect(sent()).toBe(streamInputPendingLimit);
+  // And there is room for more.
+  stream.write(new Uint8Array(mebibyte));
+  expect(dropped).toHaveBeenCalledOnce();
+  conn.close();
 });
 
 it("sends a 1 MiB paste in order within the acknowledged input window", async () => {

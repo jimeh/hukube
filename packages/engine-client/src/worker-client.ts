@@ -168,6 +168,9 @@ export class WorkerEngineClient implements EngineClient {
         case "stream-gap":
           active.listener.gap(msg.gap);
           break;
+        case "stream-input-dropped":
+          active.listener.inputDropped?.(msg.bytes);
+          break;
         case "stream-end":
           active.listener.end(msg.end);
           break;

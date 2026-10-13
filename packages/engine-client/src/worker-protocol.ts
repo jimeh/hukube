@@ -23,6 +23,7 @@ export type FromWorker =
   | { kind: "stream-event"; id: number; event: unknown }
   | { kind: "stream-data"; id: number; data: unknown; bytes: number; token: number }
   | { kind: "stream-gap"; id: number; gap: StreamGap }
+  | { kind: "stream-input-dropped"; id: number; bytes: number }
   | { kind: "stream-end"; id: number; end: StreamEnd }
   | { kind: "state"; state: ConnectionState }
   | { kind: "result"; id: number; data: unknown }

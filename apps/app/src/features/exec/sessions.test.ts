@@ -135,6 +135,10 @@ it("acknowledges only after the terminal write callback, encodes input, resizes,
   expect(s.terminal.write).toHaveBeenLastCalledWith(
     "\r\n\x1b[2m[hukube: 1.2 MiB of output was dropped while this window was not reading]\x1b[0m\r\n",
   );
+  listener.inputDropped?.(1 << 20);
+  expect(s.terminal.write).toHaveBeenLastCalledWith(
+    "\r\n\x1b[2m[hukube: 1.0 MiB of input was not sent, because the process is not reading and too much is already waiting]\x1b[0m\r\n",
+  );
 });
 
 it("attaches twice without another stream, ignores duplicate starts, resets on restart, and disposes on close", async () => {
