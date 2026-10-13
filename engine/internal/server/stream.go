@@ -21,7 +21,7 @@ type streamLimits struct {
 	open, write, drain   time.Duration
 	// stall and stallFloor bound how long streamQueue.write holds its caller.
 	stall      time.Duration
-	stallFloor int
+	stallFloor uint64
 }
 
 // streamWriteFrame is the most a frame made by streamQueue.write holds.
@@ -75,15 +75,17 @@ type streamQueue struct {
 	limits             streamLimits
 	wake               chan struct{}
 	changed            chan struct{}
-	dropping           bool
-	// waitingSince is when the current stall period of a run of waiting
-	// writes began, and waitingBytes what has been queued since. waiting
-	// counts the writes waiting now.
+	// waitingSince is when output began to wait for room in the window. It
+	// is zero while writes find room at once. waiting counts the writes
+	// waiting now.
 	waitingSince time.Time
-	waitingBytes int
 	waiting      int
-	input        *execsession.Input
-	sizes        *execsession.Sizes
+	// taken holds what the client acknowledged in each of the last slices of
+	// the stall period, and takenIn the slice each entry is for.
+	taken   [stallSlices]uint64
+	takenIn [stallSlices]int64
+	input   *execsession.Input
+	sizes   *execsession.Sizes
 }
 
 func newStreamQueue(limits streamLimits) *streamQueue {
@@ -133,12 +135,18 @@ func (q *streamQueue) frame(data []byte, records int) {
 	q.signal()
 }
 
-// write waits for room in the output window. While writes have to wait, the
-// client must take at least the stall floor in each stall period, or write
-// stops waiting and drops output until the next acknowledgement. The
-// producer of an Exec Session must not be held for long: client-go reads its
-// heartbeat on the goroutine that writes output, and gives up after a minute
-// without one.
+// stallSlices is how finely streamQueue tracks what the client took lately.
+const stallSlices = 6
+
+// write queues output for a stream that must not lose it, and waits for room
+// in the window while the client keeps up. A client keeps up when output has
+// waited for less than the stall period, or when it took at least the stall
+// floor during the last one. For a client that does not, write does not wait:
+// it queues the output and drops the oldest, leaving a gap.
+//
+// This bounds how long an Exec Session's producer is held. client-go reads
+// its heartbeat on the goroutine that writes output, and ends a session that
+// has read none for a minute.
 func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 	written := 0
 	for len(data) > 0 {
@@ -148,26 +156,28 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 		}
 		frame := append([]byte{protocol.StreamChannelStdout}, data[:n]...)
 		q.mu.Lock()
-		waited := false
-		for !q.dropping && q.bytes+int(q.sent-q.acked)+len(frame) > q.limits.window && !q.finished && !q.overflow {
-			waited = true
+		shed, waited := false, false
+		for q.bytes+int(q.sent-q.acked)+len(frame) > q.limits.window && !q.finished && !q.overflow {
+			now := time.Now()
 			if q.waitingSince.IsZero() {
-				q.waitingSince, q.waitingBytes = time.Now(), 0
+				q.waitingSince = now
+			}
+			grace := q.limits.stall - now.Sub(q.waitingSince)
+			if grace <= 0 && q.takenLately(now) < q.limits.stallFloor {
+				shed = true
+				break
+			}
+			waited = true
+			// The answer can change when the grace ends, and whenever a slice
+			// of the last stall period falls out of it.
+			wait := max(q.limits.stall/stallSlices, time.Millisecond)
+			if grace > 0 {
+				wait = min(wait, grace)
 			}
 			changed := q.changed
-			remaining := q.limits.stall - time.Since(q.waitingSince)
-			if remaining <= 0 {
-				if q.waitingBytes < q.limits.stallFloor {
-					q.dropping = true
-					break
-				}
-				// The client is slow but reading, so a new period begins.
-				q.waitingSince, q.waitingBytes = time.Now(), 0
-				remaining = q.limits.stall
-			}
 			q.waiting++
 			q.mu.Unlock()
-			timer := time.NewTimer(remaining)
+			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -189,14 +199,13 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 			}
 			return written, io.ErrClosedPipe
 		}
-		// The run of waiting ends when a write finds room at once, or gives up.
-		if !waited || q.dropping {
+		// Output stops waiting when a write finds room at once.
+		if !shed && !waited {
 			q.waitingSince = time.Time{}
 		}
 		q.items = append(q.items, streamItem{data: frame})
 		q.bytes += len(frame)
-		q.waitingBytes += len(frame)
-		if q.dropping {
+		if shed {
 			q.drop(q.limits.window)
 		}
 		q.mu.Unlock()
@@ -205,6 +214,33 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 		data = data[n:]
 	}
 	return written, nil
+}
+
+// slice numbers the slice of the stall period that now falls in. q.mu is held
+// by the caller of this and the two methods below.
+func (q *streamQueue) slice(now time.Time) int64 {
+	return now.UnixNano() / int64(max(q.limits.stall/stallSlices, time.Nanosecond))
+}
+
+// took records that the client acknowledged n bytes.
+func (q *streamQueue) took(now time.Time, n uint64) {
+	slice := q.slice(now)
+	at := slice % stallSlices
+	if q.takenIn[at] != slice {
+		q.takenIn[at], q.taken[at] = slice, 0
+	}
+	q.taken[at] += n
+}
+
+// takenLately is what the client acknowledged in about the last stall period.
+func (q *streamQueue) takenLately(now time.Time) uint64 {
+	slice, total := q.slice(now), uint64(0)
+	for at, in := range q.takenIn {
+		if in > slice-stallSlices {
+			total += q.taken[at]
+		}
+	}
+	return total
 }
 
 // drop replaces the oldest data with a gap at its position, preserving text.
@@ -244,8 +280,9 @@ func (q *streamQueue) acknowledge(n uint64) bool {
 		return false
 	}
 	if n > q.acked {
-		q.acked, q.lastAck = n, time.Now()
-		q.dropping = false
+		now := time.Now()
+		q.took(now, n-q.acked)
+		q.acked, q.lastAck = n, now
 		close(q.changed)
 		q.changed = make(chan struct{})
 	}

@@ -220,6 +220,14 @@ const execListener = (): StreamListener<"pod.exec"> => ({
   state: vi.fn<() => void>(),
 });
 
+/** Whether part equals whole from the given offset. */
+function sameBytes(part: Uint8Array, whole: Uint8Array, offset: number): boolean {
+  if (offset + part.length > whole.length) return false;
+  for (let index = 0; index < part.length; index++)
+    if (part[index] !== whole[offset + index]) return false;
+  return true;
+}
+
 it("refuses and reports input beyond what may wait for a process that is not reading", async () => {
   const conn = connect();
   const dropped = vi.fn<(bytes: number) => void>();
@@ -243,9 +251,13 @@ it("refuses and reports input beyond what may wait for a process that is not rea
   for (let acked = 0; acked < streamInputPendingLimit; acked = sent())
     socket.receive({ type: "ack", bytes: sent() });
   expect(sent()).toBe(streamInputPendingLimit);
-  // And there is room for more.
-  stream.write(new Uint8Array(mebibyte));
+  // And there is room for more: with nothing waiting, even one write larger
+  // than the limit is taken, and sent whole.
+  stream.write(new Uint8Array(streamInputPendingLimit + mebibyte));
   expect(dropped).toHaveBeenCalledOnce();
+  for (let acked = 0; acked < 2 * streamInputPendingLimit + mebibyte; acked = sent())
+    socket.receive({ type: "ack", bytes: sent() });
+  expect(sent()).toBe(2 * streamInputPendingLimit + mebibyte);
   conn.close();
 });
 
@@ -254,7 +266,8 @@ it("sends a 1 MiB paste in order within the acknowledged input window", async ()
   const stream = conn.openStream("pod.exec", execParams, execListener());
   await Promise.resolve();
   const socket = sockets[1]!;
-  const input = Uint8Array.from({ length: 1 << 20 }, (_, index) => index % 251);
+  const input = new Uint8Array(1 << 20);
+  for (let index = 0; index < input.length; index++) input[index] = index % 251;
   stream.write(input);
   stream.resize(132, 43);
   expect(socket.binary).toHaveLength(0);
@@ -272,9 +285,9 @@ it("sends a 1 MiB paste in order within the acknowledged input window", async ()
     for (const inputFrame of batch) {
       expect(inputFrame[0]).toBe(0);
       expect(inputFrame.byteLength - 1).toBeLessThanOrEqual(ExecInputFrame);
-      expect(inputFrame.subarray(1)).toEqual(
-        input.subarray(received + bytes, received + bytes + inputFrame.byteLength - 1),
-      );
+      // Compared byte by byte: a deep equality check of a megabyte in pieces
+      // takes seconds on a slow machine.
+      expect(sameBytes(inputFrame.subarray(1), input, received + bytes)).toBe(true);
       bytes += inputFrame.byteLength - 1;
     }
     expect(bytes).toBe(ExecInputWindow);

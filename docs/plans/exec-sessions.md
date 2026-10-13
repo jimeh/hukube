@@ -186,13 +186,13 @@ ADR-0016 expected output to be held back for as long as the client is slow,
 and input to rely on TCP. Both change. The ADR is amended.
 
 **Output.** The executor's stdout writer waits while 1 MiB is queued for the
-client, which holds the container's process back as a slow terminal does.
-The wait is bounded by `Timing.ExecStall`, 30 seconds: if the client
-acknowledges nothing for that long while output waits, the stream stops
-waiting and drops the oldest output, leaving a `gap`, until the next
-acknowledgement. The bound is half of client-go's heartbeat deadline. Without
-it a browser tab that stops for a minute would end the session with a
-timeout.
+client or in flight, which holds the container's process back as a slow
+terminal does. It waits only while the client keeps up: output has waited
+for less than `stall` (30 seconds), or the client acknowledged at least the
+floor (4 MiB) in the last 30. Otherwise the write does not wait, and the
+oldest output is dropped, leaving a `gap`. The bound is half of client-go's
+heartbeat deadline. Without it a browser tab that stops for a minute would
+end the session with a timeout.
 
 The client acknowledges a frame when the terminal has parsed it, which is the
 `write` callback. A stream listener's `data` may return a promise, and the
@@ -763,12 +763,19 @@ Neither found a blocker. What changed because of them:
   with unsaved edits left a window without an Engine.
 - **Input waiting in the Worker had no upper bound.** A container that never
   reads could take the window's memory one paste at a time. A stream now
-  holds at most 8 MiB of unsent input, refuses a write beyond that, and the
-  terminal prints that the input was not sent.
-- **The stall rule could be held off by a trickle.** Any acknowledgement
-  restarted the 30 seconds, whether or not it made room. The rule is now a
-  floor: while writes have to wait, the client must take 4 MiB in each 30
-  seconds, or the Engine drops output until the next acknowledgement.
+  refuses a write that would add to waiting input beyond 8 MiB, and the
+  terminal prints that the input was not sent. A write is always taken when
+  nothing is waiting, so one paste of any size goes through.
+- **The stall rule was replaced, after two attempts at it.** The first rule
+  restarted its 30 seconds on any acknowledgement, so a trickle held output
+  back for as long as it lasted. Its correction counted in fixed periods, so
+  a client that met the floor and then went silent was waited for during
+  almost two. The rule is now one statement with no mode: a write waits for
+  room only while the client keeps up, which means output has waited for
+  less than 30 seconds, or the client acknowledged at least 4 MiB in the
+  last 30. Otherwise the write does not wait, and the oldest output is
+  dropped. A client that drains the queue gets a fresh 30 seconds the next
+  time.
 - **A session ended by an Engine shutdown could be told its socket was
   lost,** because the Engine could exit before the `end` was written.
   `Server.Shutdown` now waits for each session's socket to send it.
@@ -778,14 +785,22 @@ Neither found a blocker. What changed because of them:
 - **`Ctrl+K` did nothing in an ended session's terminal** on Windows and
   Linux. An ended terminal now goes back to the window's rule for Go to
   Resource.
-- **Tests:** the end-to-end test now checks that a paste arrived whole, that
-  a printed link opens nothing, and that the shell does not receive `Mod+J`.
+- **Tests:** the end-to-end test now checks a paste by its digest, that a
+  printed link opens nothing, and that the shell does not receive `Mod+J`.
   The empty-index test waits for the session to ask the Cluster before it
   lets the process exit.
 
-Using the corrected build past midnight found a test from the Log Streams
-layer that passed only on 2026-10-13, the date in its fixture. Its clock is
-now set.
+Not changed, and accepted: `Server.Shutdown` waits for a session's socket to
+close, so a client that does not answer the close costs a shutdown its 5
+seconds; a link a container prints still looks like one, and does nothing; a
+client that takes less than about 137 KiB a second during a long burst
+loses output where a slower rule would have delivered it late.
+
+Running the checks past midnight found a test from the Log Streams layer
+that passed only on 2026-10-13, the date in its fixture. Its clock is now
+set. CI also showed that the client's 1 MiB paste test, which took a second
+on a laptop, took more than its 5-second limit there. It now compares bytes
+directly and takes milliseconds.
 
 ## Measurements
 
