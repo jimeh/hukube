@@ -1,6 +1,7 @@
 import "monaco-editor/features/find/register";
 import "monaco-editor/features/clipboard/register";
 import "monaco-editor/features/codicon/register";
+import "monaco-editor/features/contextmenu/register";
 import * as monaco from "monaco-editor/editor/editor.api";
 // oxlint-disable-next-line import/default -- Vite provides the default export for ?worker imports.
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
@@ -25,6 +26,7 @@ monaco.editor.addKeybindingRules([
     "editor.action.clipboardCutAction",
     "editor.action.clipboardCopyAction",
     "editor.action.clipboardPasteAction",
+    "editor.action.showContextMenu",
   ].map((command) => ({ keybinding: 0, command: `-${command}` })),
   {
     keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF,

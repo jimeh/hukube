@@ -843,6 +843,32 @@ func TestLogTargetStates(t *testing.T) {
 	awaitEnd(t, end)
 }
 
+func TestLogReadyFollowsTheFirstLines(t *testing.T) {
+	f, g := newFake(pod("pod", "main"))
+	reader, writer := io.Pipe()
+	f.open = func(context.Context, string, *corev1.PodLogOptions) (io.ReadCloser, error) { return reader, nil }
+	timing := shortTiming
+	timing.Initial = deadline
+	out, end, cancel := startTimed(t, f, g, targetParams(), timing)
+	awaitRequest(t, f)
+	// The request is open and has delivered nothing: the container is known, its history is not.
+	_, s := out.await(t, func(_ []record, s protocol.LogStreamStatus) bool {
+		return len(s.Sources) == 1 && s.Sources[0].Instance != ""
+	})
+	if s.Ready {
+		t.Fatalf("ready before the history was read: %+v", s)
+	}
+	if _, err := io.WriteString(writer, line(1, "history")); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := out.await(t, func(_ []record, s protocol.LogStreamStatus) bool { return s.Ready })
+	if len(r) != 1 || string(r[0].content) != "history" {
+		t.Fatalf("ready without the first lines: %s", describe(r))
+	}
+	cancel()
+	awaitEnd(t, end)
+}
+
 func TestLogFrameGolden(t *testing.T) {
 	frame := []byte{protocol.StreamChannelStdout}
 	for _, r := range []record{{source: 7, time: 1767225600123456789, content: []byte("hello")}, {source: 7, flags: protocol.LogRecordFlagCut, time: -1, content: []byte{0xff, 0, 27}}, {source: 9, flags: protocol.LogRecordFlagGap}, {source: 9, flags: protocol.LogRecordFlagExited, content: []byte("Error, exit code 1")}} {

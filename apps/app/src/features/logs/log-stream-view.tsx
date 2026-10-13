@@ -1,4 +1,11 @@
-import type { EngineStream, LogStreamStatus, StreamEnd, StreamState } from "@hukube/engine-client";
+import {
+  LogStreamMaxPods,
+  type EngineStream,
+  type LogContainer,
+  type LogStreamStatus,
+  type StreamEnd,
+  type StreamState,
+} from "@hukube/engine-client";
 import { useEngine } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
 import { Button } from "@hukube/ui/components/button";
@@ -10,6 +17,11 @@ import LogEditor, { type LogEditorHandle } from "./log-editor.tsx";
 import { LogLoading } from "./log-loading.tsx";
 import { useLogSettings } from "./log-settings.ts";
 import { LogToolbar } from "./log-toolbar.tsx";
+
+interface KnownContainers {
+  containers: LogContainer[];
+  hasPrevious: boolean;
+}
 
 export interface LogStreamViewProps {
   target: Pick<ResourceAddress, "cluster" | "type" | "namespace" | "name">;
@@ -25,14 +37,28 @@ export default function LogStreamView({ target, uid, exists, kind, visible }: Lo
   const [previous, setPrevious] = useState(false);
   const [run, setRun] = useState(0);
   const [initialUid, setInitialUid] = useState<string>();
-  if (!initialUid && exists && uid) setInitialUid(uid);
+  // A view reads nothing until it is first shown, and then reads the Resource
+  // as it is at that moment: a tab restored behind another one may never be
+  // looked at, and its Resource may be gone by the time it is.
+  const [shown, setShown] = useState(visible);
+  if (visible && !shown) setShown(true);
+  if (shown && !initialUid && exists && uid) setInitialUid(uid);
+  // Choosing a container or a run starts a new stream and replaces the
+  // toolbar. What the last stream said about the containers stays, so the
+  // controls are there at once and the one that was used keeps focus.
+  const [focus, setFocus] = useState<"container" | "previous">();
+  const [known, setKnown] = useState<KnownContainers>({ containers: [], hasPrevious: false });
   const restart = () => {
     if (uid) setInitialUid(uid);
+    setFocus(undefined);
     setRun((value) => value + 1);
   };
   return (
     <LogRun
       key={JSON.stringify([container, previous, run])}
+      focus={focus}
+      known={known}
+      setKnown={setKnown}
       target={target}
       uid={uid}
       exists={exists}
@@ -41,8 +67,14 @@ export default function LogStreamView({ target, uid, exists, kind, visible }: Lo
       initialUid={initialUid}
       container={container}
       previous={previous}
-      setContainer={setContainer}
-      setPrevious={setPrevious}
+      setContainer={(value) => {
+        setFocus("container");
+        setContainer(value);
+      }}
+      setPrevious={(value) => {
+        setFocus("previous");
+        setPrevious(value);
+      }}
       restart={restart}
     />
   );
@@ -60,8 +92,14 @@ function LogRun({
   setContainer,
   setPrevious,
   restart,
+  focus,
+  known,
+  setKnown,
 }: LogStreamViewProps & {
   initialUid?: string;
+  focus?: "container" | "previous";
+  known: KnownContainers;
+  setKnown: (value: KnownContainers) => void;
   container: string;
   previous: boolean;
   setContainer: (value: string) => void;
@@ -70,6 +108,7 @@ function LogRun({
 }) {
   const engine = useEngine();
   const [status, setStatus] = useState<LogStreamStatus>();
+  const { containers } = known;
   const [state, setState] = useState<StreamState>("connecting");
   const [end, setEnd] = useState<StreamEnd>();
   const startedUid = initialUid;
@@ -78,14 +117,12 @@ function LogRun({
   const editor = useRef<LogEditorHandle>(null);
   const { timestamps, wrap } = useLogSettings();
   const { cluster, type, namespace, name } = target;
-  const document = useMemo(() => new LogDocument(type, name), [type, name]);
+  const document = useMemo(() => new LogDocument(type), [type]);
   useSyncExternalStore(document.subscribe, document.snapshot);
   const current = useEffectEvent(() => visible);
-  // A tab restored behind another one reads nothing until it is first shown.
-  const [shown, setShown] = useState(visible);
-  if (visible && !shown) setShown(true);
+  const remember = useEffectEvent(setKnown);
   useEffect(() => {
-    if (!initialUid || !shown) return;
+    if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
     let socketReady = false;
@@ -115,6 +152,12 @@ function LogRun({
             pods = next;
           }
           setStatus(value);
+          // The last status of a deleted Resource lists none, and the names stay.
+          if (value.containers.length)
+            remember({
+              containers: value.containers,
+              hasPrevious: value.sources.some((source) => source.previous),
+            });
         },
         data: (lines) => {
           if (active) document.append(lines);
@@ -138,7 +181,7 @@ function LogRun({
       handle.close();
       stream.current = undefined;
     };
-  }, [engine, cluster, type, namespace, name, initialUid, container, previous, document, shown]);
+  }, [engine, cluster, type, namespace, name, initialUid, container, previous, document]);
   useEffect(() => {
     clearTimeout(hiddenTimer.current);
     if (visible) stream.current?.resume();
@@ -154,7 +197,7 @@ function LogRun({
   const waiting = sources.filter((source) => source.state === "waiting");
   // An init container that completed is where it should be, not a problem to report.
   const initContainers = new Set(
-    (status?.containers ?? []).filter((item) => item.kind === "init").map((item) => item.name),
+    containers.filter((item) => item.kind === "init").map((item) => item.name),
   );
   const notRunning = sources.filter(
     (source) =>
@@ -219,6 +262,14 @@ function LogRun({
       };
     else if (previous && !sources.some((source) => source.previous))
       empty = { title: "No previous run", description: "No selected container has restarted." };
+    else if (previous)
+      // A previous run is read once, so nothing more will come.
+      empty = {
+        title: "No lines from the previous run",
+        description: unreadable.length
+          ? `Its logs are no longer available: ${unreadable[0]!.error}`
+          : "The previous run printed nothing.",
+      };
     else if (count > 0 && waiting.length === count)
       empty = {
         title: one ? "Waiting for the container to start" : "Waiting for containers to start",
@@ -237,31 +288,45 @@ function LogRun({
         description: `${one ? `${sources[0]!.container} has` : "These containers have"} not printed anything. Lines appear here as ${one ? "it does" : "they do"}.`,
       };
   }
-  if (previous && status?.ready && !(empty?.title === "No previous run"))
+  if (previous && status?.ready && hasLines) {
     notices.push({
       text: one
         ? `The previous run of ${sources[0]!.container}.`
         : `The previous runs of ${count} containers.`,
     });
+    if (unreadable.length)
+      notices.push({
+        text: one
+          ? `The previous run of ${unreadable[0]!.container} could not be read: ${unreadable[0]!.error}`
+          : `The previous runs of ${unreadable.length} containers could not be read.`,
+        destructive: true,
+        title: unreadable[0]!.error,
+      });
+  }
   // Once the stream has ended, what its containers were doing is history.
-  if (!end && hasLines && !previous && notRunning.length)
-    notices.push({
-      text: one
-        ? `${notRunning[0]!.container} is not running: ${notRunning[0]!.reason ?? notRunning[0]!.state}.${notRunning[0]!.message ? ` ${notRunning[0]!.message}` : ""}`
-        : `${notRunning.length} of ${count} containers are not running.`,
-    });
-  if (!end && unreadable.length)
-    notices.push({
-      text: one
-        ? `Cannot read the logs of ${unreadable[0]!.container}: ${unreadable[0]!.error}. hukube keeps trying.`
-        : `Cannot read the logs of ${unreadable.length} containers. hukube keeps trying.`,
-      destructive: true,
-      title: unreadable[0]!.error,
-    });
-  if (status && status.pods > status.followed)
-    notices.push({
-      text: `Showing the ${status.followed} newest of ${status.pods} Pods. Open a Pod to see its own logs.`,
-    });
+  if (!end && !previous) {
+    // The status message can be a paragraph from the kubelet. The reason fits a line.
+    if (hasLines && notRunning.length)
+      notices.push({
+        text: one
+          ? `${notRunning[0]!.container} is not running: ${notRunning[0]!.reason ?? notRunning[0]!.state}.`
+          : `${notRunning.length} of ${count} containers ${notRunning.length === 1 ? "is" : "are"} not running.`,
+        title: notRunning.map((source) => source.message).find(Boolean),
+      });
+    if (unreadable.length)
+      notices.push({
+        text: one
+          ? `Cannot read the logs of ${unreadable[0]!.container}: ${unreadable[0]!.error}. hukube keeps trying.`
+          : `Cannot read the logs of ${unreadable.length} containers. hukube keeps trying.`,
+        destructive: true,
+        title: unreadable[0]!.error,
+      });
+    // Fewer are read than exist for a moment whenever Pods come and go.
+    if (status?.ready && status.followed >= LogStreamMaxPods && status.pods > status.followed)
+      notices.push({
+        text: `Showing the ${status.followed} newest of ${status.pods} Pods. Open a Pod to see its own logs.`,
+      });
+  }
   if (hasLines && empty) {
     notices.push({
       text: `${empty.title}${empty.title === "Not permitted" ? ":" : "."} ${empty.description}`,
@@ -273,11 +338,12 @@ function LogRun({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <LogToolbar
-        containers={status?.containers ?? []}
+        containers={containers}
         container={container}
         previous={previous}
-        hasPrevious={sources.some((source) => source.previous)}
-        disabled={loading || !status?.ready}
+        hasPrevious={known.hasPrevious}
+        disabled={containers.length === 0 || end?.reason === "deleted"}
+        focus={focus}
         select={setContainer}
         setPrevious={setPrevious}
         search={() => editor.current?.search()}

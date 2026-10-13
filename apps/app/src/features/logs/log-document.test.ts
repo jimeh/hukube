@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { LogDocument, formatLogTime, logOrigin } from "./log-document.ts";
+import { LogDocument, commonPodPrefix, formatLogTime, logOrigin } from "./log-document.ts";
 import { source, status } from "../../../../../packages/engine-client/src/log-test-fixtures.ts";
 
 it("formats timestamps, Pod and workload origins, cut lines, and record markers as text", () => {
@@ -9,12 +9,20 @@ it("formats timestamps, Pod and workload origins, cut lines, and record markers 
     "10-12 01:02:03.004",
   );
   expect(formatLogTime(0)).toBe("");
-  expect(logOrigin({ ...source, pod: "web-a-b" }, "deployments.apps", "web", true)).toBe(
+  expect(logOrigin({ ...source, pod: "web-a-b" }, "deployments.apps", 4, true)).toBe(
     "a-b/constructor",
   );
-  expect(logOrigin({ ...source, pod: "db-0" }, "statefulsets.apps", "db", false)).toBe("0");
-  expect(logOrigin(source, "pods", "web-a", true)).toBe("constructor");
-  const doc = new LogDocument("pods", "web-a");
+  expect(logOrigin({ ...source, pod: "db-0" }, "statefulsets.apps", 3, false)).toBe("0");
+  expect(logOrigin(source, "pods", 0, true)).toBe("constructor");
+  // One ReplicaSet's Pods differ in their last part, two ReplicaSets' in their hash too.
+  expect(commonPodPrefix(["web-6ddb-p656b", "web-6ddb-p6aaa"])).toBe("web-6ddb-".length);
+  expect(commonPodPrefix(["web-6ddb-p656b", "web-7c5d-fv79n"])).toBe("web-".length);
+  expect(commonPodPrefix(["db-0", "db-1"])).toBe("db-".length);
+  expect(commonPodPrefix(["web-6ddb-p656b"])).toBe("web-6ddb-".length);
+  expect(commonPodPrefix(["solo"])).toBe(0);
+  expect(commonPodPrefix(["web", "web-2"])).toBe(0);
+  expect(commonPodPrefix([])).toBe(0);
+  const doc = new LogDocument("pods");
   doc.status(status);
   doc.append([
     {
@@ -47,7 +55,7 @@ it("retains the newest rows within line, character, and decoration budgets inclu
     [{ lines: 100, characters: 10, decorations: 100 }, ["two", "three"]],
     [{ lines: 100, characters: 100, decorations: 2 }, ["two", "three"]],
   ] as const) {
-    const doc = new LogDocument("pods", "web", budgets);
+    const doc = new LogDocument("pods", budgets);
     doc.status(status);
     doc.append(
       ["one", "two", "three"].map((text) => ({
@@ -59,7 +67,7 @@ it("retains the newest rows within line, character, and decoration budgets inclu
     );
     expect(doc.rows.map((row) => row.text)).toEqual(expected);
   }
-  const doc = new LogDocument("pods", "web", { lines: 100, characters: 25, decorations: 100 });
+  const doc = new LogDocument("pods", { lines: 100, characters: 25, decorations: 100 });
   doc.status(status);
   doc.append(["one", "two"].map((text) => ({ source: 7, time: Date.now(), text })));
   doc.timestamps(true);
@@ -74,7 +82,7 @@ it("colors origins by container on a Pod's tab and by Pod on a workload's", () =
   ];
   const lines = sources.map(({ id }) => ({ source: id, time: 0, text: "x" }));
   const colors = (type: string) => {
-    const doc = new LogDocument(type, "web");
+    const doc = new LogDocument(type);
     doc.status({ ...status, sources });
     doc.append(lines);
     return doc.rows.map((row) => row.spans[0]!.className);

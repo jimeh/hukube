@@ -176,9 +176,10 @@ it("shows retained lines with stopped containers, unreadable logs, Pod limits, r
     followed: 20,
   });
   expect(screen.getByRole("textbox").textContent).toBe("hello");
+  // The kubelet's message can be a paragraph, so it is the notice's title.
   expect(
-    screen.getByText("constructor is not running: CrashLoopBackOff. backing off"),
-  ).toBeDefined();
+    screen.getByText("constructor is not running: CrashLoopBackOff.").parentElement?.title,
+  ).toBe("backing off");
   expect(
     screen.getByText(
       "Cannot read the logs of constructor: Cluster unavailable. hukube keeps trying.",
@@ -194,11 +195,14 @@ it("shows retained lines with stopped containers, unreadable logs, Pod limits, r
       { ...source, id: 1, error: "second" },
     ],
   });
-  expect(screen.getByText("1 of 2 containers are not running.")).toBeDefined();
+  expect(screen.getByText("1 of 2 containers is not running.")).toBeDefined();
   expect(
     screen.getByText("Cannot read the logs of 2 containers. hukube keeps trying.").parentElement
       ?.title,
   ).toBe("first");
+  // Fewer Pods are read than exist for a moment whenever Pods come and go.
+  event({ ...ready, pods: 4, followed: 3 });
+  expect(screen.queryByText(/newest of/)).toBeNull();
   act(() => latest().listener.state?.("reconnecting"));
   expect(screen.getByText("Connection to the Engine lost. Reconnecting…")).toBeDefined();
   expect(screen.getByRole("textbox").textContent).toBe("constructor hello");
@@ -300,8 +304,9 @@ it("shares display toggles, enables previous only after a restart, searches, and
   mount();
   event();
   line();
-  expect(screen.getByRole("combobox", { name: "Container" }).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("combobox").textContent).toContain("constructor");
+  // One container is shown as its name, with nothing to choose.
+  expect(screen.queryByRole("combobox", { name: "Container" })).toBeNull();
+  expect(screen.getByTitle("constructor").textContent).toBe("constructor");
   expect(screen.getByRole("button", { name: "Previous run" }).hasAttribute("disabled")).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Timestamps" }));
   expect(screen.getByRole("textbox").textContent).toContain("01:02:03.004");
@@ -325,6 +330,8 @@ it("shares display toggles, enables previous only after a restart, searches, and
   fireEvent.click(screen.getByRole("option", { name: "__proto__" }));
   expect(latest().params.container).toBe("__proto__");
   expect(screen.queryByRole("textbox")).toBeNull();
+  // The choice replaced the toolbar, and the control that made it keeps focus.
+  expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Container" }));
   event({ ...ready, sources: [{ ...source, previous: true }] });
   fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
   expect(latest().params.previous).toBe(true);
@@ -361,7 +368,7 @@ it("renders ordered drop, join, leave and record markers with merged origins", (
   act(() => latest().listener.gap({ bytes: 1_000_000, records: 12340 }));
   event({ ...ready, sources: [other] });
   expect(screen.getByRole("textbox").textContent).toBe(
-    "web hello··· following Pod web-b ···b next··· web: some lines may be missing ······ b exited: Error, exit code 1 ······ 12,340 lines dropped: they arrived faster than they could be shown ······ Pod web is gone ···",
+    "web hello··· following Pod web-b ···web-b next··· web: some lines may be missing ······ web-b exited: Error, exit code 1 ······ 12,340 lines dropped: they arrived faster than they could be shown ······ Pod web is gone ···",
   );
 });
 
@@ -375,7 +382,7 @@ it("does not report a completed init container as not running", () => {
   });
   event(withInit(1));
   line();
-  expect(screen.getByText("1 of 2 containers are not running.")).toBeDefined();
+  expect(screen.getByText("1 of 2 containers is not running.")).toBeDefined();
   event(withInit(0));
   expect(screen.queryByText(/not running/)).toBeNull();
 });
@@ -392,4 +399,15 @@ it("opens no stream for a view that has not been shown yet", () => {
     </EngineProvider>,
   );
   expect(opened).toHaveLength(1);
+});
+
+it("says that a previous run's logs are gone instead of promising lines", () => {
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  event({ ...ready, sources: [{ ...source, previous: true, error: "unable to retrieve" }] });
+  act(() => latest().listener.end({ reason: "complete" }));
+  expect(screen.getByText("No lines from the previous run")).toBeDefined();
+  expect(screen.getByText("Its logs are no longer available: unable to retrieve")).toBeDefined();
+  expect(screen.queryByText(/keeps trying|appear here/)).toBeNull();
 });
