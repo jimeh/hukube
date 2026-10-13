@@ -50,8 +50,8 @@ export function EventsFacet({ address, kind, events }: FacetProps) {
         title="Not permitted"
         description={
           address.namespace
-            ? `Your credentials cannot list Events in the ${address.namespace} Namespace.`
-            : `Showing the Events of a cluster-scoped Resource such as this ${kind} needs permission to list Events in every Namespace.`
+            ? `Your credentials cannot list and watch Events in the ${address.namespace} Namespace.`
+            : `Showing the Events of a cluster-scoped Resource such as this ${kind} needs permission to list and watch Events in every Namespace.`
         }
       />
     );

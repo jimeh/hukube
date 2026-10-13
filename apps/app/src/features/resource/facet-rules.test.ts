@@ -25,6 +25,37 @@ describe("Events subscription params", () => {
       )?.uid,
     ).toBe("recreated");
   });
+  it("adds the static Pod hash as another UID", () => {
+    const pod = {
+      metadata: { uid: "mirror-uid", annotations: { "kubernetes.io/config.mirror": "hash" } },
+    };
+    expect(
+      resourceEventsParams(
+        { ...address, type: "pods" },
+        { stale: false, data: { object: pod } },
+        pod,
+      ),
+    ).toEqual({ ...address, type: "pods", uid: "mirror-uid", otherUids: ["hash"] });
+  });
+  it.each([
+    ["Pod without the annotation", "pods", { annotations: {} }],
+    [
+      "non-Pod with the annotation",
+      "configmaps",
+      { annotations: { "kubernetes.io/config.mirror": "hash" } },
+    ],
+    ["empty annotation", "pods", { annotations: { "kubernetes.io/config.mirror": "" } }],
+    ["non-string annotation", "pods", { annotations: { "kubernetes.io/config.mirror": 123 } }],
+    ["null annotations", "pods", { annotations: null }],
+    ["non-object annotations", "pods", { annotations: "hash" }],
+    ["null metadata", "pods", null],
+    ["non-object metadata", "pods", "hash"],
+  ] as const)("omits otherUids for %s", (_name, type, metadata) => {
+    const object = { metadata };
+    expect(
+      resourceEventsParams({ ...address, type }, { stale: false, data: { object } }, object),
+    ).toEqual({ ...address, type });
+  });
   it("has no UID when never found or the Manifest fails", () => {
     expect(
       resourceEventsParams(address, { stale: false, data: { deleted: true } }, undefined),

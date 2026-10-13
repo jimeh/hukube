@@ -11,7 +11,8 @@ keeps its place, its title, and whether it is a Preview Tab.
 
 Each Facet is one entry in a registry: its name in the URI, its label, a rule
 for which Resources it applies to, and the component that shows it. The
-switcher and the URI handling read the registry and know no Facet by name.
+switcher renders whatever the registry holds. A new Facet adds its name to
+the Resource URI's list of Facets, a registry entry, and a component.
 
 ## Considered Options
 

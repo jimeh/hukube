@@ -10,7 +10,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -82,8 +81,10 @@ func (c *Cluster) WatchEvents(
 // runEvents owns retries so refused lists use the Cluster's logger and Timing.
 func (c *Cluster) runEvents(ctx context.Context, lw cache.ListerWatcher, store *eventsStore, onErr func(error)) {
 	delay := c.timing.ObjectRetry
-	store.listed = func() { delay = c.timing.ObjectRetry }
-	watcher := eventsListerWatcher{lw, cache.ToListerWatcherWithContext(lw)}
+	watcher := eventsListerWatcher{
+		ListerWatcher: lw, ListerWatcherWithContext: cache.ToListerWatcherWithContext(lw),
+		started: func() { delay = c.timing.ObjectRetry },
+	}
 	reflector := cache.NewReflectorWithOptions(watcher, &corev1.Event{}, store, cache.ReflectorOptions{
 		Name:            c.id + "/events/" + store.target.Name,
 		TypeDescription: "Events",
@@ -122,19 +123,25 @@ func (c *Cluster) runEvents(ctx context.Context, lw cache.ListerWatcher, store *
 type eventsListerWatcher struct {
 	cache.ListerWatcher
 	cache.ListerWatcherWithContext
+	started func()
 }
 
 func (eventsListerWatcher) IsWatchListSemanticsUnSupported() bool { return true }
 
-// WatchWithContext makes a watch that cannot start end the attempt. A
-// Reflector retries a refused connection and a 429 inside the attempt without
+// WatchWithContext makes a refused connection end the attempt. A
+// Reflector retries a refused connection inside the attempt without
 // returning, so an unreachable Cluster would leave the client with Events that
 // no longer update and no error. An error the Reflector does not recognize
-// returns to runEvents, which reports it and lists again.
+// returns to runEvents, which reports it and lists again. A 429 stays with
+// the Reflector, which backs off and resumes the watch without another list.
+// A started watch resets the retry delay.
 func (w eventsListerWatcher) WatchWithContext(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 	result, err := w.ListerWatcherWithContext.WatchWithContext(ctx, opts)
-	if utilnet.IsConnectionRefused(err) || apierrors.IsTooManyRequests(err) {
+	if utilnet.IsConnectionRefused(err) {
 		return nil, errors.New(requestCause(err).Error())
+	}
+	if err == nil {
+		w.started()
 	}
 	return result, err
 }
@@ -150,14 +157,12 @@ func requestCause(err error) error {
 }
 
 // eventsStore emits after the Reflector replaces its list or changes a row.
-// listed resets the retry delay after a completed list.
 type eventsStore struct {
 	cache.Store
 	mu     sync.Mutex
 	target protocol.ResourceEventsParams
 	group  string
 	emit   func(protocol.ResourceEvents)
-	listed func()
 }
 
 func (s *eventsStore) send() {
@@ -188,20 +193,13 @@ func (s *eventsStore) Delete(obj any) error {
 	return s.change(func() error { return s.Store.Delete(obj) })
 }
 func (s *eventsStore) Replace(items []any, rv string) error {
-	return s.change(func() error {
-		if err := s.Store.Replace(items, rv); err != nil {
-			return err
-		}
-		if s.listed != nil {
-			s.listed()
-		}
-		return nil
-	})
+	return s.change(func() error { return s.Store.Replace(items, rv) })
 }
 
 func eventMatches(ref corev1.ObjectReference, target protocol.ResourceEventsParams, group string) bool {
-	sameIncarnation := target.UID == "" || ref.UID == "" || string(ref.UID) == target.UID || string(ref.UID) == target.Name
-	sameGroup := (ref.UID != "" && string(ref.UID) == target.UID) || ref.APIVersion == "" ||
+	knownUID := string(ref.UID) == target.UID || slices.Contains(target.OtherUIDs, string(ref.UID))
+	sameIncarnation := target.UID == "" || ref.UID == "" || knownUID || string(ref.UID) == target.Name
+	sameGroup := (ref.UID != "" && knownUID) || ref.APIVersion == "" ||
 		schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group == group
 	return sameIncarnation && sameGroup
 }

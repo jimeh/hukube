@@ -20,7 +20,8 @@ After this work:
   keep ticking.
 - The Events entry in the switcher shows how many of the Events are warnings,
   whichever Facet is open.
-- A later Facet is one new registry entry and one component.
+- A later Facet is its name in the Resource URI's list, one registry entry,
+  and one component.
 
 It does not add the other Facets, opening a Facet in its own tab, filtering
 within the Events, links from an Event to a Resource, or anything that keeps
@@ -162,7 +163,8 @@ that needs its own data subscribes inside its `View`.
    URI rewritten to name the Facet, including `#yaml`. Nothing else about the
    tab changes: not its ID, its title, or whether it is a Preview Tab.
 3. A URI without a Facet shows the default and is not rewritten until the
-   user chooses.
+   user chooses. A tab that takes its Facet from another tab (rule 5) names
+   it from the start, so it keeps that Facet if the default changes.
 4. A `View` mounts when its Facet is first shown and stays mounted, hidden,
    until the tab closes. Only the showing Facet renders controls into the
    switcher row.
@@ -179,7 +181,8 @@ that needs its own data subscribes inside its `View`.
 See ADR-0014 for the choice and the selection rule. In code:
 
 - A new topic, `resource.events`, takes `ResourceEventsParams` (Cluster, type,
-  Namespace, name, and an optional `uid`) and sends `ResourceEvents`:
+  Namespace, name, an optional `uid`, and optional `otherUids`) and sends
+  `ResourceEvents`:
 
   ```go
   type ResourceEvents struct {
@@ -215,11 +218,15 @@ See ADR-0014 for the choice and the selection rule. In code:
   returns an error only when a list, or the start of a watch, fails. The
   error is reported, the Events already held are kept, and the next attempt
   waits: from `Timing.ObjectRetry`, doubling up to `Timing.RetryMax`, as a
-  Table watch does. An expired resourceVersion is never reported.
-- A watch that cannot start because the connection is refused, or because
-  the API server answers 429, also ends the attempt. The Reflector would
-  retry it inside the attempt without returning, so an unreachable Cluster
-  would leave the Facet with Events that no longer update and no error.
+  Table watch does. The delay goes back to `Timing.ObjectRetry` once a watch
+  has started, not once a list has completed: a credential that may list
+  Events but not watch them would otherwise list every two seconds for as
+  long as the tab is open. An expired resourceVersion is never reported.
+- A watch that cannot start because the connection is refused also ends the
+  attempt. The Reflector would retry it inside the attempt without
+  returning, so an unreachable Cluster would leave the Facet with Events
+  that no longer update and no error. A 429 is left to the Reflector, which
+  backs off and resumes the watch without another list.
 - A transport error is reported without its request URL, which holds the
   whole field selector.
 - The value is rebuilt after every list and every watch event. An Event the
@@ -239,9 +246,10 @@ The matching, conversion, and ordering are pure functions:
 
 - **Match.** With `ref` the Event's reference and `target` the Resource:
   `sameIncarnation` is true when `target.UID` is empty, or `ref.UID` is
-  empty, `target.UID`, or `target.Name`. `sameGroup` is true when `ref.UID`
-  is `target.UID` and not empty, or `ref.APIVersion` is empty, or its group
-  is the type's group. An Event matches when both are true.
+  empty, `target.UID`, one of `target.OtherUIDs`, or `target.Name`.
+  `sameGroup` is true when `ref.UID` is not empty and is `target.UID` or one
+  of `target.OtherUIDs`, or `ref.APIVersion` is empty, or its group is the
+  type's group. An Event matches when both are true.
 - **Last seen.** The first of these that is set: `series.lastObservedTime`,
   `lastTimestamp`, `eventTime`, `firstTimestamp`,
   `metadata.creationTimestamp`.
@@ -264,7 +272,12 @@ warning count. The rules for its params:
    show another incarnation's Events for a moment.
 2. `uid` is `metadata.uid` of the last Manifest the tab received, when it is a
    string. A deleted Resource keeps its last Manifest, so it keeps its UID. A
-   Resource that was never found has none.
+   Resource that was never found has none. `otherUids` holds the Manifest's
+   `kubernetes.io/config.mirror` annotation when the Resource is a Pod that
+   has one: the kubelet writes a static Pod's Events with that hash as the
+   UID. On the test cluster, a static Pod's mirror Pod had UID `8a4b8257-…`
+   and its `Pulled`, `Created`, and `Started` Events all referred to
+   `5b0aeef7…`, the annotation's value.
 3. When the Resource is created again, the UID changes and so do the params.
    Until the answer for the new params arrives, `useSubscription` reports the
    old value as `stale`; the Facet and the badge treat a stale value as
@@ -359,19 +372,19 @@ Event's UID, which is unique because one type is read.
 
 ### States of the Events Facet
 
-| State                                 | What shows                                                                                                                                                                                                                                                              |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading: no value yet, or a stale one | The header row and three skeleton rows, marked busy. No badge. A stale value's Events are never shown, and an error that arrives meanwhile shows as it would without a value.                                                                                           |
-| Empty                                 | `No recent Events`. `A cluster keeps Events for a limited time, usually one hour, so a healthy <Kind> often has none. New Events appear here as they happen.`                                                                                                           |
-| Populated                             | The table. The badge counts warnings.                                                                                                                                                                                                                                   |
-| Not permitted (`forbidden`)           | `Not permitted`. Namespaced: `Your credentials cannot list Events in the <namespace> Namespace.` Cluster-scoped: `Showing the Events of a cluster-scoped Resource such as this <Kind> needs permission to list Events in every Namespace.` Replaces any rows. No badge. |
-| Another error, no Events yet          | `Events unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                                                                                                   |
-| Another error, with Events            | A line above the table in the destructive color, `Events may be out of date: <message>`. The rows and the badge stay.                                                                                                                                                   |
-| The Cluster is unreachable            | The status bar says so, as today. The watch fails, which is the row above. It clears when the watch recovers.                                                                                                                                                           |
-| The connection to the Engine is lost  | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                                                                                                  |
-| The Resource is deleted while open    | The header's `Deleted` badge, in every Facet. The Events stay live for the same incarnation, because the deletion's own Events are often the useful ones.                                                                                                               |
-| The Resource was never found          | The header's `Not found` badge. Events about anything with that kind, name, and Namespace, or the empty state.                                                                                                                                                          |
-| The window is out of date             | Frozen by the root layout, as everything else.                                                                                                                                                                                                                          |
+| State                                 | What shows                                                                                                                                                                                                                                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading: no value yet, or a stale one | The header row and three skeleton rows, marked busy. No badge. A stale value's Events are never shown, and an error that arrives meanwhile shows as it would without a value.                                                                                                               |
+| Empty                                 | `No recent Events`. `A cluster keeps Events for a limited time, usually one hour, so a healthy <Kind> often has none. New Events appear here as they happen.`                                                                                                                               |
+| Populated                             | The table. The badge counts warnings.                                                                                                                                                                                                                                                       |
+| Not permitted (`forbidden`)           | `Not permitted`. Namespaced: `Your credentials cannot list and watch Events in the <namespace> Namespace.` Cluster-scoped: `Showing the Events of a cluster-scoped Resource such as this <Kind> needs permission to list and watch Events in every Namespace.` Replaces any rows. No badge. |
+| Another error, no Events yet          | `Events unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                                                                                                                       |
+| Another error, with Events            | A line above the table in the destructive color, `Events may be out of date: <message>`. The rows and the badge stay.                                                                                                                                                                       |
+| The Cluster is unreachable            | The status bar says so, as today. The watch fails, which is the row above. It clears when the watch recovers.                                                                                                                                                                               |
+| The connection to the Engine is lost  | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                                                                                                                      |
+| The Resource is deleted while open    | The header's `Deleted` badge, in every Facet. The Events stay live for the same incarnation, because the deletion's own Events are often the useful ones.                                                                                                                                   |
+| The Resource was never found          | The header's `Not found` badge. Events about anything with that kind, name, and Namespace, or the empty state.                                                                                                                                                                              |
+| The window is out of date             | Frozen by the root layout, as everything else.                                                                                                                                                                                                                                              |
 
 The empty state uses the `Empty` component as other notices do. It names the
 time limit so that it reads as the normal state of a healthy Resource, not as
@@ -499,3 +512,11 @@ None.
   the Facet: the Reflector retries a refused connection inside its watch and
   never returns. The watch function now returns such an error in a form the
   Reflector does not retry.
+- **Only a started watch resets the retry delay.** It first reset after a
+  completed list, so credentials that could list Events but not watch them
+  caused a list every two seconds. Watch-start failures now double the delay
+  up to the Cluster's retry maximum.
+- **Static Pods supply another UID.** The kubelet writes Events with the hash
+  in the mirror Pod's `kubernetes.io/config.mirror` annotation. The client
+  sends it in `OtherUIDs`, and the Engine treats it as another UID of the
+  same incarnation for both incarnation and API group matching.

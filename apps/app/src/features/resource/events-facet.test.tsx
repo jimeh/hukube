@@ -134,8 +134,8 @@ describe("Events Facet states", () => {
       expect(
         screen.getByText(
           namespaced
-            ? "Your credentials cannot list Events in the shop Namespace."
-            : "Showing the Events of a cluster-scoped Resource such as this Node needs permission to list Events in every Namespace.",
+            ? "Your credentials cannot list and watch Events in the shop Namespace."
+            : "Showing the Events of a cluster-scoped Resource such as this Node needs permission to list and watch Events in every Namespace.",
         ),
       ).toBeDefined();
       expect(screen.queryByRole("table")).toBeNull();
@@ -194,20 +194,19 @@ describe("Events Facet states", () => {
 
 describe("Events warning badge", () => {
   it("names its warning count and keeps it during a watch failure", () => {
+    const events: FacetProps["events"] = {
+      stale: false,
+      data: populated,
+      error: { code: "internal", message: "offline" },
+    };
     render(
-      <button aria-label={eventsTabName({ ...props, events: { stale: false, data: populated } })}>
+      <button aria-label={eventsTabName({ ...props, events })}>
         <span>Events</span>
-        <EventsBadge
-          {...props}
-          events={{
-            stale: false,
-            data: populated,
-            error: { code: "internal", message: "offline" },
-          }}
-        />
+        <EventsBadge {...props} events={events} />
       </button>,
     );
-    expect(screen.getByRole("button", { name: "Events, 1 warning" })).toBeDefined();
+    const tab = screen.getByRole("button", { name: "Events, 1 warning" });
+    expect(within(tab).getByText("1").textContent).toBe("1");
   });
   it("pluralizes multiple warnings", () => {
     expect(
