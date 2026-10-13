@@ -87,8 +87,8 @@ export function growWidths(widths: ColumnWidths, columns: ListColumn[], rows: Ro
 
 /**
  * The CSS grid columns of a list's header and rows, and the least width they
- * need. Both are measured in `ch`, so the element they style must use the
- * cells' monospace font.
+ * need, including a trailing track for the header action. Character widths
+ * use the cells' monospace font.
  */
 export function gridLayout(
   columns: ListColumn[],
@@ -103,6 +103,8 @@ export function gridLayout(
     const width = `${widths.get(column.id) ?? column.name.length + headerExtraChars}ch`;
     return [width, width];
   });
+  if (tracks.length === 0) tracks.push(["0px", "1fr"]);
+  tracks.push(["2rem", "2rem"]);
   return {
     template: tracks.map(([min, max]) => (min === max ? min : `minmax(${min}, ${max})`)).join(" "),
     // The tracks, the gaps between them, and the padding at both ends.

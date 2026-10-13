@@ -4,16 +4,6 @@
 import type { Column, Row, Sort } from "@hukube/engine-client";
 import { useSubscription } from "@hukube/engine-client/react";
 import { formatAge, type TypeKey } from "@hukube/k8s";
-import { Button } from "@hukube/ui/components/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@hukube/ui/components/dropdown-menu";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@hukube/ui/components/input-group";
 import {
@@ -43,7 +33,8 @@ import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
 import { ColumnHeaders } from "./column-header.tsx";
-import { resolveColumnLayout, showColumn, shownSort } from "./column-layout.ts";
+import { CustomizeColumns, type ColumnMenuProps } from "./column-menu.tsx";
+import { resolveColumnLayout, shownSort } from "./column-layout.ts";
 import {
   cellText,
   gridLayout,
@@ -131,6 +122,15 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   if (grown !== widths) setWidths(grown);
   const layout = gridLayout(columns, grown, resolved.spare);
   const gridColumns: CSSProperties = { gridTemplateColumns: layout.template };
+  const columnMenu: ColumnMenuProps = {
+    layout: resolved,
+    allNamespaces: namespace === allNamespaces,
+    hasStored: stored != null,
+    onEdit: (value) => {
+      onInteract();
+      void put(value);
+    },
+  };
 
   const open = (row: Row | undefined, preview: boolean) => {
     if (!row) return;
@@ -181,48 +181,6 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
           {data ? data.total : ""}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button variant="outline" size="sm" disabled={stored === undefined} />}
-            >
-              Columns
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-48">
-              <DropdownMenuGroup>
-                {resolved.available.map((column) => {
-                  const shown = columns.some((c) => c.id === column.id);
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={column.id}
-                      checked={shown}
-                      closeOnClick={false}
-                      disabled={
-                        (shown && columns.length === 1) ||
-                        (column.source === "namespace" && namespace !== allNamespaces)
-                      }
-                      onCheckedChange={(checked) => {
-                        onInteract();
-                        const value = showColumn(resolved, column.id, checked);
-                        if (value !== undefined) void put(value);
-                      }}
-                    >
-                      {column.name}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={stored == null}
-                onClick={() => {
-                  onInteract();
-                  void put(null);
-                }}
-              >
-                Reset to default
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           {info?.namespaced && (
             <NamespaceSelect cluster={cluster} value={namespace} onChange={setNamespace} />
           )}
@@ -269,16 +227,13 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
             >
               {stored !== undefined && (
                 <ColumnHeaders
-                  layout={resolved}
+                  {...columnMenu}
                   scrollRef={scrollRef}
                   sort={effectiveSort}
                   onSort={setSort}
-                  onEdit={(value) => {
-                    onInteract();
-                    void put(value);
-                  }}
                 />
               )}
+              <CustomizeColumns {...columnMenu} loaded={stored !== undefined} />
             </div>
 
             <div
