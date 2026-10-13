@@ -18,14 +18,14 @@ export function resourceEventsParams(
   return { cluster, type, namespace, name, ...(typeof uid === "string" ? { uid } : {}) };
 }
 
-/** A replacing Preview Tab inherits the shown Facet unless its address names one. */
-export function previewResourceUri(uri: string, previousUri: string | undefined): string {
+/** A new Resource tab inherits the Pane's active tab's Facet unless its address names one. */
+export function newResourceUri(uri: string, activeUri: string | undefined): string {
   const address = parseResourceUri(uri);
-  const previous = previousUri ? parseResourceUri(previousUri) : undefined;
-  if (!address || address.facet || !previous) return uri;
+  const active = activeUri ? parseResourceUri(activeUri) : undefined;
+  if (!address || address.facet || !active) return uri;
   return formatResourceUri({
     ...address,
-    facet: resolveFacet(resolveFacet(previous.facet, { type: previous.type }), {
+    facet: resolveFacet(resolveFacet(active.facet, { type: active.type }), {
       type: address.type,
     }),
   });

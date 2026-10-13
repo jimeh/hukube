@@ -38,15 +38,16 @@ describe("Events Facet states", () => {
   it.each([false, true])("shows the header and three busy skeleton rows (stale: %s)", (stale) => {
     show({ stale, ...(stale ? { data: populated } : {}) });
     expect(screen.getByRole("region").getAttribute("aria-busy")).toBe("true");
-    expect(screen.getAllByRole("row")).toHaveLength(4);
+    const rows = screen.getAllByRole("row");
+    expect(rows).toHaveLength(4);
+    for (const row of rows.slice(1)) expect(within(row).getAllByRole("cell")).toHaveLength(5);
     expect(screen.queryByText(event.message)).toBeNull();
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
       "Last seen",
       "Type",
       "Reason",
-      "Count",
-      "From",
       "Message",
+      "From and count",
     ]);
   });
   it("explains a healthy Resource's empty state", () => {
@@ -63,11 +64,11 @@ describe("Events Facet states", () => {
     const row = screen.getByRole("row", { name: /Warning Failed/ });
     expect(within(row).getByRole("cell", { name: "Warning" })).toBeDefined();
     expect(within(row).getByText(event.message)).toBeDefined();
-    expect(within(row).getByText("kubelet, node-1").title).toBe("kubelet, node-1");
+    expect(within(row).getByRole("cell", { name: "From kubelet, node-1 · 3 times" })).toBeDefined();
     expect(container.querySelector("script")).toBeNull();
     expect(screen.getByRole("region").tabIndex).toBe(0);
   });
-  it("places the message after the five metadata cells with titles for narrow columns", () => {
+  it("places the message and details after three metadata cells with accessible headers", () => {
     show({ stale: false, data: populated });
     const row = screen.getByRole("row", { name: /Warning Failed/ });
     const cells = within(row).getAllByRole("cell");
@@ -75,14 +76,43 @@ describe("Events Facet states", () => {
       expect.stringMatching(/s$/),
       "Warning",
       "Failed",
-      "3",
-      "kubelet, node-1",
       event.message,
+      "From kubelet, node-1 · 3 times",
     ]);
     expect(cells[2]?.title).toBe(event.reason);
-    expect(cells[4]?.title).toBe("kubelet, node-1");
+    expect(screen.getByRole("columnheader", { name: "From and count" }).className).toContain(
+      "sr-only",
+    );
     expect(screen.getByRole("columnheader", { name: "Message" }).className).toContain("sr-only");
   });
+  it("trims the message and preserves its own line breaks", () => {
+    show({
+      stale: false,
+      data: { ...populated, events: [{ ...event, message: "  first line\nsecond line  " }] },
+    });
+    const cells = within(screen.getByRole("row", { name: /Warning Failed/ })).getAllByRole("cell");
+    expect(cells[3]?.textContent).toBe("first line\nsecond line");
+  });
+  it.each([
+    ["kubelet", "node-1", 3, "From kubelet, node-1 · 3 times"],
+    ["kubelet", "", 1, "From kubelet"],
+    ["", "node-1", 1, "From node-1"],
+    ["", "", 2, "2 times"],
+    ["", "", 1, ""],
+  ])(
+    "renders reporter %s, instance %s, and count %s without empty parts",
+    (reporter, reporterInstance, count, details) => {
+      show({
+        stale: false,
+        data: { ...populated, events: [{ ...event, reporter, reporterInstance, count }] },
+      });
+      const cells = within(screen.getByRole("row", { name: /Warning Failed/ })).getAllByRole(
+        "cell",
+      );
+      expect(cells).toHaveLength(5);
+      expect(cells[4]?.textContent).toBe(details);
+    },
+  );
   it.each(["Normal", "__proto__", "constructor"])(
     "renders the untrusted type %s by value",
     (type) => {
@@ -105,7 +135,7 @@ describe("Events Facet states", () => {
         screen.getByText(
           namespaced
             ? "Your credentials cannot list Events in the shop Namespace."
-            : "Your credentials cannot list Events across the cluster, which the Events of a cluster-scoped Node need.",
+            : "Showing the Events of a cluster-scoped Resource such as this Node needs permission to list Events in every Namespace.",
         ),
       ).toBeDefined();
       expect(screen.queryByRole("table")).toBeNull();
