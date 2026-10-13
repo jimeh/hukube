@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "a87b0606a343b25d";
+export const Hash = "870544f4acae3e14";
 
 //////////
 // source: protocol.go
@@ -359,6 +359,56 @@ export interface ResourceRef {
 export interface ResourceData {
   object?: { [key: string]: unknown };
   deleted?: boolean;
+}
+/**
+ * ResourceEventsParams selects the Events about one incarnation of a Resource.
+ */
+export interface ResourceEventsParams {
+  cluster: string;
+  type: TypeKey;
+  namespace?: string;
+  name: string;
+  /**
+   * UID selects the Resource incarnation, allowing empty and name-as-UID references.
+   * An empty UID selects every incarnation of the Resource.
+   */
+  uid?: string;
+  /**
+   * OtherUIDs holds further UIDs that references to this incarnation use,
+   * such as the hash in a mirror Pod's kubernetes.io/config.mirror annotation.
+   */
+  otherUids?: string[];
+}
+/**
+ * ResourceEvents is the current set of Events about a Resource, with uncapped counts.
+ */
+export interface ResourceEvents {
+  /**
+   * Events holds the newest Events, newest first, at most 500.
+   */
+  events: ResourceEvent[];
+  /**
+   * Total and Warnings count every Event about the Resource.
+   */
+  total: number /* int */;
+  warnings: number /* int */;
+}
+/**
+ * ResourceEvent is one Kubernetes Event normalized across recorder formats.
+ */
+export interface ResourceEvent {
+  uid: string;
+  type: string;
+  reason: string;
+  message: string;
+  count: number /* int */;
+  lastSeen: string;
+  /**
+   * Reporter is the component that reported the Event, such as
+   * "kubelet", and ReporterInstance where it ran, such as a Node's name.
+   */
+  reporter?: string;
+  reporterInstance?: string;
 }
 /**
  * SettingKey selects a stored setting.

@@ -67,5 +67,6 @@ var (
 	TopicResourcesQuery = DeclareTopic[QueryParams, QueryResult]("resources.query")
 	TopicResourcesFind  = DeclareTopic[FindParams, FindResult]("resources.find")
 	TopicResourceGet    = DeclareTopic[ResourceRef, ResourceData]("resource.get")
+	TopicResourceEvents = DeclareTopic[ResourceEventsParams, ResourceEvents]("resource.events")
 	TopicSettingsWatch  = DeclareTopic[SettingKey, Setting]("settings.watch")
 )

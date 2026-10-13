@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { clusterScope } from "@/features/clusters/cluster-color.ts";
 import { GoToResource } from "@/features/go-to-resource/go-to-resource.tsx";
 import { ResourceListPanel } from "@/features/resource-list/resource-list-panel.tsx";
+import { newResourceUri } from "@/features/resource/facet-rules.ts";
 import { ResourcePanel } from "@/features/resource/resource-panel.tsx";
 import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
 import { useTheme } from "@/lib/theme.ts";
@@ -30,8 +31,8 @@ const components = {
       onInteract={() => pinPanel(api, params)}
     />
   ),
-  resource: ({ params }: IDockviewPanelProps<ResourcePanelParams>) => (
-    <ResourcePanel uri={params.uri} />
+  resource: ({ api, params }: IDockviewPanelProps<ResourcePanelParams>) => (
+    <ResourcePanel key={api.id} api={api} params={params} />
   ),
 };
 const tabComponents = { tab: PanelTab };
@@ -83,10 +84,22 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         if (!api) return;
         const uri = formatResourceUri({ ...address, cluster });
         openPanel<ResourcePanelParams>(api, {
-          id: uri,
+          id: formatResourceUri({ ...address, cluster, facet: undefined }),
           component: "resource",
           title: address.name,
           params: { uri },
+          deriveActiveTabParams: (params, activeParams) => ({
+            ...params,
+            uri: newResourceUri(
+              params.uri,
+              activeParams &&
+                typeof activeParams === "object" &&
+                "uri" in activeParams &&
+                typeof activeParams.uri === "string"
+                ? activeParams.uri
+                : undefined,
+            ),
+          }),
           preview: options?.preview ?? false,
           ...(options?.beside ? { beside: options.beside } : {}),
         });

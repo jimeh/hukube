@@ -1,6 +1,6 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { clusterId, engineToken, kubectl } from "./env.ts";
+import { clusterId, engineToken, kubectl, kubectlCreate } from "./env.ts";
 
 const namespace = `e2e-${Date.now().toString(36)}`;
 
@@ -384,3 +384,251 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     await reset();
   }
 });
+
+test("shows live Resource Events and restores the Facet after reload", async ({ page }) => {
+  kubectl("-n", namespace, "create", "configmap", "e2e-events", "--from-literal=value=events");
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await page
+    .getByRole("complementary", { name: "Resource types" })
+    .getByRole("button", { name: /^ConfigMap \d+$/ })
+    .click();
+  const list = page.getByRole("tabpanel", { name: "configmaps", exact: true });
+  await list.getByRole("textbox", { name: "Filter by name" }).fill("e2e-events");
+  await list.getByRole("row", { name: new RegExp(`e2e-events ${namespace}`) }).click();
+  const panel = page.getByRole("tabpanel", { name: "e2e-events", exact: true });
+  await panel.getByRole("tab", { name: "Events", exact: true }).click();
+  await expect(panel.getByText("No recent Events")).toBeVisible();
+  const uid = kubectl(
+    "-n",
+    namespace,
+    "get",
+    "configmap",
+    "e2e-events",
+    "-o",
+    "jsonpath={.metadata.uid}",
+  );
+  const reference = { apiVersion: "v1", kind: "ConfigMap", name: "e2e-events", namespace, uid };
+  kubectlCreate({
+    apiVersion: "v1",
+    kind: "Event",
+    metadata: { name: "e2e-events-layout", namespace },
+    involvedObject: reference,
+    reason: "AReasonLongEnoughToTruncateInANarrowPane",
+    message:
+      "  A long message with ordinary words must wrap below the metadata columns and stay readable in a narrow Pane beside the Resource list.\nThe message keeps this line break.  ",
+    source: { component: "layout-reporter", host: "a-long-reporter-instance-for-wrapping" },
+    count: 3,
+    type: "Normal",
+  });
+  await expect(panel.getByRole("row", { name: /AReasonLongEnoughToTruncate/ })).toBeVisible();
+  const typeColumn = panel.getByRole("columnheader", { name: "Type", exact: true });
+  const beforeWarning = (await typeColumn.boundingBox())!;
+  kubectlCreate({
+    apiVersion: "v1",
+    kind: "Event",
+    metadata: { name: "e2e-events-warning", namespace },
+    involvedObject: reference,
+    reason: "FailedScheduling",
+    message: "Live warning from e2e",
+    type: "Warning",
+  });
+  await expect(
+    panel.getByRole("row", { name: /Warning FailedScheduling.*Live warning from e2e/ }),
+  ).toBeVisible();
+  await expect(panel.getByRole("tab", { name: "Events, 1 warning", exact: true })).toBeVisible();
+  await expect
+    .poll(async () => {
+      const afterWarning = (await typeColumn.boundingBox())!;
+      return { x: afterWarning.x, width: afterWarning.width };
+    })
+    .toEqual({ x: beforeWarning.x, width: beforeWarning.width });
+  kubectlCreate({
+    apiVersion: "v1",
+    kind: "Event",
+    metadata: { name: "e2e-events-normal", namespace },
+    involvedObject: reference,
+    reason: "SameMessage",
+    message: "Live warning from e2e",
+    type: "Normal",
+  });
+  await expect(panel.getByRole("row", { name: /Normal SameMessage/ })).toBeVisible();
+  await page.setViewportSize({ width: 900, height: 800 });
+  await expectEventsLayout(panel);
+  await waitForStoredResourceUri(
+    page,
+    `hukube://resource/v1/${encodeURIComponent(clusterId)}/configmaps/${namespace}/e2e-events#events`,
+  );
+  await page.reload();
+  await expect(panel.getByRole("tab", { name: "Events, 1 warning", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(panel.getByRole("row", { name: /Warning FailedScheduling/ })).toBeVisible();
+  // Enter opens a pinned Resource tab and keeps the Facet the destination Pane shows.
+  kubectl("-n", namespace, "create", "configmap", "e2e-events-second");
+  await list.getByRole("textbox", { name: "Filter by name" }).fill("e2e-events-second");
+  const grid = list.getByRole("grid", { name: "ConfigMap resources" });
+  await expect(grid.getByRole("row")).toHaveCount(1);
+  const secondRow = list.getByRole("row", { name: new RegExp(`e2e-events-second ${namespace}`) });
+  await expect(secondRow).toBeVisible();
+  await grid.focus();
+  await grid.press("ArrowDown");
+  await expect(secondRow).toHaveAttribute("aria-selected", "true");
+  await grid.press("Enter");
+  const secondPanel = page.getByRole("tabpanel", { name: "e2e-events-second", exact: true });
+  await expect(secondPanel.getByRole("tab", { name: "Events", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(secondPanel.getByText("No recent Events")).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "e2e-events-second", exact: true }).locator("span").first(),
+  ).toHaveCSS("font-style", "normal");
+});
+
+// Observe the saved layout without opening a second Workspace, which could
+// restore and save an older layout before the first Workspace's save arrives.
+async function waitForStoredResourceUri(page: Page, uri: string): Promise<void> {
+  const other = await page.context().newPage();
+  try {
+    await other.goto(`/#token=${engineToken}`);
+    await other.evaluate(
+      async ({ token, uri: expectedUri, cluster }) => {
+        await new Promise<void>((resolve, reject) => {
+          let last: unknown;
+          const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/ws`, [
+            "hukube.v1",
+            `hukube.token.${token}`,
+          ]);
+          const timeout = setTimeout(() => {
+            socket.close();
+            reject(new Error(`Events Facet was not stored; last layout: ${JSON.stringify(last)}`));
+          }, 10_000);
+          socket.onopen = () =>
+            socket.send(
+              JSON.stringify({
+                id: 1,
+                type: "subscribe",
+                method: "settings.watch",
+                params: { key: `workspace/${cluster}` },
+              }),
+            );
+          socket.onmessage = (event) => {
+            const message = JSON.parse(String(event.data)) as {
+              id: number;
+              type: string;
+              data?: {
+                value?: { dockview?: { panels?: Record<string, { params?: { uri?: string } }> } };
+              };
+            };
+            if (message.id !== 1 || message.type !== "data") return;
+            last = message.data?.value;
+            const panels = message.data?.value?.dockview?.panels ?? {};
+            if (
+              Object.values(panels).some((storedPanel) => storedPanel.params?.uri === expectedUri)
+            ) {
+              clearTimeout(timeout);
+              socket.close();
+              resolve();
+            }
+          };
+          socket.onerror = () => {
+            clearTimeout(timeout);
+            socket.close();
+            reject(new Error("Layout observer could not connect"));
+          };
+        });
+      },
+      {
+        token: engineToken,
+        cluster: clusterId,
+        uri,
+      },
+    );
+  } finally {
+    await other.close();
+  }
+}
+
+// Check the rendered geometry, since jsdom cannot lay out subgrid or wrapped text.
+async function expectEventsLayout(panel: Locator): Promise<void> {
+  const region = panel.getByRole("region", { name: "Events", exact: true });
+  await expect.poll(() => region.evaluate((el) => el.clientWidth)).toBeLessThanOrEqual(360);
+  await expect
+    .poll(() =>
+      region.evaluate((el) => {
+        const table = el.querySelector('[role="table"]')!;
+        const rows = Array.from(table.querySelectorAll('[role="row"]'));
+        const headers = Array.from(rows[0]!.children)
+          .slice(0, 3)
+          .map((cell) => cell.getBoundingClientRect());
+        const aligned = rows.slice(1).every((row) => {
+          const cells = Array.from(row.children);
+          const metadata = cells.slice(0, 3).map((cell) => cell.getBoundingClientRect());
+          const message = cells[3]!;
+          const details = cells[4]!;
+          const bounds = message.getBoundingClientRect();
+          const detailBounds = details.getBoundingClientRect();
+          return (
+            cells.length === 5 &&
+            metadata.every((cell, i) => Math.abs(cell.x - headers[i]!.x) < 1) &&
+            Math.abs(bounds.x - metadata[1]!.x) < 1 &&
+            Math.abs(bounds.right - metadata[2]!.right) < 1 &&
+            bounds.y >= Math.max(...metadata.map((cell) => cell.bottom)) &&
+            (!details.textContent ||
+              (Math.abs(detailBounds.x - metadata[1]!.x) < 1 &&
+                Math.abs(detailBounds.right - metadata[2]!.right) < 1 &&
+                detailBounds.y >= bounds.bottom)) &&
+            getComputedStyle(message).overflowWrap === "break-word" &&
+            getComputedStyle(message).whiteSpace === "pre-wrap"
+          );
+        });
+        const longRow = rows.find((row) =>
+          row.textContent?.includes("AReasonLongEnoughToTruncate"),
+        )!;
+        const reason = longRow.children[2]! as HTMLElement;
+        const message = longRow.children[3]! as HTMLElement;
+        const details = longRow.children[4]! as HTMLElement;
+        const warningRow = rows.find((row) => row.textContent?.includes("FailedScheduling"))!;
+        const normalRow = rows.find((row) => row.textContent?.includes("SameMessage"))!;
+        const scheduling = warningRow.children[2]! as HTMLElement;
+        return {
+          noHorizontalScroll: el.scrollWidth === el.clientWidth,
+          aligned,
+          headersDoNotOverlap: headers.every(
+            (cell, i) => i === 0 || cell.x >= headers[i - 1]!.right,
+          ),
+          messageWraps: message.clientHeight > parseFloat(getComputedStyle(message).lineHeight) * 2,
+          detailsWrap: details.clientHeight > parseFloat(getComputedStyle(details).lineHeight),
+          messageTrimmed: message.textContent === message.textContent?.trim(),
+          reasonTruncatesWithTitle:
+            reason.scrollWidth > reason.clientWidth && reason.title === reason.textContent,
+          schedulingReasonFits: scheduling.scrollWidth === scheduling.clientWidth,
+          equalRowHeights:
+            Math.abs(
+              warningRow.getBoundingClientRect().height - normalRow.getBoundingClientRect().height,
+            ) < 1,
+          noEmptyThirdLine: [warningRow, normalRow].every((row) => {
+            const lastMessage = row.children[3]!.getBoundingClientRect();
+            return (
+              !row.children[4]!.textContent &&
+              row.getBoundingClientRect().bottom - lastMessage.bottom < 10
+            );
+          }),
+        };
+      }),
+    )
+    .toEqual({
+      noHorizontalScroll: true,
+      aligned: true,
+      headersDoNotOverlap: true,
+      messageWraps: true,
+      detailsWrap: true,
+      messageTrimmed: true,
+      reasonTruncatesWithTitle: true,
+      schedulingReasonFits: true,
+      equalRowHeights: true,
+      noEmptyThirdLine: true,
+    });
+}
