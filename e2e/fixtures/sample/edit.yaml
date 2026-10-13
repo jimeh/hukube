@@ -1,0 +1,87 @@
+# Samples for Edit, review, Delete, and terminating states. This Namespace is
+# separate from the existing browsing and Log Stream samples.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-edit
+---
+# Add a data key, or change greeting and review the diff.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: sample-edit
+data:
+  greeting: hello
+---
+# A disposable Resource for Delete confirmation.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: delete-me
+  namespace: sample-edit
+data:
+  example: disposable
+---
+# Delete leaves this Resource Terminating. Release it in Edit by removing
+# metadata.finalizers and reviewing/applying, or with:
+# kubectl --kubeconfig .data/e2e/kubeconfig -n sample-edit patch configmap held --type=merge -p '{"metadata":{"finalizers":[]}}'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: held
+  namespace: sample-edit
+  finalizers: [sample.hukube.dev/hold]
+data:
+  example: finalizer
+---
+# Owned ReplicaSets and Pods exercise the dependents choice.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edit-web
+  namespace: sample-edit
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: edit-web }
+  template:
+    metadata:
+      labels: { app: edit-web }
+    spec:
+      containers:
+        - name: web
+          # k3s already pulls this image for its Pod sandboxes.
+          image: rancher/mirrored-pause:3.6
+---
+# Custom Resource editing and validation.
+apiVersion: sample.hukube.dev/v1
+kind: Widget
+metadata:
+  name: edit-widget
+  namespace: sample-edit
+spec:
+  size: 3
+---
+# Delete this Namespace to exercise the name confirmation and Resource count.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: namespace-dependent
+  namespace: sample-delete
+data:
+  example: namespace-delete
+---
+# Deleting the Gadget CRD removes this Resource. The Widget CRD stays.
+apiVersion: sample.hukube.dev/v1
+kind: Gadget
+metadata:
+  name: crd-dependent
+  namespace: sample-edit
+spec:
+  size: 1

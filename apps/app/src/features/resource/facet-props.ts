@@ -1,4 +1,10 @@
-import type { Related, ResourceData, ResourceEvents, ResourceType } from "@hukube/engine-client";
+import type {
+  Access,
+  Related,
+  ResourceData,
+  ResourceEvents,
+  ResourceType,
+} from "@hukube/engine-client";
 import type { SubscriptionState } from "@hukube/engine-client/react";
 import type { ResourceAddress, TypeKey } from "@hukube/k8s";
 
@@ -31,4 +37,6 @@ export interface FacetProps {
   visible: boolean;
   /** The switcher row element for the showing Facet's own controls. */
   controls: HTMLElement | null;
+  editAccess?: Access;
+  onEdit?: () => void;
 }

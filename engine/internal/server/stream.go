@@ -213,7 +213,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runStream(ctx context.Context, conn *websocket.Conn, limits streamLimits) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	conn.SetReadLimit(readLimit)
+	conn.SetReadLimit(streamReadLimit)
 	wctx, stop := context.WithTimeout(ctx, limits.write)
 	err := wsjson.Write(wctx, conn, protocol.StreamServerMessage{Type: protocol.StreamServerTypeHello, Hello: &protocol.Hello{Protocol: protocol.Hash}})
 	stop()

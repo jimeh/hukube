@@ -127,3 +127,64 @@ describe("connection Worker", () => {
     expect(scope.postMessage).not.toHaveBeenCalled();
   });
 });
+
+it("forwards the entire failed request detail", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  const socket = FakeSocket.latest;
+  socket.open();
+  send({ kind: "request", id: 9, method: "clusters.list", params: undefined });
+  const error = {
+    code: "invalid" as const,
+    message: "invalid",
+    reason: "Invalid",
+    causes: [{ field: "spec.replicas", message: "negative" }],
+  };
+  socket.receive({ id: socket.sent[0]!.id, type: "error", error });
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenLastCalledWith({ kind: "failure", id: 9, error });
+});
+
+it("carries cancellation from the main thread to the Engine", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  const socket = FakeSocket.latest;
+  socket.open();
+  send({ kind: "request", id: 9, method: "clusters.list", params: undefined });
+  const id = socket.sent[0]!.id;
+  send({ kind: "cancel", id: 9 });
+  expect(socket.sent.at(-1)).toEqual({ id, type: "cancel" });
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenLastCalledWith({
+    kind: "failure",
+    id: 9,
+    error: expect.objectContaining({ code: "cancelled" }),
+  });
+  const count = scope.postMessage.mock.calls.length;
+  socket.receive({ id, type: "result", data: [] });
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenCalledTimes(count);
+  send({ kind: "cancel", id: 900 });
+  expect(socket.sent).toHaveLength(2);
+});
+
+it("forwards not_connected before sending and disconnected after sending", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  const socket = FakeSocket.latest;
+  send({ kind: "request", id: 8, method: "clusters.list", params: undefined });
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenLastCalledWith({
+    kind: "failure",
+    id: 8,
+    error: expect.objectContaining({ code: "not_connected" }),
+  });
+  expect(socket.sent).toEqual([]);
+  socket.open();
+  send({ kind: "request", id: 9, method: "clusters.list", params: undefined });
+  expect(socket.sent).toHaveLength(1);
+  socket.close();
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenLastCalledWith({
+    kind: "failure",
+    id: 9,
+    error: expect.objectContaining({ code: "disconnected" }),
+  });
+});

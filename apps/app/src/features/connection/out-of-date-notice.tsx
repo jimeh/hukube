@@ -2,12 +2,23 @@ import { useConnectionState } from "@hukube/engine-client/react";
 import { Button } from "@hukube/ui/components/button";
 import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { copyText } from "../edit/clipboard.ts";
 
 import { useHost } from "@/lib/host.tsx";
 
 /** Shows how to recover when the UI and Engine protocol definitions differ. */
 export function OutOfDateNotice() {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const [copyError, setCopyError] = useState<string>();
+  const edits = useUnsavedEdits((state) => state.entries);
   const outdated = useConnectionState() === "outdated";
   const host = useHost();
   const ref = useRef<HTMLDivElement>(null);
@@ -42,6 +53,30 @@ export function OutOfDateNotice() {
             : "hukube was updated while it was running, so live data has stopped. Quit and reopen hukube to continue."}
           {import.meta.env.DEV && " In development, rebuild and restart the Engine if this stays."}
         </p>
+        {!!edits.size && (
+          <>
+            <p>
+              {edits.size === 1
+                ? "1 Resource has unsaved edits"
+                : `${edits.size} Resources have unsaved edits`}
+              , which reloading discards.
+            </p>
+            <Button
+              variant="outline"
+              onClick={() =>
+                void copyText([...edits.values()].map((edit) => edit.read()).join("\n---\n"))
+                  .then(() => {
+                    setCopied(true);
+                    setCopyError(undefined);
+                  })
+                  .catch((error: unknown) => setCopyError(String(error)))
+              }
+            >
+              <span aria-live="polite">{copied ? "Copied" : "Copy unsaved edits"}</span>
+            </Button>
+          </>
+        )}
+        {copyError && <p role="alert">{copyError}</p>}
       </div>
       {web && (
         <Button className="shrink-0" onClick={() => window.location.reload()}>

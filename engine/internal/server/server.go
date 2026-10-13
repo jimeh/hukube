@@ -28,6 +28,8 @@ import (
 type Config struct {
 	// Token must be presented by every client on the control socket.
 	Token string
+	// ReadOnly refuses requests that change a Cluster.
+	ReadOnly bool
 	// AllowedOrigins lists exact browser origins, such as a dev server or the
 	// desktop Host's app origin, allowed in addition to same-origin pages.
 	AllowedOrigins []string

@@ -79,12 +79,14 @@ host="${HUKUBE_TAILNET_HOST:-$(tailscale status --json | bun -e \
 # A fresh token per run: anyone on the tailnet with the URL gets the
 # Engine's cluster access.
 token="$(openssl rand -hex 24)"
+engine_args=(--read-only)
+if [[ "${HUKUBE_TAILNET_WRITE:-}" == "1" ]]; then engine_args=(); fi
 
 coproc ENGINE {
   # Its own data dir: Engines cache settings in memory, so two sharing one
   # would overwrite each other's saved layouts.
   HUKUBE_TOKEN="$token" exec engine/bin/hukube-engine --listen 127.0.0.1:0 \
-    --allow-host "$host" --allow-host "$ip" --data-dir .data/engine-tailnet
+    --allow-host "$host" --allow-host "$ip" --data-dir .data/engine-tailnet ${engine_args[@]+"${engine_args[@]}"}
 }
 engine_pid=$ENGINE_PID
 trap 'kill "$engine_pid" 2>/dev/null || true' EXIT
@@ -304,8 +306,8 @@ depends = ["e2e:cluster"]
 run = '''
 kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/crds.yaml
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for condition=established --timeout 30s \
-  crd/widgets.sample.hukube.dev
-kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/resources.yaml
+  crd/widgets.sample.hukube.dev crd/gadgets.sample.hukube.dev
+kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/resources.yaml -f e2e/fixtures/sample/edit.yaml
 '''
 
 [tasks."dev:verify"]

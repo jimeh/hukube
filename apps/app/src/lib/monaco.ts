@@ -1,4 +1,5 @@
 import "monaco-editor/features/find/register";
+import "monaco-editor/features/readOnlyMessage/register";
 import "monaco-editor/features/clipboard/register";
 import "monaco-editor/features/codicon/register";
 import "monaco-editor/features/contextmenu/register";
@@ -11,6 +12,9 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 // Removal rules with no key remove every platform's binding for the command.
 monaco.editor.addKeybindingRules([
   ...[
+    "diffEditor.exitCompareMove",
+    "editor.action.accessibleDiffViewer.next",
+    "editor.action.accessibleDiffViewer.prev",
     "actions.find",
     "actions.findWithSelection",
     "editor.action.nextSelectionMatchFindAction",
