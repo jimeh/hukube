@@ -750,9 +750,11 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await pod.getByRole("tab", { name: "Logs", exact: true }).click();
   const editor = pod.locator(".monaco-editor:visible");
   await expect(editor.locator(".view-lines")).toContainText(`from ${podNames[0]}`);
+  const newest = pod.getByRole("button", { name: /^Newest/ });
+  // Lines arriving, fonts loading, and the Pane settling are not the user scrolling away.
+  await expect(newest).toBeHidden();
   await editor.hover();
   await page.mouse.wheel(0, -100_000);
-  const newest = pod.getByRole("button", { name: /^Newest/ });
   await expect(newest).toBeVisible();
   const firstVisible = () =>
     editor.evaluate((element) => {

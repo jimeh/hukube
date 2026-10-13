@@ -43,6 +43,15 @@ Each of these was observed, and the viewer handles it:
   the viewer keeps.
 - The find, clipboard, and icon-font features are separate imports from the
   editor API the app uses.
+- Its text buffer only grows. An edit of up to 65,535 characters is joined
+  onto one string that is never cut, and a larger one becomes a new buffer
+  that is never dropped, so text deleted from the top stays in memory. A
+  stream of small edits also made the browser copy that string on every
+  edit: with bursts of 30 MB the page's heap reached 840 MB and kept 30 MB
+  more after each burst. The viewer therefore applies what arrived as one
+  edit per frame, and builds the model again from the lines it keeps after
+  edits have added 8 million characters. With both, the heap stayed near
+  40 MB across four bursts and peaked at 129 MB.
 
 ## Log content is filtered before it is shown
 

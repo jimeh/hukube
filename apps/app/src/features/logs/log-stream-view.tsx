@@ -81,8 +81,11 @@ function LogRun({
   const document = useMemo(() => new LogDocument(type, name), [type, name]);
   useSyncExternalStore(document.subscribe, document.snapshot);
   const current = useEffectEvent(() => visible);
+  // A tab restored behind another one reads nothing until it is first shown.
+  const [shown, setShown] = useState(visible);
+  if (visible && !shown) setShown(true);
   useEffect(() => {
-    if (!initialUid) return;
+    if (!initialUid || !shown) return;
     const incarnation = initialUid;
     let active = true;
     let socketReady = false;
@@ -135,7 +138,7 @@ function LogRun({
       handle.close();
       stream.current = undefined;
     };
-  }, [engine, cluster, type, namespace, name, initialUid, container, previous, document]);
+  }, [engine, cluster, type, namespace, name, initialUid, container, previous, document, shown]);
   useEffect(() => {
     clearTimeout(hiddenTimer.current);
     if (visible) stream.current?.resume();
@@ -240,13 +243,14 @@ function LogRun({
         ? `The previous run of ${sources[0]!.container}.`
         : `The previous runs of ${count} containers.`,
     });
-  if (hasLines && !previous && notRunning.length)
+  // Once the stream has ended, what its containers were doing is history.
+  if (!end && hasLines && !previous && notRunning.length)
     notices.push({
       text: one
         ? `${notRunning[0]!.container} is not running: ${notRunning[0]!.reason ?? notRunning[0]!.state}.${notRunning[0]!.message ? ` ${notRunning[0]!.message}` : ""}`
         : `${notRunning.length} of ${count} containers are not running.`,
     });
-  if (unreadable.length)
+  if (!end && unreadable.length)
     notices.push({
       text: one
         ? `Cannot read the logs of ${unreadable[0]!.container}: ${unreadable[0]!.error}. hukube keeps trying.`

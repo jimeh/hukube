@@ -379,3 +379,17 @@ it("does not report a completed init container as not running", () => {
   event(withInit(0));
   expect(screen.queryByText(/not running/)).toBeNull();
 });
+
+it("opens no stream for a view that has not been shown yet", () => {
+  const view = mount({ visible: false });
+  act(() => {
+    vi.advanceTimersByTime(60_000);
+  });
+  expect(opened).toHaveLength(0);
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} />
+    </EngineProvider>,
+  );
+  expect(opened).toHaveLength(1);
+});
