@@ -96,7 +96,7 @@ func TestFindRanksAndFilters(t *testing.T) {
 	}
 }
 
-func TestFindScopesAndEchoesParams(t *testing.T) {
+func TestFindScopes(t *testing.T) {
 	store := findStore(
 		[3]string{"pods", "default", "web"},
 		[3]string{"services", "default", "web"},
@@ -105,9 +105,6 @@ func TestFindScopesAndEchoesParams(t *testing.T) {
 	got := find(t, store, where, "web", 10)
 	if len(got.Rows) != 1 || got.Rows[0].Type != "services" {
 		t.Errorf("rows = %+v, want only the service", got.Rows)
-	}
-	if got.Text != "web" || got.Where != where {
-		t.Errorf("echoed text %q and where %+v, want the params", got.Text, got.Where)
 	}
 }
 

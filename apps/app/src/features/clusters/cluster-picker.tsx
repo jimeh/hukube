@@ -48,7 +48,7 @@ export function ClusterPicker() {
         </Alert>
       )}
 
-      {!clusters && !error && (
+      {!clusters && !error && connection !== "outdated" && (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Spinner />
           {connection === "open" ? "Loading clusters" : "Connecting to the Engine"}

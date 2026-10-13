@@ -22,8 +22,10 @@ pre-commit:
     - name: protocol
       glob:
         - "engine/internal/protocol/*.go"
+        - "engine/internal/protocol/gen/*.go"
         - "engine/tygo.yaml"
         - "packages/engine-client/src/protocol.gen.ts"
+        - "packages/engine-client/src/methods.gen.ts"
       run: mise run gen:check:staged
 
     - name: lint

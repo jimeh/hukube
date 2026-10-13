@@ -2,7 +2,6 @@
 // socket messages does not block rendering (ADR-0004).
 import { EngineRequestError, type Subscription } from "./client.ts";
 import { EngineConnection } from "./connection.ts";
-import type { RequestMethod, TopicMethod } from "./methods.ts";
 import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
 const scope = self as unknown as {
@@ -11,7 +10,7 @@ const scope = self as unknown as {
 };
 
 let connection: EngineConnection | undefined;
-const subscriptions = new Map<number, Subscription<unknown>>();
+const subscriptions = new Map<number, { sub: Subscription<unknown>; count: number }>();
 
 scope.onmessage = ({ data: msg }) => {
   switch (msg.kind) {
@@ -22,7 +21,7 @@ scope.onmessage = ({ data: msg }) => {
       break;
     }
     case "request":
-      connection?.request(msg.method as RequestMethod, msg.params as never).then(
+      connection?.request(msg.method, msg.params as never).then(
         (data) => scope.postMessage({ kind: "result", id: msg.id, data }),
         (err: unknown) => {
           const code = err instanceof EngineRequestError ? err.code : "internal";
@@ -36,18 +35,26 @@ scope.onmessage = ({ data: msg }) => {
       );
       break;
     case "subscribe": {
-      const sub = connection?.subscribe(msg.method as TopicMethod, msg.params as never, {
-        data: (data) => scope.postMessage({ kind: "data", id: msg.id, data }),
-        error: (error) => scope.postMessage({ kind: "error", id: msg.id, error }),
+      const active = { count: 0 };
+      const sub = connection?.subscribe(msg.method, msg.params as never, {
+        data: (data) => scope.postMessage({ kind: "data", id: msg.id, count: active.count, data }),
+        error: (error) =>
+          scope.postMessage({ kind: "error", id: msg.id, count: active.count, error }),
       });
-      if (sub) subscriptions.set(msg.id, sub as Subscription<unknown>);
+      if (sub)
+        subscriptions.set(msg.id, Object.assign(active, { sub: sub as Subscription<unknown> }));
       break;
     }
-    case "update":
-      subscriptions.get(msg.id)?.update(msg.params);
+    case "update": {
+      const active = subscriptions.get(msg.id);
+      if (active) {
+        active.count = msg.count;
+        active.sub.update(msg.params);
+      }
       break;
+    }
     case "unsubscribe":
-      subscriptions.get(msg.id)?.close();
+      subscriptions.get(msg.id)?.sub.close();
       subscriptions.delete(msg.id);
       break;
     case "close":

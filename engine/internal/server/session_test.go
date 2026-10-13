@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 	"testing"
+
+	"github.com/jimeh/hukube/engine/internal/protocol"
 )
 
 // scriptedTopic is a topic whose computed values a test supplies one at a
@@ -14,10 +16,11 @@ import (
 type scriptedTopic struct {
 	ctx context.Context
 	// failNext, when set, makes the next start fail with it.
-	failNext error
-	starts   chan func()
-	entered  chan struct{}
-	values   chan scripted
+	failNext      error
+	starts        chan func()
+	startedParams chan json.RawMessage
+	entered       chan struct{}
+	values        chan scripted
 }
 
 type scripted struct {
@@ -27,18 +30,20 @@ type scripted struct {
 
 func newScriptedTopic(ctx context.Context) *scriptedTopic {
 	return &scriptedTopic{
-		ctx:     ctx,
-		starts:  make(chan func(), 4),
-		entered: make(chan struct{}),
-		values:  make(chan scripted),
+		ctx:           ctx,
+		starts:        make(chan func(), 4),
+		startedParams: make(chan json.RawMessage, 8),
+		entered:       make(chan struct{}),
+		values:        make(chan scripted),
 	}
 }
 
-func (st *scriptedTopic) start(_ context.Context, _ *Server, _ json.RawMessage, notify func()) (*liveValue, error) {
+func (st *scriptedTopic) start(_ context.Context, _ *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
 	if err := st.failNext; err != nil {
 		st.failNext = nil
 		return nil, err
 	}
+	st.startedParams <- raw
 	st.starts <- notify
 	return &liveValue{
 		compute: func() (any, error) {
@@ -74,10 +79,10 @@ func startSubscription(t *testing.T) *subscriptionHarness {
 	h := &subscriptionHarness{
 		t:     t,
 		sess:  &session{out: newOutbox()},
-		sub:   &subscription{cancel: cancel, params: make(chan json.RawMessage, 1)},
+		sub:   &subscription{cancel: cancel, params: make(chan subscriptionParams, 1)},
 		topic: newScriptedTopic(ctx),
 	}
-	h.sub.params <- json.RawMessage(`{}`)
+	h.sub.params <- subscriptionParams{params: json.RawMessage(`{}`)}
 	go h.sess.runSubscription(ctx, 1, h.topic.start, h.sub)
 	h.notify = <-h.topic.starts
 	<-h.topic.entered
@@ -96,7 +101,7 @@ func (h *subscriptionHarness) compute(v any, err error) {
 // waits for the restarted topic's first compute call.
 func (h *subscriptionHarness) restart(v any) {
 	h.topic.values <- scripted{v: v}
-	h.sub.params <- json.RawMessage(`{"restarted":true}`)
+	h.sub.params <- subscriptionParams{params: json.RawMessage(`{"restarted":true}`)}
 	h.notify = <-h.topic.starts
 	<-h.topic.entered
 }
@@ -182,8 +187,8 @@ func TestSubscriptionRecoversFromFailedStart(t *testing.T) {
 
 	h.topic.failNext = errors.New("cluster unknown")
 	h.topic.values <- scripted{v: "A"}
-	h.sub.params <- json.RawMessage(`{"fail":true}`)
-	h.sub.params <- json.RawMessage(`{"fail":false}`)
+	h.sub.params <- subscriptionParams{params: json.RawMessage(`{"fail":true}`)}
+	h.sub.params <- subscriptionParams{params: json.RawMessage(`{"fail":false}`)}
 	h.notify = <-h.topic.starts
 	<-h.topic.entered
 	h.expect("failed start", "error:cluster unknown")
@@ -200,4 +205,76 @@ func TestSubscriptionReportsUnencodableData(t *testing.T) {
 	h.expect("unencodable value", "error:encode data: json: unsupported type: func()")
 	h.compute("A", nil)
 	h.expect("value after the error", `data:"A"`)
+}
+
+// A computed value is allowed out after an update arrives. Withdrawing it
+// from the outbox could also withdraw the first answer to the new params.
+func TestSubscriptionRevisionWhileUpdateWaits(t *testing.T) {
+	h := startSubscription(t)
+	h.sess.subs = map[uint64]*subscription{1: h.sub}
+	h.sess.handle(context.Background(), protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeUpdate, Params: json.RawMessage(`{"key":"b"}`), Rev: 7})
+	h.topic.values <- scripted{v: "A"}
+	h.notify = <-h.topic.starts
+	<-h.topic.entered
+	messages := h.sess.out.take()
+	if len(messages) != 1 || messages[0].Type != protocol.ServerTypeData || messages[0].Rev != 0 {
+		t.Fatalf("computed value = %+v, want old revision 0", messages)
+	}
+	h.compute("A", nil)
+	messages = h.sess.out.take()
+	if len(messages) != 1 || messages[0].Type != protocol.ServerTypeData || messages[0].Rev != 7 {
+		t.Fatalf("first value after restart = %+v, want revision 7 even for identical data", messages)
+	}
+	h.compute(nil, errors.New("watch failed"))
+	messages = h.sess.out.take()
+	if len(messages) != 1 || messages[0].Type != protocol.ServerTypeError || messages[0].Rev != 7 {
+		t.Fatalf("compute error = %+v, want revision 7", messages)
+	}
+}
+
+func TestSubscriptionRevisionCoalescesPendingUpdates(t *testing.T) {
+	h := startSubscription(t)
+	h.sess.subs = map[uint64]*subscription{1: h.sub}
+	// The first compute is blocked, so neither update can have been read.
+	for _, rev := range []uint64{1, 2} {
+		h.sess.handle(context.Background(), protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeUpdate, Params: params(rev), Rev: rev})
+	}
+	h.topic.values <- scripted{v: "A"}
+	h.notify = <-h.topic.starts
+	<-h.topic.entered
+	// A restart's compute has now begun. Only the latest params were started.
+	<-h.topic.startedParams // initial params
+	if got := <-h.topic.startedParams; string(got) != "2" {
+		t.Fatalf("started params %s, want 2", got)
+	}
+	h.compute("B", nil)
+	messages := h.sess.out.take()
+	if len(messages) != 1 || messages[0].Rev != 2 {
+		t.Fatalf("messages = %+v, want only revision 2", messages)
+	}
+	select {
+	case <-h.topic.starts:
+		t.Fatal("started an extra topic")
+	default:
+	}
+}
+
+func TestSubscriptionRevisionOnFailedStart(t *testing.T) {
+	h := startSubscription(t)
+	h.topic.failNext = errors.New("cluster unknown")
+	h.sub.params <- subscriptionParams{params: json.RawMessage(`{"fail":true}`), rev: 3}
+	h.topic.values <- scripted{v: "A"}
+	// This send waits until the failed start's params have been read.
+	h.sub.params <- subscriptionParams{params: json.RawMessage(`{"fail":false}`), rev: 4}
+	h.notify = <-h.topic.starts
+	<-h.topic.entered
+	messages := h.sess.out.take()
+	if len(messages) != 1 || messages[0].Type != protocol.ServerTypeError || messages[0].Rev != 3 {
+		t.Fatalf("failed start = %+v, want error with revision 3", messages)
+	}
+	h.compute("A", nil)
+	messages = h.sess.out.take()
+	if len(messages) != 1 || messages[0].Rev != 4 {
+		t.Fatalf("recovered start = %+v, want revision 4", messages)
+	}
 }

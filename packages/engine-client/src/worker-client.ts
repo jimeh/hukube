@@ -6,7 +6,7 @@ import {
   type Subscription,
   type SubscriptionListener,
 } from "./client.ts";
-import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.ts";
+import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.gen.ts";
 import type { ErrorDetail } from "./protocol.gen.ts";
 import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
@@ -19,7 +19,10 @@ export class WorkerEngineClient implements EngineClient {
   #state: ConnectionState = "connecting";
   #nextId = 1;
   readonly #pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
-  readonly #listeners = new Map<number, SubscriptionListener<unknown>>();
+  readonly #listeners = new Map<
+    number,
+    { listener: SubscriptionListener<unknown>; count: number }
+  >();
   readonly #stateListeners = new Set<() => void>();
 
   constructor(endpoint: EngineEndpoint) {
@@ -48,11 +51,14 @@ export class WorkerEngineClient implements EngineClient {
     listener: SubscriptionListener<Topics[M]["data"]>,
   ): Subscription<Topics[M]["params"]> {
     const id = this.#nextId++;
-    this.#listeners.set(id, listener as SubscriptionListener<unknown>);
+    const active = { listener: listener as SubscriptionListener<unknown>, count: 0 };
+    this.#listeners.set(id, active);
     this.#post({ kind: "subscribe", id, method, params });
     return {
       update: (next) => {
-        if (this.#listeners.has(id)) this.#post({ kind: "update", id, params: next });
+        if (!this.#listeners.has(id)) return;
+        active.count++;
+        this.#post({ kind: "update", id, count: active.count, params: next });
       },
       close: () => {
         if (this.#listeners.delete(id)) this.#post({ kind: "unsubscribe", id });
@@ -93,12 +99,16 @@ export class WorkerEngineClient implements EngineClient {
           );
         break;
       }
-      case "data":
-        this.#listeners.get(msg.id)?.data(msg.data);
+      case "data": {
+        const active = this.#listeners.get(msg.id);
+        if (active?.count === msg.count) active.listener.data(msg.data);
         break;
-      case "error":
-        this.#listeners.get(msg.id)?.error?.(msg.error);
+      }
+      case "error": {
+        const active = this.#listeners.get(msg.id);
+        if (active?.count === msg.count) active.listener.error?.(msg.error);
         break;
+      }
     }
   }
 

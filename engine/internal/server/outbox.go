@@ -44,9 +44,9 @@ func (o *outbox) latest(msg protocol.ServerMessage) {
 
 // error queues an error for a request or subscription. It discards data still
 // pending for the same subscription, which is older than the error.
-func (o *outbox) error(id uint64, err error) {
+func (o *outbox) error(id, rev uint64, err error) {
 	o.drop(id)
-	o.push(protocol.ServerMessage{ID: id, Type: protocol.ServerTypeError, Error: toProtocolError(err)})
+	o.push(protocol.ServerMessage{ID: id, Rev: rev, Type: protocol.ServerTypeError, Error: toProtocolError(err)})
 }
 
 // drop discards pending data for a subscription.

@@ -6,8 +6,9 @@ import {
   type Subscription,
   type SubscriptionListener,
 } from "./client.ts";
-import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.ts";
+import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.gen.ts";
 import {
+  Hash,
   Subprotocol,
   TokenSubprotocolPrefix,
   type ClientMessage,
@@ -29,9 +30,12 @@ export interface ConnectionOptions extends EngineEndpoint {
   createSocket?: SocketFactory;
   /** Delays before successive reconnection attempts; the last one repeats. */
   retryDelaysMs?: number[];
+  /** Maximum wait for the Engine's first hello message. */
+  helloTimeoutMs?: number;
 }
 
 interface ActiveSubscription {
+  rev: number;
   method: TopicMethod;
   params: unknown;
   listener: SubscriptionListener<unknown>;
@@ -54,11 +58,13 @@ export class EngineConnection implements EngineClient {
   readonly #protocols: string[];
   readonly #createSocket: SocketFactory;
   readonly #retryDelays: number[];
+  readonly #helloTimeoutMs: number;
 
   #socket: SocketLike | undefined;
   #state: ConnectionState = "connecting";
   #attempt = 0;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #helloTimer: ReturnType<typeof setTimeout> | undefined;
   #nextId = 1;
   readonly #pending = new Map<number, PendingRequest>();
   readonly #subscriptions = new Map<number, ActiveSubscription>();
@@ -70,6 +76,7 @@ export class EngineConnection implements EngineClient {
     this.#createSocket =
       options.createSocket ?? ((url, protocols) => new WebSocket(url, protocols));
     this.#retryDelays = options.retryDelaysMs ?? defaultRetryDelays;
+    this.#helloTimeoutMs = options.helloTimeoutMs ?? 5000;
     this.#connect();
   }
 
@@ -96,19 +103,21 @@ export class EngineConnection implements EngineClient {
   ): Subscription<Topics[M]["params"]> {
     const id = this.#nextId++;
     const sub: ActiveSubscription = {
+      rev: 0,
       method,
       params,
       listener: listener as SubscriptionListener<unknown>,
     };
     this.#subscriptions.set(id, sub);
     if (this.#state === "open") {
-      this.#send({ id, type: "subscribe", method, params });
+      this.#send({ id, type: "subscribe", method, params, rev: sub.rev });
     }
     return {
       update: (next) => {
         if (!this.#subscriptions.has(id)) return;
         sub.params = next;
-        if (this.#state === "open") this.#send({ id, type: "update", params: next });
+        sub.rev++;
+        if (this.#state === "open") this.#send({ id, type: "update", params: next, rev: sub.rev });
       },
       close: () => {
         if (!this.#subscriptions.delete(id)) return;
@@ -128,6 +137,7 @@ export class EngineConnection implements EngineClient {
 
   close(): void {
     clearTimeout(this.#retryTimer);
+    clearTimeout(this.#helloTimer);
     const socket = this.#socket;
     this.#socket = undefined;
     socket?.close();
@@ -136,24 +146,48 @@ export class EngineConnection implements EngineClient {
   }
 
   #connect(): void {
+    if (this.#state === "outdated" || this.#state === "closed") return;
     const socket = this.#createSocket(this.#url, this.#protocols);
     this.#socket = socket;
+    let verified = false;
     socket.onopen = () => {
       if (this.#socket !== socket) return;
-      this.#attempt = 0;
-      this.#setState("open");
-      for (const [id, sub] of this.#subscriptions) {
-        this.#send({ id, type: "subscribe", method: sub.method, params: sub.params });
-      }
+      this.#helloTimer = setTimeout(() => this.#outdated(undefined), this.#helloTimeoutMs);
     };
     socket.onmessage = (event) => {
-      if (this.#socket === socket && typeof event.data === "string") {
+      if (this.#socket !== socket) return;
+      if (!verified) {
+        let msg: ServerMessage | undefined;
+        try {
+          if (typeof event.data === "string") msg = JSON.parse(event.data) as ServerMessage;
+        } catch {
+          // An Engine without this protocol cannot be used.
+        }
+        if (msg?.type !== "hello" || msg.hello?.protocol !== Hash) {
+          this.#outdated(msg?.hello?.protocol);
+          return;
+        }
+        verified = true;
+        clearTimeout(this.#helloTimer);
+        this.#attempt = 0;
+        this.#setState("open");
+        for (const [id, sub] of this.#subscriptions) {
+          this.#send({
+            id,
+            type: "subscribe",
+            method: sub.method,
+            params: sub.params,
+            rev: sub.rev,
+          });
+        }
+      } else if (typeof event.data === "string") {
         this.#receive(JSON.parse(event.data) as ServerMessage);
       }
     };
     socket.onclose = () => {
       if (this.#socket !== socket) return;
       this.#socket = undefined;
+      clearTimeout(this.#helloTimer);
       this.#failPending();
       this.#setState("reconnecting");
       const delay =
@@ -161,6 +195,17 @@ export class EngineConnection implements EngineClient {
       this.#attempt++;
       this.#retryTimer = setTimeout(() => this.#connect(), delay);
     };
+  }
+
+  #outdated(protocol: string | undefined): void {
+    clearTimeout(this.#retryTimer);
+    clearTimeout(this.#helloTimer);
+    const socket = this.#socket;
+    this.#socket = undefined;
+    socket?.close();
+    this.#failPending();
+    console.warn("Engine protocol mismatch", { client: Hash, engine: protocol });
+    this.#setState("outdated");
   }
 
   #receive(msg: ServerMessage): void {
@@ -176,7 +221,7 @@ export class EngineConnection implements EngineClient {
     }
     // Data for a closed subscription can still be in flight; ignore it.
     const sub = this.#subscriptions.get(msg.id);
-    if (!sub) return;
+    if (!sub || (msg.rev ?? 0) !== sub.rev) return;
     if (msg.type === "error" && msg.error) {
       sub.listener.error?.(msg.error);
     } else if (msg.type === "data") {

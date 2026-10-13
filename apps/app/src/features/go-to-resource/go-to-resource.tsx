@@ -82,11 +82,11 @@ export function GoToResource({ active }: { active: boolean }) {
     parsed.kind === "ok" && parsed.text.trim()
       ? { text: parsed.text, ...(where ? { where } : {}) }
       : undefined;
-  const { data, error } = useSubscription(
+  const { data, error, stale } = useSubscription(
     "resources.find",
     shown && params ? { cluster, ...params, limit: resourceLimit } : undefined,
   );
-  const items = params ? resourceItems(data, params) : [];
+  const items = params ? resourceItems(data, stale) : [];
   const typeMatches =
     parsed.kind === "ok" && !parsed.scope.types && !parsed.scope.namespace
       ? matchingTypes(typeList, parsed.text, typeLimit)
