@@ -342,7 +342,7 @@ ADR-0019 records this.
   success.
 - The UI therefore never reports an apply or a delete as failed after
   `disconnected`. It says the outcome is unknown, waits for the connection,
-  and sends the same request again.
+  and sends the same request again while its edit or confirmation still exists.
 
 One case answers imprecisely: when admission rewrote a value the edit set,
 the repeat sees that value as changed on the Cluster and fails with
@@ -373,7 +373,10 @@ answer. The Worker boundary gains a `cancel` message.
 | a cancelled context                                           | `cancelled`   |
 
 `Reason` and `Causes` come from the API server's `Status`, and `Message` is
-its message. The Worker forwards the whole `ErrorDetail` for a failed
+its readable message. Long quoted Resource payloads are stripped from causes.
+Strict decoding errors name each unknown or duplicate field separately; wrong
+types keep the server-named field and expected type. Rewritten causes rebuild
+Message, and every message is capped at 1,000 characters. The Worker forwards the whole `ErrorDetail` for a failed
 request, and `EngineRequestError` exposes `reason` and `causes`.
 
 Existing UI code branches only on `forbidden`, so the wider mapping changes
@@ -450,6 +453,7 @@ precondition.
 | Apply, Back to editing | The review's footer                                                      | Dialog convention.                                                                                                |
 | Delete                 | An icon button at the right end of the Resource tab's header             | Headlamp and Lens put delete at the top right of a Resource's header. It acts on the Resource, not on a Facet.    |
 | Unsaved mark           | A dot on the tab in place of its close icon, and on the YAML Facet's tab | VS Code's dirty tab.                                                                                              |
+| Applied                | A status pill over the top right of the editor area, without reflow      | Inline success feedback.                                                                                          |
 | Notices                | One strip between the switcher row and the editor                        | VS Code's banner for a file changed on disk.                                                                      |
 
 A Monaco diff editor shows the diff. It is side by side when it has 900 px
@@ -457,8 +461,9 @@ and inline below that, which is Monaco's own rule, with unchanged regions
 collapsed.
 
 No toast package is added. An apply's success shows as the dialog closing,
-the editor returning to the live Manifest, and "Applied" in the controls slot
-for 4 seconds, announced politely.
+the editor returning to the live Manifest, and a small check icon and "Applied"
+pill over its top right corner for 4 seconds, announced politely. The pill is
+absolutely positioned, so the Facet tabs and controls do not move.
 
 ### The YAML Facet
 
@@ -471,8 +476,16 @@ user can read it, when:
 - the Manifest has not arrived, or the Resource is deleted or not found;
 - `resource.access` says editing is not allowed. The tooltip is its reason.
 
+Enabled Edit and Review changes have no tooltip. Disabled controls show their
+reason on pointer hover and keyboard focus, with `aria-disabled` and guarded
+actions so the button remains focusable and receives pointer events.
+
 **Edit mode** starts when Edit is chosen:
 
+- Focus moves into the editor on the same content line, mapped by its YAML
+  field when server-set fields disappear. With no caret, or a hidden field,
+  it starts on the first line. Cancel, a confirmed discard, and a completed
+  apply that ends the edit return focus to Edit.
 - The base is the live Manifest at that moment. The text is its editable
   Manifest. The tab stops being a Preview Tab, so the next click in a list
   cannot replace it.
@@ -497,8 +510,16 @@ user can read it, when:
 | Unsaved edits, the Resource is deleted, or its UID changes | The text is not touched. The strip reads "ConfigMap web-config was deleted on the Cluster while you were editing. Your edits cannot be applied." (or "was replaced by a new ConfigMap of the same name"), with Copy YAML and Discard edits. Review changes is disabled. |
 
 The strip shows one notice, the first that applies of: deleted or replaced,
-the last review's refusal, a YAML error, changed on the Cluster, the editing
-hint.
+a pending apply, the last review's refusal, a YAML error, changed on the
+Cluster, the editing hint. A pending apply says "An apply of this edit was
+in flight when the connection to the Engine was lost. hukube checks the
+result when it reconnects."
+
+The strip is at most 8rem tall and scrolls beyond that; text wraps anywhere.
+The editing hint is neutral with an information icon. Cluster changes and a
+pending apply use the warning token and a warning icon. Refusals, YAML errors,
+and deleted or replaced Resources use the destructive token and an error icon.
+Text uses the foreground token to keep it readable in both themes.
 
 **Errors in the editor:**
 
@@ -539,23 +560,25 @@ The dialog is as wide as the window allows up to 72rem and as tall up to
 
 Focus starts on Back to editing, so Enter cannot apply by accident. Escape
 and Back to editing return to the editor with the text and its undo history
-as they were.
+as they were. All modal dialogs make the window content inert until the
+last modal closes, in addition to Base UI's focus guards.
 
-| State                          | The dialog shows                                                                                                                                      | Apply                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Checking                       | A skeleton where the diff will be. Status: "Checking with the Cluster…"                                                                               | Disabled                                       |
-| Ready                          | The diff and callouts. Status: "The Cluster accepts this edit."                                                                                       | "Apply"                                        |
-| Ready, with overlaps           | The same, with the overlap callout                                                                                                                    | "Overwrite and apply"                          |
-| Nothing to apply               | In place of the diff: "Nothing to apply", and either "Comments and formatting are not part of a Resource." or "The Cluster already has these values." | Hidden                                         |
-| Refused                        | "The Cluster refused this edit" with each cause, or "Not permitted" with the API server's message. The diff shows `Desired`.                          | Disabled                                       |
-| Dry run not supported          | A warning with the API server's message: the edit is validated only when it is applied                                                                | "Apply without a dry run"                      |
-| The review failed              | The message. Try again, except for `too_large` and `not_found`                                                                                        | Disabled                                       |
-| Applying                       | Status: "Applying…". The dialog cannot be dismissed                                                                                                   | Disabled                                       |
-| Changed while reviewing        | The apply failed with `conflict`. The review runs again, with "The Resource changed on the Cluster while you were reviewing. Nothing was applied."    | As the new review says                         |
-| Refused on apply               | As Refused, ending "Nothing was applied."                                                                                                             | Disabled until the text changes                |
-| The Cluster did not answer     | "The Cluster did not answer. The edit may or may not have been applied.", with Check again, which reviews again                                       | Disabled                                       |
-| Connection lost while applying | "Lost the connection to the Engine while applying. hukube checks the result when it reconnects.", with Close                                          | Disabled. The apply is sent again on reconnect |
-| Applied                        | The dialog closes when the live Manifest reaches the result's `resourceVersion`, or after 2 seconds                                                   |                                                |
+| State                          | The dialog shows                                                                                                                                                                               | Apply                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Checking                       | A skeleton where the diff will be. Status: "Checking with the Cluster…"                                                                                                                        | Disabled                                       |
+| Not connected                  | "Reconnecting to the Engine…"; the existing review is kept. A raced unsent apply says "Not connected to the Engine. Nothing was sent."                                                         | All Apply labels disabled until connected      |
+| Ready                          | The diff and callouts. Status: "The Cluster accepts this edit."                                                                                                                                | "Apply"                                        |
+| Ready, with overlaps           | The same, with the overlap callout                                                                                                                                                             | "Overwrite and apply"                          |
+| Nothing to apply               | In place of the diff: "Nothing to apply", and either "Comments and formatting are not part of a Resource." or "The Cluster already has these values."                                          | Hidden                                         |
+| Refused                        | "The Cluster refused this edit" with each cause, "This edit cannot be applied" when there is no API server reason, or "Not permitted" with the API server's message. The diff shows `Desired`. | Disabled                                       |
+| Dry run not supported          | A warning with the API server's message: the edit is validated only when it is applied                                                                                                         | "Apply without a dry run"                      |
+| The review failed              | The message. Try again, except for `too_large` and `not_found`                                                                                                                                 | Disabled                                       |
+| Applying                       | Status: "Applying…". The dialog cannot be dismissed                                                                                                                                            | Disabled                                       |
+| Changed while reviewing        | The apply failed with `conflict`. The review runs again, with "The Resource changed on the Cluster while you were reviewing. Nothing was applied."                                             | As the new review says                         |
+| Refused on apply               | As Refused, ending "Nothing was applied."                                                                                                                                                      | Disabled until the text changes                |
+| The Cluster did not answer     | "The Cluster did not answer. The edit may or may not have been applied.", with Check again, which reviews again                                                                                | Disabled                                       |
+| Connection lost while applying | "Lost the connection to the Engine while applying. hukube checks the result when it reconnects.", with Close                                                                                   | Disabled. The apply is sent again on reconnect |
+| Applied                        | The dialog closes when the live Manifest reaches the result's `resourceVersion`, or after 2 seconds                                                                                            |                                                |
 
 While the review is open and not applying, a change of the live editable
 Manifest from the review's `Before` runs the review again after 300 ms. The
@@ -568,16 +591,17 @@ After an apply, Edit mode ends and the editor shows the live Manifest.
 
 ### Unsaved edits and the Workspace
 
-| Event                                              | What happens                                                                                                                              |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Edit is chosen in a Preview Tab                    | The tab becomes a regular tab.                                                                                                            |
-| Another Facet is chosen                            | The edit is kept. The YAML Facet stays mounted, and its tab shows the dot.                                                                |
-| The tab is closed, by its button or a middle click | "Discard your edits to ConfigMap web-config?", with Keep editing (focused) and Discard edits.                                             |
-| The Cluster tab is closed or moved to a new window | "Discard unsaved edits in k3d-hukube-e2e?" with the number of Resources, Cancel, and Discard and close.                                   |
-| The window is closed or reloaded                   | The browser's own prompt, from `beforeunload`. The desktop Host shows a dialog with Cancel and Discard, from `will-prevent-unload`.       |
-| The Resource is deleted by someone else            | See the table above. Copy YAML keeps the work.                                                                                            |
-| The connection to the Engine is lost               | The edit is kept and can go on. Review changes is disabled with "Reconnecting to the Engine".                                             |
-| The window is out of date                          | The notice adds "N Resources have unsaved edits, which reloading discards." and Copy unsaved edits, which copies each as a YAML document. |
+| Event                                              | What happens                                                                                                                                                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edit is chosen in a Preview Tab                    | The tab becomes a regular tab.                                                                                                                                                                                               |
+| Another Facet is chosen                            | The edit is kept. The YAML Facet stays mounted, and its tab shows the dot.                                                                                                                                                   |
+| Ending an edit with an apply pending               | Discarding or unmounting stops checking its result and drops the captured request. The discard prompt says "An apply of these edits may already have reached the Cluster. Discarding stops hukube from checking the result." |
+| The tab is closed, by its button or a middle click | "Discard your edits to ConfigMap web-config?", with Keep editing (focused) and Discard edits.                                                                                                                                |
+| The Cluster tab is closed or moved to a new window | "Discard unsaved edits in k3d-hukube-e2e?" with the number of Resources, Cancel, and Discard and close.                                                                                                                      |
+| The window is closed or reloaded                   | The browser's own prompt, from `beforeunload`. The desktop Host shows a dialog with Cancel and Discard, from `will-prevent-unload`.                                                                                          |
+| The Resource is deleted by someone else            | See the table above. Copy YAML keeps the work.                                                                                                                                                                               |
+| The connection to the Engine is lost               | The edit is kept and can go on. Review changes is disabled with "Reconnecting to the Engine".                                                                                                                                |
+| The window is out of date                          | The notice adds "N Resources have unsaved edits, which reloading discards." and Copy unsaved edits, which copies each as a YAML document.                                                                                    |
 
 A small store holds which tabs have unsaved edits, their labels, and a way to
 read each text. The tab, the Cluster tabs, the window, and the out-of-date
@@ -599,10 +623,14 @@ The confirmation is an alert dialog. From the top:
      42 Resources." The count is the total of a Query for that Namespace;
    - a CustomResourceDefinition: "This deletes every Widget in the Cluster:
      3 Resources.";
-   - a Resource that owns others: "It owns 3 Resources: 1 ReplicaSet and
-     2 Pods.", with the dependents choice;
-   - a Resource already terminating: "It is already terminating and waits
-     for: `kubernetes.io/pvc-protection`."
+   - a Resource that owns others: "It owns 3 Resources: ReplicaSet (1) and
+     Pod (2).", with the dependents choice;
+   - a Resource with finalizers: "It has finalizers (a, b), so it stays
+     terminating until they are removed.";
+   - one already terminating: "It is already terminating and waits for
+     finalizers: a, b. Removing them from metadata.finalizers in the YAML
+     Facet releases it." Without finalizers it waits for the Cluster to
+     finish deleting it.
 4. For a Pod, the Delete immediately checkbox and its warning.
 5. For a Namespace or a CustomResourceDefinition, a field: "Type the name to
    confirm". Delete is disabled until it matches, as GitHub does for a
@@ -610,18 +638,20 @@ The confirmation is an alert dialog. From the top:
 6. Cancel, focused first unless the name field is shown, and a destructive
    Delete.
 
-| State                          | The dialog shows                                                                                                                        |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Counting                       | A skeleton line for the count. Delete does not wait for it.                                                                             |
-| Deleting                       | "Deleting…" on the button. The dialog cannot be dismissed.                                                                              |
-| Deleted                        | The dialog closes. The tab shows `Terminating`, then `Deleted`, from the live Manifest.                                                 |
-| Not permitted                  | "Not permitted" with the API server's message.                                                                                          |
-| Replaced                       | "This ConfigMap was replaced by a new one of the same name. Nothing was deleted."                                                       |
-| The Cluster did not answer     | The message, with Try again.                                                                                                            |
-| Connection lost while deleting | "Lost the connection to the Engine while deleting. hukube checks the result when it reconnects." The delete is sent again on reconnect. |
+| State                          | The dialog shows                                                                                                                                                                               |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Counting                       | A skeleton line for the count. Delete does not wait for it.                                                                                                                                    |
+| Deleting                       | "Deleting…" on the button. The dialog cannot be dismissed.                                                                                                                                     |
+| Deleted                        | The dialog closes. The tab shows `Terminating`, then `Deleted`, from the live Manifest.                                                                                                        |
+| Not permitted                  | "Not permitted" with the API server's message.                                                                                                                                                 |
+| Replaced                       | "This ConfigMap was replaced by a new one of the same name. Nothing was deleted."                                                                                                              |
+| The Cluster did not answer     | The message, with Try again.                                                                                                                                                                   |
+| Connection lost while deleting | "Lost the connection to the Engine while deleting. The delete may or may not have reached the Cluster. hukube sends it again when it reconnects." Stop and close, or Escape, stops the resend. |
+| Not connected                  | "Reconnecting to the Engine…"; Delete is disabled. A raced unsent request says "Not connected to the Engine. Nothing was deleted."                                                             |
 
 A Resource with a `deletionTimestamp` shows a `Terminating` badge in the
-header, whose tooltip lists its finalizers. Delete stays available.
+header, whose tooltip says "Waiting for finalizers: a, b", or "Waiting for the Cluster
+to finish deleting it" when there are none. Delete stays available.
 
 ### Widths and themes
 
@@ -758,7 +788,7 @@ implementation:
 - Manifest values generate as TypeScript mappings of `unknown`, like
   `ResourceData.Object`. `request(method, params, { signal })` is the public
   cancellation API. `RequestErrorDetail` widens the protocol error with the
-  client-only `disconnected` code; Worker failures carry it in `error`.
+  client-only `not_connected` and `disconnected` codes; Worker failures carry it in `error`.
 - The pinned `json-patch/v5` version is `v5.9.11`, promoted from indirect to
   direct without adding or updating another dependency. Its patch builder
   preserves numbers as `json.Number`, but compares their literal encodings.
@@ -844,8 +874,7 @@ implementation:
 - A Namespace count failure says the count is unavailable, and Delete still
   does not wait. The dependents select displays the three user-facing
   labels rather than the protocol's propagation values. A disconnected
-  Delete confirmation can be dismissed; its repeat remains owned by the
-  Resource panel.
+  Delete confirmation can be dismissed; doing so ends its repeat.
 - The new samples are in `edit.yaml`, with their own `sample-edit` Namespace
   and a separate disposable `sample-delete` Namespace. The seed task named
   files explicitly, so it now includes `edit.yaml`. Existing sample
@@ -881,3 +910,41 @@ replacement UID, bypassed the close prompt and copy fallback, requested
 access before the Manifest, and removed S. Each failed at its intended assertion and was
 restored exactly. The parent still owns the two-browser, widths, and
 both-theme visual review described above.
+
+### Experience-review corrections
+
+- `not_connected` means the client sent nothing. `disconnected` means the
+  request was sent but its answer was lost. Both the connection and Worker
+  client refuse requests before an open connection. Apply and Delete are
+  disabled until it is open; raced unsent requests leave their review or
+  confirmation usable. An unsent retry of a previously in-flight write
+  retains the original unknown outcome instead of claiming nothing happened.
+- A pending apply belongs to its edit. Closing its dialog keeps checking,
+  while Cancel, Discard edits, closing its Tab, or unmounting its Facet ends
+  checking. A pending delete belongs to its confirmation; Stop and close
+  and Escape drop the repeated request. This cannot undo a write already sent.
+- The envtest API server reports a wrong type on `patch`, quoting the whole
+  Resource, followed by `json: cannot unmarshal string into Go struct field
+DeploymentSpec.spec.replicas of type int32`. The shared mapper extracts
+  `spec.replicas: expected int32, got string`. It also splits strict decoding
+  problems into field causes and bounds every message without cutting UTF-8.
+- Base UI's correctly configured modal roots redirect their hidden Tab guards
+  on an animation frame. Rapid Tab presses can reach background controls
+  before that frame, since `aria-hidden` does not prevent keyboard focus.
+  Both shared dialog roots now keep `#root` inert with a reference count that
+  preserves its previous inert state. The real browser test records any
+  focus entering the background while cycling past every dialog control.
+- Monaco's `features/readOnlyMessage/register` loads the read-only contribution
+  and its message controller. Its `leaveEditorMessage` binding was already
+  removed in `lib/monaco.ts`, so it adds no active key binding. The browser
+  verifies the displayed message and the unchanged resolver allow-list.
+- Successful Copy YAML and Copy unsaved edits say "Copied" for two seconds,
+  announced politely. Resource counts use the singular at one. Finalizer
+  copy names both the wait and how an already terminating Resource is released.
+  Owned kinds use `Kind (count)`, matching the sidebar's kind-and-count pattern,
+  rather than guessing the English plural of a Cluster-supplied kind such as
+  Policy or Ingress. The surrounding Resource count still uses the singular
+  at one.
+- The success pill uses the foreground text and a success icon on the popover
+  token. Warning and error strips retain foreground text, with token-colored
+  backgrounds, borders, and icons, so the small text keeps its contrast.

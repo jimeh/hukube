@@ -117,7 +117,7 @@ export class EngineConnection implements EngineClient {
     }
     if (this.#state !== "open") {
       return Promise.reject(
-        new EngineRequestError({ code: "disconnected", message: "not connected to the Engine" }),
+        new EngineRequestError({ code: "not_connected", message: "not connected to the Engine" }),
       );
     }
     const id = this.#nextId++;

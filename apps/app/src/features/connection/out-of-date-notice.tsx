@@ -11,6 +11,12 @@ import { useHost } from "@/lib/host.tsx";
 
 /** Shows how to recover when the UI and Engine protocol definitions differ. */
 export function OutOfDateNotice() {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
   const [copyError, setCopyError] = useState<string>();
   const edits = useUnsavedEdits((state) => state.entries);
   const outdated = useConnectionState() === "outdated";
@@ -58,12 +64,15 @@ export function OutOfDateNotice() {
             <Button
               variant="outline"
               onClick={() =>
-                void copyText([...edits.values()].map((edit) => edit.read()).join("\n---\n")).catch(
-                  (error: unknown) => setCopyError(String(error)),
-                )
+                void copyText([...edits.values()].map((edit) => edit.read()).join("\n---\n"))
+                  .then(() => {
+                    setCopied(true);
+                    setCopyError(undefined);
+                  })
+                  .catch((error: unknown) => setCopyError(String(error)))
               }
             >
-              Copy unsaved edits
+              <span aria-live="polite">{copied ? "Copied" : "Copy unsaved edits"}</span>
             </Button>
           </>
         )}

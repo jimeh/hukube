@@ -73,8 +73,9 @@ export interface EngineEndpoint {
   token: string;
 }
 
+/** not_connected sent nothing; disconnected lost the answer to a sent request. */
 export type RequestErrorDetail = Omit<ErrorDetail, "code"> & {
-  code: ErrorDetail["code"] | "disconnected";
+  code: ErrorDetail["code"] | "not_connected" | "disconnected";
 };
 
 export class EngineRequestError extends Error {

@@ -165,3 +165,26 @@ it("carries cancellation from the main thread to the Engine", async () => {
   send({ kind: "cancel", id: 900 });
   expect(socket.sent).toHaveLength(2);
 });
+
+it("forwards not_connected before sending and disconnected after sending", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  const socket = FakeSocket.latest;
+  send({ kind: "request", id: 8, method: "clusters.list", params: undefined });
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenLastCalledWith({
+    kind: "failure",
+    id: 8,
+    error: expect.objectContaining({ code: "not_connected" }),
+  });
+  expect(socket.sent).toEqual([]);
+  socket.open();
+  send({ kind: "request", id: 9, method: "clusters.list", params: undefined });
+  expect(socket.sent).toHaveLength(1);
+  socket.close();
+  await Promise.resolve();
+  expect(scope.postMessage).toHaveBeenLastCalledWith({
+    kind: "failure",
+    id: 9,
+    error: expect.objectContaining({ code: "disconnected" }),
+  });
+});

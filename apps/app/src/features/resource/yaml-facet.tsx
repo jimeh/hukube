@@ -1,9 +1,17 @@
 import { Button } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
-import { EyeIcon, Search01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import {
+  EyeIcon,
+  Search01Icon,
+  Cancel01Icon,
+  InformationCircleIcon,
+  Alert02Icon,
+  CancelCircleIcon,
+  CheckmarkCircle02Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Skeleton } from "@hukube/ui/components/skeleton";
-import { lazy, Suspense, useMemo, useRef, useState, useEffect } from "react";
+import { lazy, Suspense, useMemo, useRef, useState, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 
 import { useEngine, useConnectionState } from "@hukube/engine-client/react";
@@ -42,6 +50,9 @@ export function YamlFacet({
 }: FacetProps) {
   const [showManagedFields, setShowManagedFields] = useState(false);
   const editor = useRef<YamlEditorHandle>(null);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const focusEdit = useRef(false);
+  const [copied, setCopied] = useState(false);
   const client = useEngine();
   const connection = useConnectionState();
   const [session, setSession] = useState<EditSession>();
@@ -57,16 +68,6 @@ export function YamlFacet({
     if (session) setSession(followManifest(session, live, deleted));
   }
   useEffect(() => {
-    if (!dirty || !session) {
-      useUnsavedEdits.getState().set(panelId);
-      return;
-    }
-    useUnsavedEdits
-      .getState()
-      .set(panelId, { cluster: address.cluster, label, read: () => session.text });
-    return () => useUnsavedEdits.getState().set(panelId);
-  }, [dirty, session, panelId, address.cluster, label]);
-  useEffect(() => {
     if (!applied) return;
     const timer = setTimeout(() => setApplied(false), 4000);
     return () => clearTimeout(timer);
@@ -76,11 +77,43 @@ export function YamlFacet({
     client,
     live,
     () => {
-      setSession((previous) => (previous?.text === submittedText.current ? undefined : previous));
+      setSession((previous) => {
+        if (previous?.text !== submittedText.current) return previous;
+        focusEdit.current = true;
+        return undefined;
+      });
       setApplied(true);
     },
     (refusal) => setSession((previous) => (previous ? { ...previous, refusal } : previous)),
   );
+  useEffect(() => {
+    if ((!dirty && !review.pending) || !session) {
+      useUnsavedEdits.getState().set(panelId);
+      return;
+    }
+    useUnsavedEdits.getState().set(panelId, {
+      cluster: address.cluster,
+      label,
+      read: () => session.text,
+      pendingApply: review.pending,
+    });
+    return () => useUnsavedEdits.getState().set(panelId);
+  }, [dirty, session, panelId, address.cluster, label, review.pending]);
+  const endReview = review.end;
+  const hadSession = useRef(false);
+  useLayoutEffect(() => {
+    if (hadSession.current && !session) endReview();
+    hadSession.current = !!session;
+    if (!session && focusEdit.current) {
+      focusEdit.current = false;
+      editButton.current?.focus();
+    }
+  }, [session, endReview]);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
   const [parsedText, setParsedText] = useState("");
   useEffect(() => {
     const timer = setTimeout(() => setParsedText(session?.text ?? ""), 200);
@@ -126,7 +159,12 @@ export function YamlFacet({
       manifest: current.object,
     });
   };
-  const cancel = () => guardResource(panelId, () => setSession(undefined));
+  const cancel = () =>
+    guardResource(panelId, () => {
+      review.end();
+      focusEdit.current = true;
+      setSession(undefined);
+    });
   const editReason =
     !live || deleted
       ? "The Manifest is not available."
@@ -146,6 +184,13 @@ export function YamlFacet({
     [sessionUid, baseText, live, deleted, label, kind],
   );
   const refusal = session?.refusal;
+  const yamlError = parsedText === session?.text && !!parsed.issues.length;
+  const noticeKind =
+    gone || (!review.pending && (refusal || yamlError))
+      ? "error"
+      : review.pending || notice
+        ? "warning"
+        : "neutral";
 
   const yaml = useMemo(
     () => (lastObject ? manifestYaml(lastObject, { managedFields: showManagedFields }) : undefined),
@@ -218,13 +263,12 @@ export function YamlFacet({
                   </TooltipTrigger>
                   <TooltipContent>Cancel changes</TooltipContent>
                 </Tooltip>
-                <Tooltip>
+                <Tooltip disabled={!reviewReason}>
                   <TooltipTrigger
                     render={
                       <Button
                         size="sm"
-                        disabled={!!reviewReason}
-                        focusableWhenDisabled
+                        aria-disabled={!!reviewReason}
                         onClick={reviewChanges}
                         aria-label="Review changes"
                         className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
@@ -234,25 +278,22 @@ export function YamlFacet({
                     <span className="@max-[26rem]/switcher:hidden">Review changes</span>
                     <span className="hidden @max-[26rem]/switcher:block">Review</span>
                   </TooltipTrigger>
-                  <TooltipContent>{reviewReason ?? "Review changes"}</TooltipContent>
+                  <TooltipContent>{reviewReason}</TooltipContent>
                 </Tooltip>
               </>
             ) : (
               <>
-                <output className="text-xs text-muted-foreground not-empty:px-2">
-                  {applied ? "Applied" : ""}
-                </output>
-                <Tooltip>
+                <Tooltip disabled={!editReason}>
                   <TooltipTrigger
                     render={
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={!!editReason}
-                        focusableWhenDisabled
+                        ref={editButton}
+                        aria-disabled={!!editReason}
                         className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
                         onClick={() => {
-                          if (live) {
+                          if (live && !editReason) {
                             setSession(startSession(live));
                             onEdit?.();
                           }
@@ -262,7 +303,7 @@ export function YamlFacet({
                   >
                     Edit
                   </TooltipTrigger>
-                  <TooltipContent>{editReason ?? "Edit"}</TooltipContent>
+                  <TooltipContent>{editReason}</TooltipContent>
                 </Tooltip>
               </>
             )}
@@ -274,16 +315,34 @@ export function YamlFacet({
       )}
       {session && (
         <div
-          className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs break-words"
+          data-notice={noticeKind}
+          className={`flex max-h-32 shrink-0 flex-wrap items-start gap-2 overflow-auto border-b px-3 py-2 text-xs [overflow-wrap:anywhere] ${noticeKind === "error" ? "border-destructive/30 bg-destructive/10" : noticeKind === "warning" ? "border-warning/30 bg-warning/10" : "bg-muted/40"}`}
           aria-live="polite"
         >
+          <HugeiconsIcon
+            icon={
+              noticeKind === "error"
+                ? CancelCircleIcon
+                : noticeKind === "warning"
+                  ? Alert02Icon
+                  : InformationCircleIcon
+            }
+            className={`size-4 shrink-0 ${noticeKind === "error" ? "text-destructive" : noticeKind === "warning" ? "text-warning" : "text-muted-foreground"}`}
+            aria-hidden="true"
+          />
           <div className="min-w-0 flex-1 basis-48">
             {gone ? (
               notice
+            ) : review.pending ? (
+              "An apply of this edit was in flight when the connection to the Engine was lost. hukube checks the result when it reconnects."
             ) : refusal ? (
               <>
                 <p className="font-medium">
-                  {refusal.code === "forbidden" ? "Not permitted" : "The Cluster refused this edit"}
+                  {refusal.code === "forbidden"
+                    ? "Not permitted"
+                    : refusal.reason
+                      ? "The Cluster refused this edit"
+                      : "This edit cannot be applied"}
                 </p>
                 {refusalLines(refusal)
                   .slice(0, 3)
@@ -307,10 +366,15 @@ export function YamlFacet({
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  void copyText(session.text).catch((error: unknown) => setCopyError(String(error)))
+                  void copyText(session.text)
+                    .then(() => {
+                      setCopied(true);
+                      setCopyError(undefined);
+                    })
+                    .catch((error: unknown) => setCopyError(String(error)))
                 }
               >
-                Copy YAML
+                <span aria-live="polite">{copied ? "Copied" : "Copy YAML"}</span>
               </Button>
               <Button variant="outline" size="sm" onClick={cancel}>
                 Discard edits
@@ -327,7 +391,17 @@ export function YamlFacet({
         namespace={address.namespace}
         onBack={() => editor.current?.focus()}
       />
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
+        {applied && (
+          <output className="pointer-events-none absolute top-2 right-3 z-10 flex items-center gap-1 rounded-full border border-success/30 bg-popover px-2 py-1 text-xs text-foreground shadow-sm">
+            <HugeiconsIcon
+              icon={CheckmarkCircle02Icon}
+              className="size-3.5 text-success"
+              aria-hidden="true"
+            />
+            Applied
+          </output>
+        )}
         {yaml !== undefined ? (
           <Suspense fallback={<EditorSkeleton />}>
             <YamlEditor

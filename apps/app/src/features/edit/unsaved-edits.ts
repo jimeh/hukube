@@ -3,6 +3,7 @@ export interface UnsavedEdit {
   cluster: string;
   label: string;
   read: () => string;
+  pendingApply?: boolean;
 }
 interface Guard {
   title: string;
@@ -30,6 +31,9 @@ export const useUnsavedEdits = create<UnsavedEdits>((set) => ({
   confirm: (guard) => set({ guard }),
   dismiss: () => set({ guard: undefined }),
 }));
+export const pendingApplyDescription =
+  "An apply of these edits may already have reached the Cluster. Discarding stops hukube from checking the result.";
+
 export function guardResource(id: string, proceed: () => void): void {
   const store = useUnsavedEdits.getState();
   const edit = store.entries.get(id);
@@ -39,6 +43,7 @@ export function guardResource(id: string, proceed: () => void): void {
   }
   store.confirm({
     title: `Discard your edits to ${edit.label}?`,
+    description: edit.pendingApply ? pendingApplyDescription : undefined,
     cancel: "Keep editing",
     discard: "Discard edits",
     proceed,
@@ -46,7 +51,8 @@ export function guardResource(id: string, proceed: () => void): void {
 }
 export function guardCluster(cluster: string, proceed: () => void): void {
   const store = useUnsavedEdits.getState();
-  const count = [...store.entries.values()].filter((edit) => edit.cluster === cluster).length;
+  const edits = [...store.entries.values()].filter((edit) => edit.cluster === cluster);
+  const count = edits.length;
   if (!count) {
     proceed();
     return;
@@ -54,7 +60,8 @@ export function guardCluster(cluster: string, proceed: () => void): void {
   store.confirm({
     title: `Discard unsaved edits in ${cluster}?`,
     description:
-      count === 1 ? "1 Resource has unsaved edits." : `${count} Resources have unsaved edits.`,
+      (count === 1 ? "1 Resource has unsaved edits." : `${count} Resources have unsaved edits.`) +
+      (edits.some((edit) => edit.pendingApply) ? ` ${pendingApplyDescription}` : ""),
     cancel: "Cancel",
     discard: "Discard and close",
     proceed,

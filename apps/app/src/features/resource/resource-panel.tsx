@@ -153,7 +153,9 @@ export function ResourcePanel({
               Terminating
             </TooltipTrigger>
             <TooltipContent>
-              {finalizers.length ? `Waiting for: ${finalizers.join(", ")}` : "Waiting for deletion"}
+              {finalizers.length
+                ? `Waiting for finalizers: ${finalizers.join(", ")}`
+                : "Waiting for the Cluster to finish deleting it"}
             </TooltipContent>
           </Tooltip>
         )}

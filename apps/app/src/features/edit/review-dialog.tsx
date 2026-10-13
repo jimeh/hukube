@@ -34,19 +34,27 @@ export function ReviewDialog({
   const empty = review && !review.edited.length && !review.refusal;
   const refusal = state?.phase === "refused" ? state.error : review?.refusal;
   const unsupported = state?.phase !== "refused" && !!review?.dryRunUnsupported;
-  const permitted = state?.phase === "ready" && review && !empty && (!refusal || unsupported);
+  const permitted =
+    controller.connection === "open" &&
+    state?.phase === "ready" &&
+    review &&
+    !empty &&
+    (!refusal || unsupported);
   const close = () => {
     if (busy) return;
     controller.close();
     onBack();
   };
-  const status = checking
-    ? "Checking with the Cluster…"
-    : state?.phase === "applying" || state?.phase === "applied"
-      ? "Applying…"
-      : permitted && !unsupported
-        ? "The Cluster accepts this edit."
-        : "";
+  const status =
+    controller.connection !== "open"
+      ? "Reconnecting to the Engine…"
+      : checking
+        ? "Checking with the Cluster…"
+        : state?.phase === "applying" || state?.phase === "applied"
+          ? "Applying…"
+          : permitted && !unsupported
+            ? "The Cluster accepts this edit."
+            : "";
   return (
     <Dialog
       open={controller.open}
@@ -69,7 +77,7 @@ export function ReviewDialog({
           {namespace && <DialogDescription>in {namespace}</DialogDescription>}
         </div>
         <div
-          className="flex max-h-[30%] shrink-0 flex-col gap-2 overflow-auto break-words text-sm"
+          className="flex max-h-[30%] shrink-0 flex-col gap-2 overflow-auto [overflow-wrap:anywhere] text-sm"
           aria-live="polite"
         >
           {state?.changed && (
@@ -80,7 +88,11 @@ export function ReviewDialog({
           {refusal && !unsupported && (
             <div className="text-destructive">
               <p className="font-semibold">
-                {refusal.code === "forbidden" ? "Not permitted" : "The Cluster refused this edit"}
+                {refusal.code === "forbidden"
+                  ? "Not permitted"
+                  : refusal.reason
+                    ? "The Cluster refused this edit"
+                    : "This edit cannot be applied"}
               </p>
               {refusalLines(refusal).map((line, i) => (
                 <p key={i}>{line}</p>
@@ -106,6 +118,9 @@ export function ReviewDialog({
                 </Button>
               )}
             </div>
+          )}
+          {state?.error?.code === "not_connected" && (
+            <p role="alert">Not connected to the Engine. Nothing was sent.</p>
           )}
           {state?.phase === "unavailable" && (
             <div role="alert">

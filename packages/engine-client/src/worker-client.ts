@@ -78,9 +78,9 @@ export class WorkerEngineClient implements EngineClient {
       return Promise.reject(
         new EngineRequestError({ code: "cancelled", message: "Request cancelled" }),
       );
-    if (this.#state === "closed")
+    if (this.#state !== "open")
       return Promise.reject(
-        new EngineRequestError({ code: "disconnected", message: "not connected to the Engine" }),
+        new EngineRequestError({ code: "not_connected", message: "not connected to the Engine" }),
       );
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {

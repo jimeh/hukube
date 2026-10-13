@@ -159,7 +159,8 @@ func TestEditReviewDefaultingAndRefusal(t *testing.T) {
 		modify      func(map[string]any)
 	}{
 		{"negative replicas", "spec.replicas", func(obj map[string]any) { obj["spec"].(map[string]any)["replicas"] = int64(-1) }},
-		{"unknown field", "patch", func(obj map[string]any) { obj["spec"].(map[string]any)["mystery"] = "unknown" }},
+		{"wrong type", "spec.replicas", func(obj map[string]any) { obj["spec"].(map[string]any)["replicas"] = "3 [" }},
+		{"unknown field", "spec.mystery", func(obj map[string]any) { obj["spec"].(map[string]any)["mystery"] = "unknown" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := resourceEdit(t, "deployments.apps", live, tt.modify)
@@ -169,6 +170,15 @@ func TestEditReviewDefaultingAndRefusal(t *testing.T) {
 			}
 			if r.Refusal == nil || r.Refusal.Code != protocol.ErrorCodeInvalid || !slices.ContainsFunc(r.Refusal.Causes, func(c protocol.ErrorCause) bool { return c.Field == tt.field }) {
 				t.Fatalf("refusal lost field: %+v", r.Refusal)
+			}
+			t.Logf("refusal: %+v causes: %+v", r.Refusal, r.Refusal.Causes)
+			if len(r.Refusal.Message) > 1000 {
+				t.Fatalf("unbounded message: %s", r.Refusal.Message)
+			}
+			for _, cause := range r.Refusal.Causes {
+				if len(cause.Message) > 200 {
+					t.Fatalf("unreadable cause: %s", cause.Message)
+				}
 			}
 			_, err = c.Apply(ctx, p)
 			expectCode(t, err, protocol.ErrorCodeInvalid)

@@ -1,5 +1,5 @@
 import type { DeleteParams, DeletePropagation, Related } from "@hukube/engine-client";
-import { useEngine, useSubscription } from "@hukube/engine-client/react";
+import { useEngine, useSubscription, useConnectionState } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
 import {
   AlertDialog,
@@ -41,6 +41,7 @@ export function DeleteDialog({
   related?: Related;
 }) {
   const client = useEngine();
+  const connection = useConnectionState();
   const immediateId = useId();
   const nameId = useId();
   const dependentsId = useId();
@@ -80,24 +81,30 @@ export function DeleteDialog({
   const send = useRef<() => Promise<void>>(async () => {});
   useLayoutEffect(() => {
     send.current = async () => {
-      if (!pending.current) return;
+      const params = pending.current;
+      if (!params) return;
+      const checkingPending = currentPhase.current === "disconnected";
       currentPhase.current = "deleting";
       setPhase("deleting");
       try {
-        await client.request("resource.delete", pending.current);
-        if (active.current) {
+        await client.request("resource.delete", params);
+        if (active.current && pending.current === params) {
           setPhase("ready");
           closeCallback.current();
         }
       } catch (failure) {
-        if (!active.current) return;
+        if (!active.current || pending.current !== params) return;
         const detail = requestError(failure);
+        if (detail.code === "not_connected" && checkingPending) {
+          setPhase("disconnected");
+          return;
+        }
         setError(detail);
         setPhase(detail.code === "disconnected" ? "disconnected" : "failed");
       }
     };
   }, [client]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     active.current = true;
     const unsubscribe = client.onStateChange(() => {
       if (client.getState() === "open" && currentPhase.current === "disconnected")
@@ -105,6 +112,7 @@ export function DeleteDialog({
     });
     return () => {
       active.current = false;
+      pending.current = undefined;
       unsubscribe();
     };
   }, [client]);
@@ -118,7 +126,10 @@ export function DeleteDialog({
   }, [phase, client]);
   if (open !== wasOpen) {
     setWasOpen(open);
-    if (open && phase !== "deleting" && phase !== "disconnected") {
+    if (!open) {
+      setPhase("ready");
+    }
+    if (open && phase !== "deleting") {
       setTargetUid(metadataString(object, "uid"));
       setConfirmation("");
       setImmediate(false);
@@ -136,12 +147,25 @@ export function DeleteDialog({
   const type = types.get(address.name);
   const meta = metadata(object);
   const finalizers = Array.isArray(meta["finalizers"]) ? meta["finalizers"].map(String) : [];
+  const close = () => {
+    if (currentPhase.current === "deleting") return;
+    pending.current = undefined;
+    currentPhase.current = "ready";
+    setPhase("ready");
+    onClose();
+  };
+  useLayoutEffect(() => {
+    if (!open) {
+      pending.current = undefined;
+      currentPhase.current = "ready";
+    }
+  }, [open]);
   const busy = phase === "deleting" || phase === "disconnected";
   return (
     <AlertDialog
       open={open}
       onOpenChange={(value) => {
-        if (!value && phase !== "deleting") onClose();
+        if (!value) close();
       }}
     >
       <AlertDialogContent
@@ -161,7 +185,8 @@ export function DeleteDialog({
         {namespace &&
           (count.data ? (
             <p>
-              This deletes every Resource in the Namespace: at least {count.data.total} Resources.
+              This deletes every Resource in the Namespace: at least {count.data.total}{" "}
+              {count.data.total === 1 ? "Resource" : "Resources"}.
             </p>
           ) : count.error ? (
             <p>The Resource count is unavailable.</p>
@@ -171,15 +196,13 @@ export function DeleteDialog({
         {crd && (
           <p>
             This deletes every {type?.kind ?? "Resource of this type"} in the Cluster:{" "}
-            {type?.count ?? 0} Resources.
+            {type?.count ?? 0} {type?.count === 1 ? "Resource" : "Resources"}.
           </p>
         )}
         {!!owned?.total && (
           <p>
-            It owns {owned.total} Resources:{" "}
-            {[...counts]
-              .map(([name, total]) => `${total} ${name}${total === 1 ? "" : "s"}`)
-              .join(" and ")}
+            It owns {owned.total} {owned.total === 1 ? "Resource" : "Resources"}:{" "}
+            {[...counts].map(([name, total]) => `${name} (${total})`).join(" and ")}
             {owned.truncated ? " (at least)" : ""}.
           </p>
         )}
@@ -208,12 +231,15 @@ export function DeleteDialog({
             </Select>
           </div>
         )}
-        {!!meta["deletionTimestamp"] && (
+        {finalizers.length ? (
           <p>
-            It is already terminating and waits for: {finalizers.join(", ") || "deletion to finish"}
-            .
+            {meta["deletionTimestamp"]
+              ? `It is already terminating and waits for finalizers: ${finalizers.join(", ")}. Removing them from metadata.finalizers in the YAML Facet releases it.`
+              : `It has finalizers (${finalizers.join(", ")}), so it stays terminating until they are removed.`}
           </p>
-        )}
+        ) : meta["deletionTimestamp"] ? (
+          <p>It is already terminating and waits for the Cluster to finish deleting it.</p>
+        ) : null}
         {address.type === "pods" && (
           <>
             <label htmlFor={immediateId} className="flex items-center gap-2">
@@ -246,8 +272,8 @@ export function DeleteDialog({
         )}
         {phase === "disconnected" && (
           <p role="alert">
-            Lost the connection to the Engine while deleting. hukube checks the result when it
-            reconnects.
+            Lost the connection to the Engine while deleting. The delete may or may not have reached
+            the Cluster. hukube sends it again when it reconnects.
           </p>
         )}
         {phase === "failed" && (
@@ -257,18 +283,22 @@ export function DeleteDialog({
                 ? "Not permitted"
                 : error?.code === "conflict"
                   ? `This ${kind} was replaced by a new one of the same name. Nothing was deleted.`
-                  : error?.message}
+                  : error?.code === "not_connected"
+                    ? "Not connected to the Engine. Nothing was deleted."
+                    : error?.message}
             </p>
             {error?.code === "forbidden" && <p>{error.message}</p>}
           </div>
         )}
+        {connection !== "open" && <output>Reconnecting to the Engine…</output>}
         <AlertDialogFooter>
-          <Button ref={cancel} variant="outline" disabled={phase === "deleting"} onClick={onClose}>
-            Cancel
+          <Button ref={cancel} variant="outline" disabled={phase === "deleting"} onClick={close}>
+            {phase === "disconnected" ? "Stop and close" : "Cancel"}
           </Button>
           <Button
             variant="destructive"
             disabled={
+              connection !== "open" ||
               busy ||
               ((namespace || crd) && confirmation !== address.name) ||
               (phase === "failed" && (error?.code === "forbidden" || error?.code === "conflict"))
