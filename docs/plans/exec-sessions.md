@@ -1,7 +1,8 @@
 # Plan: Exec Sessions
 
-Status: being built. The Windows and Linux rows of "Keys" await Jim's
-confirmation.
+Status: implemented, not merged yet. "What changed while building" lists
+where the result differs from the text below. The Windows and Linux rows of
+"Keys" await Jim's confirmation.
 
 ## Outcome
 
@@ -646,3 +647,87 @@ Cluster stopped mid-session, and a Tab restored after a reload.
 ## Unresolved questions
 
 1. Jim's confirmation of the four points under "Keys".
+
+## What changed while building
+
+### Engine and client
+
+- **A hang-up discards output.** A process that cannot write its output
+  never reads the end-of-transmission, so once a session's client is gone
+  the Engine stops holding output back and throws it away. Input that
+  arrives during a hang-up is dropped, not refused.
+- **The output bound is tighter.** A write waits while 1 MiB is queued or in
+  flight together, not 1 MiB queued on top of the window.
+- **Input acknowledgements coalesce.** Only the latest total matters, so one
+  that is still queued is replaced. A client that holds output back cannot
+  fill the queue by typing.
+- **An Engine that shuts down says so.** Its hang-up makes the shell exit
+  with code 0, which is not why the session ended. The stream ends with the
+  reason `EngineStopped`, and the Tab says "The Engine shut down, which ended
+  the session. Its shell was told to exit."
+- **Only the Cluster can say a Pod is gone.** The plan had the session check
+  the index. The index is empty while the Engine lists Pods, at its start and
+  whenever it lists them again, so a session started just after an Engine
+  restart was told its running Pod was gone. When the index has no entry the
+  session now reads the Pod from the Cluster. Using the app found this; no
+  test had.
+- **"Started after the session did" compares two clocks,** the Engine's and
+  the node's. A skew larger than a container's age at the session's start
+  can report exit code 137 as a stopped container, or the reverse. Reading
+  the container's ID when the session starts would remove the clocks, at the
+  cost of a request per session. Not done.
+
+### UI
+
+- **A session starts at its terminal's real size.** The store waits for the
+  terminal's first fit, for up to a second, before it opens the stream, and
+  later fits wait for 80 ms of quiet. The first build started every session
+  at 80 by 24 and resized it, and busybox's shell prints its prompt again on
+  a resize and drops what was typed until then.
+- **"Starting…" shows over the terminal,** not as a badge in the header. The
+  badge's coming and going rewrapped the header, which resized the terminal
+  just as its shell started. The header's other badges sit beside the Find
+  button, outside the part that wraps.
+- **A shell can still print its prompt twice.** A Cluster applies a
+  session's first size after the process has started, as a resize. A shell
+  that has already printed its prompt prints it again. `kubectl exec` shows
+  the same. The end-to-end tests type their first command again until its
+  output shows.
+- **A Pod that is gone before any output is a failure to start,** shown as
+  the notice "The Pod is gone", with "Try again" while the window still sees
+  the Pod. A missing container is "The session could not start", with the
+  Cluster's message.
+- **Copy is disabled in the context menu when nothing is selected.**
+- **The close guards kept their file,** `features/edit/unsaved-edits.ts`,
+  which now also guards sessions under the names `guardPanel` and
+  `guardWorkspace`. The file's name no longer says what it holds.
+- **Moving a Tab between Panes is not in the end-to-end test,** which has one
+  Pane. It was checked by dragging a live session's Tab to another Pane in
+  Chromium and WebKit: one stream, no new process, and the shell kept its
+  variables. The store's tests cover a panel that mounts again.
+
+## Measurements
+
+On an Apple silicon laptop against the k3d cluster:
+
+- A 1 MiB paste into a shell arrives whole in about 100 ms in Chromium and
+  WebKit, in frames of at most 32 KiB.
+- 20 MB of output through the Engine to a client that acknowledges at once
+  takes 0.6 seconds, with no gap.
+- A session whose Cluster connection is cut ends in 2.3 seconds, which is
+  the wait for the Pod's status.
+
+## Follow-ups
+
+- Jim's confirmation of the Windows and Linux keys.
+- Killing what a closed session left running, by tracking its process.
+- Choosing the command, and `powershell` for Windows containers.
+- Links in a session's output, once the app has a rule for external links.
+- A "Tab moves focus" switch, so the keyboard can leave a live terminal
+  without Go to Resource.
+- Starting a session from a list row.
+- Telling apart several sessions in one Pod from the tab strip: their Tabs
+  all carry the Pod's name.
+- Tabs of sessions that ended with a reload stay until they are closed.
+- A name for `features/edit/unsaved-edits.ts` that covers sessions.
+- A live check of the Windows and Linux keys in Firefox.
