@@ -1,0 +1,426 @@
+// @vitest-environment jsdom
+
+import type { Related, RelatedRow, ResourceType } from "@hukube/engine-client";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
+import type { FacetProps } from "./facet-props.ts";
+import { RelatedBadge, RelatedFacet, relatedTabName } from "./related-facet.tsx";
+
+const createdAt = new Date(Date.now() - 10_000).toISOString();
+const row: RelatedRow = {
+  depth: 0,
+  status: "found",
+  kind: "Pod",
+  type: "pods",
+  namespace: "shop",
+  name: "web",
+  createdAt,
+};
+const empty: Related = { found: true, sections: [], types: [], total: 0 };
+const populated: Related = {
+  ...empty,
+  total: 1,
+  sections: [{ relationship: "owns", direction: "out", total: 1, rows: [row] }],
+};
+const props: FacetProps = {
+  address: { cluster: "c", type: "deployments.apps", namespace: "shop", name: "web" },
+  kind: "Deployment",
+  manifest: { stale: false },
+  events: { stale: false },
+  related: { stale: false },
+  panelId: "source",
+  showing: true,
+  controls: null,
+};
+const workspace: WorkspaceValue = {
+  cluster: "c",
+  types: new Map(),
+  openResource: vi.fn<WorkspaceValue["openResource"]>(),
+  openList: vi.fn<WorkspaceValue["openList"]>(),
+};
+function panel(
+  related: FacetProps["related"],
+  overrides: Partial<FacetProps> = {},
+  types = workspace.types,
+) {
+  return (
+    <WorkspaceContext value={{ ...workspace, types }}>
+      <RelatedFacet {...props} {...overrides} related={related} />
+    </WorkspaceContext>
+  );
+}
+function show(
+  related: FacetProps["related"],
+  overrides: Partial<FacetProps> = {},
+  types = workspace.types,
+) {
+  return render(panel(related, overrides, types));
+}
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  vi.useRealTimers();
+});
+
+describe("Related states", () => {
+  it.each([
+    ["no value", undefined, undefined],
+    ["index before Manifest", { ...empty, found: false }, undefined],
+    ["index after Manifest", { ...empty, found: false }, { object: {} }],
+  ] as const)(
+    "shows busy heading and three two-line skeleton rows: %s",
+    (_name, data, manifest) => {
+      show({ stale: false, data }, { manifest: { stale: false, data: manifest } });
+      expect(screen.getByRole("treegrid").getAttribute("aria-busy")).toBe("true");
+      expect(screen.getAllByRole("row")).toHaveLength(4);
+      expect(screen.getAllByRole("gridcell")).toHaveLength(3);
+      expect(screen.getAllByRole("gridcell").every((cell) => cell.children.length === 2)).toBe(
+        true,
+      );
+    },
+  );
+  it("explains nothing related and includes forbidden Resource Types", () => {
+    const types = new Map([
+      ["constructor", { state: "forbidden" } as ResourceType],
+      ["pods", { state: "ready" } as ResourceType],
+    ]);
+    show({ stale: false, data: empty }, {}, types);
+    expect(screen.getByText("Nothing related")).toBeDefined();
+    expect(
+      screen.getByText(
+        "No Resource owns this Deployment, and it owns none. Owners and owned Resources appear here as they change.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByText("Resources of 1 Resource Type your credentials cannot list are not shown."),
+    ).toBeDefined();
+  });
+  it("explains a deleted or never-found Resource and follows recreation", () => {
+    const view = show(
+      { stale: false, data: { ...empty, found: false } },
+      { manifest: { stale: false, data: { deleted: true } } },
+    );
+    expect(
+      screen.getByText(
+        "This Deployment does not exist right now. Related Resources appear here if it is created.",
+      ),
+    ).toBeDefined();
+    view.rerender(panel({ stale: false, data: populated }));
+    expect(screen.getByRole("row", { name: /Pod web/ })).toBeDefined();
+    expect(screen.queryByText("Nothing related")).toBeNull();
+  });
+  it("replaces held rows when permission is forbidden", () => {
+    show({ stale: true, data: populated, error: { code: "forbidden", message: "denied" } });
+    expect(screen.getByText("Not permitted")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Your credentials cannot list deployments.apps, so hukube cannot tell what this Deployment is related to.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("row")).toBeNull();
+  });
+  it("explains an error before any value", () => {
+    show({ stale: false, error: { code: "internal", message: "offline" } });
+    expect(screen.getByText("Related Resources unavailable")).toBeDefined();
+    expect(screen.getByText("offline hukube keeps trying.")).toBeDefined();
+  });
+  it.each([false, true])(
+    "keeps held sections during failures and reconnect, then clears the error (stale: %s)",
+    (stale) => {
+      const view = show({
+        stale,
+        data: populated,
+        error: { code: "internal", message: "offline" },
+      });
+      expect(screen.getByText("Related Resources may be out of date: offline")).toBeDefined();
+      expect(screen.getByRole("row", { name: /Pod web/ })).toBeDefined();
+      view.rerender(panel({ stale: true, data: populated }));
+      expect(screen.queryByText(/may be out of date/)).toBeNull();
+      expect(screen.getByRole("row", { name: /Pod web/ })).toBeDefined();
+    },
+  );
+  it.each([
+    ["missing", "Not found. No Pod with this name and UID exists."],
+    ["unserved", "This Cluster does not serve legacy.example/v1 Pod."],
+    ["forbidden", "Your credentials cannot list pods."],
+    ["failed", "The Cluster cannot list pods."],
+    ["syncing", "Loading pods…"],
+  ] as const)("explains an unresolved %s reference", (status, reason) => {
+    show({
+      stale: false,
+      data: {
+        ...populated,
+        sections: [
+          {
+            ...populated.sections[0]!,
+            rows: [{ ...row, status, apiVersion: "legacy.example/v1" }],
+          },
+        ],
+      },
+    });
+    expect(screen.getByText(reason)).toBeDefined();
+    expect(screen.getByTitle(reason).textContent).toBe(reason);
+  });
+  it("orders owners first, marks self, limits indentation, and explains omitted rows", () => {
+    const data: Related = {
+      ...populated,
+      total: 2902,
+      sections: [
+        {
+          ...populated.sections[0]!,
+          total: 2901,
+          truncated: true,
+          rows: [row, { ...row, depth: 9, status: "more", more: 2900 }],
+        },
+        {
+          relationship: "selects",
+          direction: "out",
+          total: 1,
+          rows: [{ ...row, name: "ignored" }],
+        },
+        {
+          relationship: "owns",
+          direction: "in",
+          total: 1,
+          truncated: true,
+          rows: [{ ...row, status: "self", depth: 1 }],
+        },
+      ],
+    };
+    const view = show({ stale: false, data });
+    expect(screen.getAllByRole("columnheader").map((element) => element.textContent)).toEqual([
+      "Owned by",
+      "Owns",
+    ]);
+    expect(screen.getByText("This Pod")).toBeDefined();
+    expect(screen.getByText("Not every owner is shown.")).toBeDefined();
+    expect(screen.getByText("2,900 more Pod Resources are not shown.")).toBeDefined();
+    expect(screen.getByText("2,901")).toBeDefined();
+    expect(screen.getByRole("row", { name: /2,900 more/ }).style.paddingLeft).toBe("140px");
+    expect(screen.getByRole("row", { name: /This Pod/ }).getAttribute("aria-level")).toBe("2");
+    expect(screen.queryByText("ignored")).toBeNull();
+    view.rerender(
+      panel({
+        stale: false,
+        data: {
+          ...populated,
+          sections: [{ ...populated.sections[0]!, rows: [{ ...row, status: "more", more: 1 }] }],
+        },
+      }),
+    );
+    expect(screen.getByText("1 more Pod Resource is not shown.")).toBeDefined();
+  });
+  it("renders hostile type keys, names, and columns as text, skipping cells without values", () => {
+    const hostile = "<script>text</script>";
+    const data: Related = {
+      ...populated,
+      types: [
+        {
+          type: "__proto__",
+          columns: ["constructor", "toString", "Name", "empty", "none", "missing", "null"].map(
+            (name) => ({ name, type: "string", priority: 0 }),
+          ),
+        },
+      ],
+      sections: [
+        {
+          ...populated.sections[0]!,
+          rows: [
+            {
+              ...row,
+              type: "__proto__",
+              kind: "constructor",
+              name: hostile,
+              namespace: "other",
+              cells: [0, false, hostile, "", "<none>", undefined, null],
+            },
+          ],
+        },
+      ],
+    };
+    const { container } = show({ stale: false, data });
+    expect(screen.getByTitle(hostile).textContent).toBe(hostile);
+    const line = screen.getByTitle(/other · .* · constructor 0 · toString false · Name/);
+    expect(line.textContent).toMatch(
+      /^other · \d+s · constructor 0 · toString false · Name <script>text<\/script>$/,
+    );
+    expect(container.querySelector("script")).toBeNull();
+  });
+  it("advances the age of retained rows with the shared clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(createdAt).getTime() + 10_000);
+    show({ stale: true, data: populated });
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(screen.getByTitle("11s").textContent).toBe("11s");
+    await act(async () => vi.advanceTimersByTime(10_000));
+    expect(screen.getByTitle("21s").textContent).toBe("21s");
+  });
+});
+
+describe("Related badge", () => {
+  it.each([
+    [1, "1", "Related, 1 Resource"],
+    [12, "12", "Related, 12 Resources"],
+    [1234, "999+", "Related, 1234 Resources"],
+  ] as const)(
+    "names and caps the full total %s, including during an error",
+    (total, text, name) => {
+      const related: FacetProps["related"] = {
+        stale: true,
+        data: { ...populated, total: total },
+        error: { code: "internal", message: "offline" },
+      };
+      render(
+        <button aria-label={relatedTabName({ ...props, related })}>
+          <RelatedBadge {...props} related={related} />
+        </button>,
+      );
+      expect(screen.getByRole("button", { name: name })).toBeDefined();
+      expect(screen.getByText(text).getAttribute("aria-hidden")).toBe("true");
+    },
+  );
+  it.each([
+    { stale: false },
+    { stale: false, data: { ...populated, found: false } },
+    { stale: false, data: empty },
+    { stale: false, data: populated, error: { code: "forbidden" as const, message: "denied" } },
+  ])("hides the count when unavailable, not found, empty, or forbidden: %j", (related) => {
+    const { container } = render(<RelatedBadge {...props} related={related} />);
+    expect(container.childElementCount).toBe(0);
+    expect(relatedTabName({ ...props, related })).toBe("Related");
+  });
+});
+
+describe("Related navigation", () => {
+  it("opens click, double-click, Enter, and Space in the source Pane", () => {
+    show({ stale: false, data: populated });
+    const resource = screen.getByRole("row", { name: /Pod web/ });
+    const expected = { type: "pods", namespace: "shop", name: "web" };
+    fireEvent.click(resource, { detail: 1 });
+    expect(workspace.openResource).toHaveBeenLastCalledWith(expected, {
+      preview: true,
+      pane: "source",
+    });
+    fireEvent.click(resource, { detail: 2 });
+    expect(workspace.openResource).toHaveBeenLastCalledWith(expected, {
+      preview: false,
+      pane: "source",
+    });
+    const grid = screen.getByRole("treegrid");
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(workspace.openResource).toHaveBeenLastCalledWith(expected, {
+      preview: false,
+      pane: "source",
+    });
+    fireEvent.keyDown(grid, { key: " " });
+    expect(workspace.openResource).toHaveBeenLastCalledWith(expected, {
+      preview: true,
+      pane: "source",
+    });
+    expect(workspace.openResource).toHaveBeenCalledTimes(4);
+    expect(grid.tabIndex).toBe(0);
+  });
+  it("makes a regular tab of what a double-click's first click opened, in whichever Facet gets the second", () => {
+    show({ stale: false, data: populated });
+    fireEvent.click(screen.getByRole("row", { name: /Pod web/ }), { detail: 1 });
+    cleanup();
+    // The Preview Tab replaced the clicked content, so another row is under the pointer now.
+    const other = { ...row, kind: "Deployment", type: "deployments.apps", name: "owner" };
+    show(
+      {
+        stale: false,
+        data: { ...populated, sections: [{ ...populated.sections[0]!, rows: [other] }] },
+      },
+      { panelId: "opened" },
+    );
+    const landed = screen.getByRole("row", { name: /Deployment owner/ });
+    fireEvent.click(landed, { detail: 2 });
+    expect(workspace.openResource).toHaveBeenCalledTimes(2);
+    expect(workspace.openResource).toHaveBeenLastCalledWith(
+      { type: "pods", namespace: "shop", name: "web" },
+      { preview: false, pane: "opened" },
+    );
+    // Further clicks of the same burst open nothing, and neither does one with nothing before it.
+    fireEvent.click(landed, { detail: 3 });
+    fireEvent.click(landed, { detail: 2 });
+    expect(workspace.openResource).toHaveBeenCalledTimes(2);
+  });
+  it("skips non-openable rows with arrows and ignores their pointer actions", () => {
+    const rows: RelatedRow[] = [
+      "self",
+      "missing",
+      "unserved",
+      "forbidden",
+      "failed",
+      "syncing",
+      "more",
+    ].map((status, i) => ({
+      ...row,
+      name: `closed-${i}`,
+      status: status as RelatedRow["status"],
+      more: 1,
+    }));
+    show({
+      stale: false,
+      data: {
+        ...populated,
+        sections: [{ ...populated.sections[0]!, rows: [...rows, row, { ...row, name: "second" }] }],
+      },
+    });
+    for (const resource of screen.getAllByRole("row").slice(1, 8)) {
+      fireEvent.click(resource, { detail: 1 });
+      fireEvent.click(resource, { detail: 2 });
+    }
+    expect(workspace.openResource).not.toHaveBeenCalled();
+    const grid = screen.getByRole("treegrid");
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(screen.getByRole("row", { name: /Pod web/ }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(screen.getByRole("row", { name: /Pod second/ }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(screen.getByRole("row", { name: /Pod web/ }).getAttribute("aria-selected")).toBe("true");
+    expect(grid.getAttribute("aria-activedescendant")).toBe(
+      screen.getByRole("row", { name: /Pod web/ }).id,
+    );
+  });
+  it("retains selection when rows arrive above it and clears it when its path leaves", () => {
+    const view = show({ stale: false, data: populated });
+    const grid = screen.getByRole("treegrid");
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    const changed = (rows: RelatedRow[]) =>
+      panel({
+        stale: false,
+        data: { ...populated, sections: [{ ...populated.sections[0]!, rows }] },
+      });
+    view.rerender(changed([{ ...row, name: "new" }, row]));
+    expect(screen.getByRole("row", { name: /Pod web/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("row", { name: /Pod new/ }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    view.rerender(changed([{ ...row, name: "new" }]));
+    expect(screen.getByRole("row", { name: /Pod new/ }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(workspace.openResource).not.toHaveBeenCalled();
+  });
+  it("selects one path when the same Resource appears under two owners", () => {
+    const rows = [
+      { ...row, name: "owner-a" },
+      { ...row, depth: 1 },
+      { ...row, name: "owner-b" },
+      { ...row, depth: 1 },
+    ];
+    show({ stale: false, data: { ...populated, sections: [{ ...populated.sections[0]!, rows }] } });
+    const duplicates = screen.getAllByRole("row", { name: /Pod web/ });
+    fireEvent.click(duplicates[1]!);
+    expect(duplicates.map((element) => element.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "true",
+    ]);
+  });
+});

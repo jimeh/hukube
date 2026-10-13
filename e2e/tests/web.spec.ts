@@ -632,3 +632,60 @@ async function expectEventsLayout(panel: Locator): Promise<void> {
       noEmptyThirdLine: true,
     });
 }
+
+test("walks live ownership from a Deployment to its Pod and follows scale-up", async ({ page }) => {
+  kubectlCreate({
+    apiVersion: "apps/v1",
+    kind: "Deployment",
+    metadata: { name: "e2e-related", namespace },
+    spec: {
+      replicas: 1,
+      selector: { matchLabels: { app: "e2e-related" } },
+      template: {
+        metadata: { labels: { app: "e2e-related" } },
+        spec: { containers: [{ name: "app", image: "registry.invalid/e2e-related:1" }] },
+      },
+    },
+  });
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await page
+    .getByRole("complementary", { name: "Resource types" })
+    .getByRole("button", { name: /^Deployment \d+$/ })
+    .click();
+  const list = page.getByRole("tabpanel", { name: "deployments.apps", exact: true });
+  await list.getByRole("textbox", { name: "Filter by name" }).fill("e2e-related");
+  await list.getByRole("row", { name: new RegExp(`e2e-related ${namespace}`) }).dblclick();
+  const deployment = page.getByRole("tabpanel", { name: "e2e-related", exact: true });
+  await deployment.getByRole("tab", { name: /^Related/ }).click();
+  const tree = deployment.getByRole("treegrid", { name: "Related Resources" });
+  await expect(tree.getByRole("row", { name: /^ReplicaSet e2e-related/ })).toBeVisible();
+  const pods = tree.getByRole("row", { name: /^Pod e2e-related/ });
+  await expect(pods).toHaveCount(1);
+  const podName = await pods.first().locator("[title]").first().getAttribute("title");
+  expect(podName).toBeTruthy();
+  await pods.first().dblclick();
+  const pod = page.getByRole("tabpanel", { name: podName!, exact: true });
+  await expect(
+    page.getByRole("tab", { name: podName!, exact: true }).locator("span").first(),
+  ).toHaveCSS("font-style", "normal");
+  await expect(pod.getByRole("tab", { name: /^Related/ })).toHaveAttribute("aria-selected", "true");
+  const owners = pod.getByRole("treegrid", { name: "Related Resources" });
+  await expect(owners.getByRole("columnheader", { name: "Owned by", exact: true })).toBeVisible();
+  await expect(owners.getByRole("row", { name: /^Deployment e2e-related/ })).toBeVisible();
+  await expect(owners.getByRole("row", { name: /^ReplicaSet e2e-related/ })).toHaveAttribute(
+    "aria-level",
+    "2",
+  );
+  await expect(owners.getByRole("row", { name: /^This Pod e2e-related/ })).toHaveAttribute(
+    "aria-level",
+    "3",
+  );
+  await page.getByRole("tab", { name: "e2e-related", exact: true }).click();
+  await expect(deployment).toBeVisible();
+  kubectl("-n", namespace, "scale", "deployment", "e2e-related", "--replicas=2");
+  await expect(pods).toHaveCount(2);
+  await expect(
+    deployment.getByRole("tab", { name: "Related, 3 Resources", exact: true }),
+  ).toBeVisible();
+});
