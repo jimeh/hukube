@@ -2,8 +2,7 @@
 
 ADR-0004 gives each high-volume stream its own WebSocket and a bounded buffer
 in the Engine that drops data and sends a gap marker. This records how that
-socket works. Log Streams use it now, and it is shaped so that an Exec Session
-fits later without rework.
+socket works. Log Streams and Exec Sessions use it.
 
 A stream socket is `GET /ws/stream` with the subprotocol `hukube.stream.v1`.
 It passes the same Host, Origin, and token checks as the control socket, and
@@ -44,9 +43,10 @@ TCP backpressure cannot be the mechanism:
 ## A stream ends, a subscription does not
 
 The Engine's last message on a stream is `end`, with a reason: `complete`,
-`deleted`, or `error` with an error detail. It then closes the socket. A
-socket that closes without `end` was lost, and the client opens the stream
-again. An `end` is final, and the client does not reconnect.
+`deleted`, `stopped`, or `error` with an error detail. It then closes the
+socket. A socket that closes without `end` was lost, and the client opens the
+stream again if the stream can resume. An `end` is final, and the client does
+not reconnect.
 
 The control protocol gets no such message. A subscription is a view of
 current state: it answers again whenever the state changes, a Resource that
@@ -63,24 +63,39 @@ and the Cluster, because one Log Stream can hold dozens of requests to the
 API server. A Log Stream closes its socket while
 its Facet is hidden, so in practice the cap counts what is on screen.
 
-## How an Exec Session fits
+## How an Exec Session uses it
 
-Nothing below is built. It is here to show the socket does not need to change.
+This section was a sketch until Exec Sessions were built (ADR-0021,
+ADR-0022). The socket did not need to change shape, but two of the sketch's
+expectations did not hold against a real session, and it now records what was
+built. `docs/plans/exec-sessions.md` has the measurements.
 
-- **Input** is binary frames from the client on channel 0. Output is channels
-  1 and 2, as the Engine receives them from the Cluster.
+- **Input** is binary frames from the client on channel 0. Output is channel
+  1, because a session has a TTY and the container writes one stream.
 - **Resize** is a client text message. An **exit status** is a field of `end`
-  with the reason `complete`. Closing stdin is a client text message.
-- **Flow control toward the client** uses the same acknowledgements. A
-  terminal cannot lose bytes in the middle of an escape sequence, so an Exec
-  Session will stop reading the container's output while the window is
-  closed, which is what a slow terminal does to a process. That holds back
-  one process, not the Engine. The queue offers dropping, which Log Streams
-  use, and the gap marker stays available.
-- **Flow control toward the Engine** is TCP's: the Engine is the reader, and
-  a browser exposes `bufferedAmount` to a client that sends too fast.
+  with the reason `complete`. There is no message to close stdin: closing it
+  does not end a shell on a TTY.
+- **Output is held back, but not for long.** The Engine stops reading the
+  container's output while the client's window is full, which is what a slow
+  terminal does to a process. The sketch expected that to last as long as it
+  had to. It cannot: client-go's WebSocket executor reads the connection and
+  writes output on one goroutine, and ends the session when that goroutine
+  has not read for 61 seconds. So after 30 seconds without an acknowledgement
+  the Engine stops waiting and drops output, leaving a gap, until the client
+  acknowledges again.
+- **Input is acknowledged too.** The sketch left input to TCP, with the
+  Engine as the reader. But the client's acknowledgements of output arrive on
+  the same socket, so the Engine can never stop reading it, or a container
+  that is neither reading nor being read stops everything. The Engine
+  acknowledges input as it passes it to the Cluster, and the client sends at
+  most 256 KiB beyond that. The rest of a large paste waits in the Worker.
+- **A session's socket is not reopened.** A socket that closes without `end`
+  ends the session (ADR-0021).
+- **A stream can be a mutation.** A stream method that changes a Cluster is
+  registered so that a read-only Engine refuses it (ADR-0020).
 - **Data reaches the main thread** as transferred buffers, which a terminal
-  emulator takes as they are. A Log Stream's frames are parsed in the Worker
+  emulator takes as they are, and the acknowledgement waits until the
+  terminal has parsed them. A Log Stream's frames are parsed in the Worker
   instead, as ADR-0004 requires, and reach the main thread as lines.
 
 ## Considered Options
