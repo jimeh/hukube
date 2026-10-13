@@ -72,6 +72,8 @@ export class LogDocument {
   #multipleContainers = false;
   #timestamps = false;
   revision = 0;
+  /** Counts the times every row was formatted again, or dropped. */
+  rewrites = 0;
   constructor(
     readonly type: string,
     readonly name: string,
@@ -91,6 +93,7 @@ export class LogDocument {
     this.rows = [];
     this.#characters = 0;
     this.#decorations = 0;
+    this.rewrites++;
     this.#changed();
   }
   status(status: LogStreamStatus): void {
@@ -161,6 +164,7 @@ export class LogDocument {
     this.#characters = this.rows.reduce((sum, row) => sum + row.text.length + 1, 0);
     this.#decorations = this.rows.reduce((sum, row) => sum + row.spans.length, 0);
     this.#trim();
+    this.rewrites++;
     this.#changed();
   }
   #format(entry: Entry): LogRow {

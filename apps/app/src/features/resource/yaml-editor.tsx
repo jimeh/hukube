@@ -51,7 +51,8 @@ export default function YamlEditor({ value }: { value: string }) {
   }, [value]);
 
   useEffect(() => {
-    if (containerRef.current) applyEditorTheme(monaco, containerRef.current, theme === "dark");
+    if (containerRef.current)
+      return applyEditorTheme(monaco, containerRef.current, theme === "dark");
   }, [theme]);
 
   return <div ref={containerRef} className="h-full min-h-0" />;
