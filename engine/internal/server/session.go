@@ -38,7 +38,12 @@ type session struct {
 type subscription struct {
 	cancel context.CancelFunc
 	// params holds the latest unprocessed params; older ones are dropped.
-	params chan json.RawMessage
+	params chan subscriptionParams
+}
+
+type subscriptionParams struct {
+	params json.RawMessage
+	rev    uint64
 }
 
 func newSession(srv *Server, conn *websocket.Conn) *session {
@@ -49,6 +54,7 @@ func newSession(srv *Server, conn *websocket.Conn) *session {
 func (s *session) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s.out.push(protocol.ServerMessage{Type: protocol.ServerTypeHello, Hello: &protocol.Hello{Protocol: protocol.Hash}})
 	go s.writeLoop(ctx, cancel)
 
 	defer func() {
@@ -74,13 +80,13 @@ func (s *session) handle(ctx context.Context, msg protocol.ClientMessage) {
 	case protocol.ClientTypeRequest:
 		handler, ok := requests[msg.Method]
 		if !ok {
-			s.out.error(msg.ID, badRequest(fmt.Errorf("unknown request %q", msg.Method)))
+			s.out.error(msg.ID, 0, badRequest(fmt.Errorf("unknown request %q", msg.Method)))
 			return
 		}
 		go func() {
 			result, err := handler(ctx, s.srv, msg.Params)
 			if err != nil {
-				s.out.error(msg.ID, err)
+				s.out.error(msg.ID, 0, err)
 				return
 			}
 			s.out.push(protocol.ServerMessage{ID: msg.ID, Type: protocol.ServerTypeResult, Data: result})
@@ -89,16 +95,16 @@ func (s *session) handle(ctx context.Context, msg protocol.ClientMessage) {
 	case protocol.ClientTypeSubscribe:
 		t, ok := topics[msg.Method]
 		if !ok {
-			s.out.error(msg.ID, badRequest(fmt.Errorf("unknown topic %q", msg.Method)))
+			s.out.error(msg.ID, msg.Rev, badRequest(fmt.Errorf("unknown topic %q", msg.Method)))
 			return
 		}
 		if _, exists := s.subs[msg.ID]; exists {
-			s.out.error(msg.ID, badRequest(fmt.Errorf("subscription %d already exists", msg.ID)))
+			s.out.error(msg.ID, msg.Rev, badRequest(fmt.Errorf("subscription %d already exists", msg.ID)))
 			return
 		}
 		subCtx, cancel := context.WithCancel(ctx)
-		sub := &subscription{cancel: cancel, params: make(chan json.RawMessage, 1)}
-		sub.params <- msg.Params
+		sub := &subscription{cancel: cancel, params: make(chan subscriptionParams, 1)}
+		sub.params <- subscriptionParams{params: msg.Params, rev: msg.Rev}
 		s.subs[msg.ID] = sub
 		go s.runSubscription(subCtx, msg.ID, t, sub)
 
@@ -111,7 +117,7 @@ func (s *session) handle(ctx context.Context, msg protocol.ClientMessage) {
 		case <-sub.params:
 		default:
 		}
-		sub.params <- msg.Params
+		sub.params <- subscriptionParams{params: msg.Params, rev: msg.Rev}
 
 	case protocol.ClientTypeUnsubscribe:
 		if sub, ok := s.subs[msg.ID]; ok {
@@ -121,7 +127,7 @@ func (s *session) handle(ctx context.Context, msg protocol.ClientMessage) {
 		}
 
 	default:
-		s.out.error(msg.ID, badRequest(fmt.Errorf("unknown message type %q", msg.Type)))
+		s.out.error(msg.ID, 0, badRequest(fmt.Errorf("unknown message type %q", msg.Type)))
 	}
 }
 
@@ -147,11 +153,12 @@ func (s *session) runSubscription(ctx context.Context, id uint64, t topic, sub *
 	}()
 
 	var (
+		rev      uint64
 		lastEmit time.Time
 		lastSent json.RawMessage
 	)
 	fail := func(err error) {
-		s.out.error(id, err)
+		s.out.error(id, rev, err)
 		lastSent = nil
 	}
 	send := func(v any, err error) {
@@ -171,7 +178,7 @@ func (s *session) runSubscription(ctx context.Context, id uint64, t topic, sub *
 			return
 		}
 		lastSent = data
-		s.out.latest(protocol.ServerMessage{ID: id, Type: protocol.ServerTypeData, Data: json.RawMessage(data)})
+		s.out.latest(protocol.ServerMessage{ID: id, Rev: rev, Type: protocol.ServerTypeData, Data: json.RawMessage(data)})
 	}
 	emit := func() {
 		send(live.compute())
@@ -184,12 +191,13 @@ func (s *session) runSubscription(ctx context.Context, id uint64, t topic, sub *
 			return
 
 		case params := <-sub.params:
+			rev = params.rev
 			if live != nil {
 				live.stop()
 				live = nil
 			}
 			lastSent = nil
-			lv, err := t(ctx, s.srv, params, notify)
+			lv, err := t(ctx, s.srv, params.params, notify)
 			if err != nil {
 				fail(err)
 				continue

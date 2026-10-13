@@ -30,55 +30,82 @@ type liveValue struct {
 	stop    func()
 }
 
-var requests = map[protocol.Method]request{
-	protocol.MethodClustersList: func(_ context.Context, srv *Server, _ json.RawMessage) (any, error) {
-		return srv.cfg.Source.Clusters()
-	},
-	protocol.MethodSettingsPut: func(_ context.Context, srv *Server, raw json.RawMessage) (any, error) {
-		p, err := decode[protocol.Setting](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, srv.cfg.Settings.Put(p.Key, p.Value)
-	},
+var requests = map[protocol.Method]request{}
+var topics = map[protocol.Method]topic{}
+
+// live is the typed value a topic computes before registration erases its type.
+type live[D any] struct {
+	compute func() (D, bool, error)
+	stop    func()
 }
 
-var topics = map[protocol.Method]topic{
-	protocol.MethodClusterStatus: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
-		p, err := decode[protocol.ClusterParams](raw)
+func handleRequest[P, R any](method protocol.Request[P, R], handler func(context.Context, *Server, P) (R, error)) {
+	requests[method.Name] = func(ctx context.Context, srv *Server, raw json.RawMessage) (any, error) {
+		p, err := decode[P](raw)
 		if err != nil {
 			return nil, err
 		}
-		c, err := srv.cfg.Clusters.Get(p.Cluster)
+		result, err := handler(ctx, srv, p)
+		if _, ok := any(result).(protocol.None); ok {
+			return nil, err
+		}
+		return result, err
+	}
+}
+
+func handleTopic[P, D any](method protocol.Topic[P, D], handler func(context.Context, *Server, P, func()) (*live[D], error)) {
+	topics[method.Name] = func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
+		p, err := decode[P](raw)
+		if err != nil {
+			return nil, err
+		}
+		value, err := handler(ctx, srv, p, notify)
 		if err != nil {
 			return nil, err
 		}
 		return &liveValue{
-			compute: func() (any, error) { return c.Status(), nil },
+			compute: func() (any, error) {
+				data, ok, err := value.compute()
+				if !ok {
+					return nil, err
+				}
+				return data, err
+			},
+			stop: value.stop,
+		}, nil
+	}
+}
+
+func init() {
+	handleRequest(protocol.RequestClustersList, func(_ context.Context, srv *Server, _ protocol.None) ([]protocol.Cluster, error) {
+		return srv.cfg.Source.Clusters()
+	})
+	handleRequest(protocol.RequestSettingsPut, func(_ context.Context, srv *Server, p protocol.Setting) (protocol.None, error) {
+		return protocol.None{}, srv.cfg.Settings.Put(p.Key, p.Value)
+	})
+	handleTopic(protocol.TopicClusterStatus, func(ctx context.Context, srv *Server, p protocol.ClusterParams, notify func()) (*live[protocol.ClusterStatus], error) {
+		c, err := srv.cfg.Clusters.Get(p.Cluster)
+		if err != nil {
+			return nil, err
+		}
+		return &live[protocol.ClusterStatus]{
+			compute: func() (protocol.ClusterStatus, bool, error) { return c.Status(), true, nil },
 			stop:    forward(ctx, notify, c.StatusChanged),
 		}, nil
-	},
+	})
 
-	protocol.MethodClusterTypes: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
-		p, err := decode[protocol.ClusterParams](raw)
-		if err != nil {
-			return nil, err
-		}
+	handleTopic(protocol.TopicClusterTypes, func(ctx context.Context, srv *Server, p protocol.ClusterParams, notify func()) (*live[[]protocol.ResourceType], error) {
 		c, err := srv.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
 			return nil, err
 		}
-		return &liveValue{
-			compute: func() (any, error) { return c.Types(), nil },
+		return &live[[]protocol.ResourceType]{
+			compute: func() ([]protocol.ResourceType, bool, error) { return c.Types(), true, nil },
 			stop:    forward(ctx, notify, c.TypesChanged, allChanges(c)),
 		}, nil
-	},
+	})
 
-	protocol.MethodResourcesQuery: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
-		p, err := decode[protocol.QueryParams](raw)
-		if err != nil {
-			return nil, err
-		}
+	handleTopic(protocol.TopicResourcesQuery, func(ctx context.Context, srv *Server, p protocol.QueryParams, notify func()) (*live[protocol.QueryResult], error) {
 		q, err := query.Compile(p.Where)
 		if err != nil {
 			return nil, badRequest(err)
@@ -91,29 +118,29 @@ var topics = map[protocol.Method]topic{
 			return nil, err
 		}
 		if !p.Columns {
-			return &liveValue{
-				compute: func() (any, error) { return query.Run(c.Index, q, nil, p.Sort, p.Offset, p.Limit), nil },
-				stop:    forward(ctx, notify, queryChanges(c.Index, q)),
+			return &live[protocol.QueryResult]{
+				compute: func() (protocol.QueryResult, bool, error) {
+					return query.Run(c.Index, q, nil, p.Sort, p.Offset, p.Limit), true, nil
+				},
+				stop: forward(ctx, notify, queryChanges(c.Index, q)),
 			}, nil
 		}
 		// The Cluster watches the type's Table for as long as a subscription
 		// holds it, so cells also change without the index changing.
 		table, release := c.Table(q.Types()[0])
 		stop := forward(ctx, notify, queryChanges(c.Index, q), table.Changed)
-		return &liveValue{
-			compute: func() (any, error) { return query.Run(c.Index, q, table, p.Sort, p.Offset, p.Limit), nil },
+		return &live[protocol.QueryResult]{
+			compute: func() (protocol.QueryResult, bool, error) {
+				return query.Run(c.Index, q, table, p.Sort, p.Offset, p.Limit), true, nil
+			},
 			stop: func() {
 				stop()
 				release()
 			},
 		}, nil
-	},
+	})
 
-	protocol.MethodResourcesFind: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
-		p, err := decode[protocol.FindParams](raw)
-		if err != nil {
-			return nil, err
-		}
+	handleTopic(protocol.TopicResourcesFind, func(ctx context.Context, srv *Server, p protocol.FindParams, notify func()) (*live[protocol.FindResult], error) {
 		q, err := query.Compile(p.Where)
 		if err != nil {
 			return nil, badRequest(err)
@@ -124,20 +151,16 @@ var topics = map[protocol.Method]topic{
 		}
 		finder := finders.Get().(*query.Finder)
 		stop := forward(ctx, notify, queryChanges(c.Index, q))
-		return &liveValue{
-			compute: func() (any, error) { return finder.Find(c.Index, q, p), nil },
+		return &live[protocol.FindResult]{
+			compute: func() (protocol.FindResult, bool, error) { return finder.Find(c.Index, q, p), true, nil },
 			stop: func() {
 				stop()
 				finders.Put(finder)
 			},
 		}, nil
-	},
+	})
 
-	protocol.MethodResourceGet: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
-		p, err := decode[protocol.ResourceRef](raw)
-		if err != nil {
-			return nil, err
-		}
+	handleTopic(protocol.TopicResourceGet, func(ctx context.Context, srv *Server, p protocol.ResourceRef, notify func()) (*live[protocol.ResourceData], error) {
 		c, err := srv.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
 			return nil, err
@@ -163,38 +186,34 @@ var topics = map[protocol.Method]topic{
 				notify()
 			},
 		)
-		return &liveValue{
-			compute: func() (any, error) {
+		return &live[protocol.ResourceData]{
+			compute: func() (protocol.ResourceData, bool, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				if lastErr != nil {
-					return nil, lastErr
+					return protocol.ResourceData{}, false, lastErr
 				}
 				if latest == nil {
-					return nil, nil
+					return protocol.ResourceData{}, false, nil
 				}
-				return latest, nil
+				return *latest, true, nil
 			},
 			stop: cancel,
 		}, nil
-	},
+	})
 
-	protocol.MethodSettingsWatch: func(ctx context.Context, srv *Server, raw json.RawMessage, notify func()) (*liveValue, error) {
-		p, err := decode[protocol.SettingKey](raw)
-		if err != nil {
-			return nil, err
-		}
-		return &liveValue{
-			compute: func() (any, error) {
+	handleTopic(protocol.TopicSettingsWatch, func(ctx context.Context, srv *Server, p protocol.SettingKey, notify func()) (*live[protocol.Setting], error) {
+		return &live[protocol.Setting]{
+			compute: func() (protocol.Setting, bool, error) {
 				v, err := srv.cfg.Settings.Get(p.Key)
 				if err != nil {
-					return nil, err
+					return protocol.Setting{}, false, err
 				}
-				return protocol.Setting{Key: p.Key, Value: v}, nil
+				return protocol.Setting{Key: p.Key, Value: v}, true, nil
 			},
 			stop: forward(ctx, notify, func() (<-chan struct{}, func()) { return srv.cfg.Settings.Watch(p.Key) }),
 		}, nil
-	},
+	})
 }
 
 // finders holds Finders between find subscriptions. Typing restarts a find
@@ -223,6 +242,9 @@ func queryChanges(store *index.Store, q *query.Compiled) func() (<-chan struct{}
 
 func decode[P any](raw json.RawMessage) (P, error) {
 	var p P
+	if _, ok := any(p).(protocol.None); ok && len(raw) == 0 {
+		return p, nil
+	}
 	if len(raw) == 0 {
 		return p, badRequest(fmt.Errorf("missing params"))
 	}

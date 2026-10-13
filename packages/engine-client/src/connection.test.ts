@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EngineConnection, type SocketLike } from "./connection.ts";
-import type { ClientMessage, ServerMessage } from "./protocol.gen.ts";
+import { Hash, type ClientMessage, type ServerMessage } from "./protocol.gen.ts";
 
 class FakeSocket implements SocketLike {
   sent: ClientMessage[] = [];
@@ -20,8 +20,9 @@ class FakeSocket implements SocketLike {
   close() {
     this.onclose?.(new CloseEvent("close"));
   }
-  open() {
+  open(hello = true) {
     this.onopen?.(new Event("open"));
+    if (hello) this.receive({ id: 0, type: "hello", hello: { protocol: Hash } });
   }
   receive(msg: ServerMessage) {
     this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(msg) }));
@@ -47,9 +48,11 @@ function connect() {
 beforeEach(() => {
   sockets = [];
   vi.useFakeTimers();
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("EngineConnection", () => {
@@ -125,6 +128,7 @@ describe("EngineConnection", () => {
         type: "subscribe",
         method: "resources.query",
         params: expect.objectContaining({ offset: 100 }),
+        rev: 1,
       }),
     ]);
   });
@@ -150,5 +154,124 @@ describe("EngineConnection", () => {
     await expect(conn.request("clusters.list", undefined)).rejects.toMatchObject({
       code: "disconnected",
     });
+  });
+});
+
+describe("hello verification", () => {
+  it("sends nothing and stays connecting until a matching hello", async () => {
+    const conn = connect();
+    conn.subscribe("settings.watch", { key: "a" }, { data: vi.fn<(value: unknown) => void>() });
+    latest().open(false);
+    expect(conn.getState()).toBe("connecting");
+    expect(latest().sent).toEqual([]);
+    await expect(conn.request("clusters.list", undefined)).rejects.toMatchObject({
+      code: "disconnected",
+    });
+    latest().receive({ id: 0, type: "hello", hello: { protocol: Hash } });
+    expect(conn.getState()).toBe("open");
+    expect(latest().sent).toEqual([
+      { id: 1, type: "subscribe", method: "settings.watch", params: { key: "a" }, rev: 0 },
+    ]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(conn.getState()).toBe("open");
+  });
+
+  it.each([
+    ["another hash", { id: 0, type: "hello", hello: { protocol: "other" } }],
+    ["a first message other than hello", { id: 1, type: "data", data: 1 }],
+    ["a hello without its protocol", { id: 0, type: "hello" }],
+  ] as const)("becomes outdated for %s and never reconnects", async (_, message) => {
+    const conn = connect();
+    const data = vi.fn<(value: unknown) => void>();
+    conn.subscribe("settings.watch", { key: "a" }, { data });
+    latest().open(false);
+    latest().receive(message);
+    expect(conn.getState()).toBe("outdated");
+    expect(latest().sent).toEqual([]);
+    expect(data).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith("Engine protocol mismatch", {
+      client: Hash,
+      engine: message.type === "hello" && "hello" in message ? message.hello.protocol : undefined,
+    });
+    await expect(conn.request("clusters.list", undefined)).rejects.toMatchObject({
+      code: "disconnected",
+    });
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(sockets).toHaveLength(1);
+    expect(conn.getState()).toBe("outdated");
+    conn.close();
+    expect(conn.getState()).toBe("closed");
+  });
+
+  it("becomes outdated when no hello arrives within the timeout", async () => {
+    const conn = connect();
+    conn.subscribe("settings.watch", { key: "a" }, { data: vi.fn<(value: unknown) => void>() });
+    latest().open(false);
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(conn.getState()).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(conn.getState()).toBe("outdated");
+    expect(console.warn).toHaveBeenCalledWith("Engine protocol mismatch", {
+      client: Hash,
+      engine: undefined,
+    });
+    expect(latest().sent).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("reconnects with backoff when sockets close before hello", async () => {
+    const conn = connect();
+    latest().open(false);
+    latest().close();
+    await vi.advanceTimersByTimeAsync(100);
+    latest().open(false);
+    expect(conn.getState()).toBe("reconnecting");
+    expect(latest().sent).toEqual([]);
+    latest().close();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(sockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets).toHaveLength(3);
+    latest().open();
+    latest().close();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sockets).toHaveLength(4);
+  });
+
+  it("cancels the hello timeout on close", async () => {
+    const conn = connect();
+    latest().open(false);
+    conn.close();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(conn.getState()).toBe("closed");
+    expect(sockets).toHaveLength(1);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("subscription revisions", () => {
+  it("drops data and errors for replaced params and delivers the current revision", () => {
+    const conn = connect();
+    latest().open();
+    const data = vi.fn<(value: unknown) => void>(),
+      error = vi.fn<(value: unknown) => void>();
+    const sub = conn.subscribe("settings.watch", { key: "a" }, { data, error });
+    const id = latest().sent[0]!.id;
+    sub.update({ key: "b" });
+    latest().receive({ id, type: "data", rev: 0, data: { key: "a", value: 1 } });
+    latest().receive({ id, type: "error", rev: 0, error: { code: "internal", message: "old" } });
+    expect(data).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    latest().receive({ id, type: "data", rev: 1, data: { key: "b", value: 2 } });
+    latest().receive({
+      id,
+      type: "error",
+      rev: 1,
+      error: { code: "internal", message: "current" },
+    });
+    expect(data).toHaveBeenCalledWith({ key: "b", value: 2 });
+    expect(error).toHaveBeenCalledWith({ code: "internal", message: "current" });
+    expect(latest().sent[1]).toMatchObject({ type: "update", rev: 1 });
   });
 });

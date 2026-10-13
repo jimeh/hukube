@@ -110,7 +110,7 @@ func NewFinder() *Finder {
 // it, so that indexing never waits for a find.
 func (f *Finder) Find(store *index.Store, q *Compiled, p protocol.FindParams) protocol.FindResult {
 	// Non-nil so an empty result encodes as [] rather than null.
-	result := protocol.FindResult{Text: p.Text, Where: p.Where, Rows: []protocol.Row{}}
+	result := protocol.FindResult{Rows: []protocol.Row{}}
 	words := parseWords(p.Text)
 	if len(words) == 0 {
 		return result
