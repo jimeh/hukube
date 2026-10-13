@@ -1,7 +1,7 @@
 import { useSubscription } from "@hukube/engine-client/react";
 import { formatResourceUri, parseResourceUri, type Facet } from "@hukube/k8s";
 import { Badge } from "@hukube/ui/components/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@hukube/ui/components/tabs";
+import { Tabs, TabsContent } from "@hukube/ui/components/tabs";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useState } from "react";
 
@@ -10,7 +10,9 @@ import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 
 import { resourceEventsParams } from "./facet-rules.ts";
 import { facetsFor, resolveFacet } from "./facets.ts";
+import { FacetSwitcher } from "./facet-switcher.tsx";
 import { Notice } from "./notice.tsx";
+import { takePointerOpened } from "./pointer-opened.ts";
 
 /** One live Resource, with its Facet named in the tab's Resource URI. */
 export function ResourcePanel({
@@ -18,7 +20,7 @@ export function ResourcePanel({
   params,
 }: Pick<IDockviewPanelProps<ResourcePanelParams>, "api" | "params">) {
   const address = parseResourceUri(params.uri);
-  const { types } = useWorkspace();
+  const { types, openResource } = useWorkspace();
   const manifest = useSubscription(
     "resource.get",
     address
@@ -42,6 +44,18 @@ export function ResourcePanel({
       : undefined,
   );
   const selected = resolveFacet(address?.facet, target);
+  const related = useSubscription(
+    "resource.related",
+    address
+      ? {
+          cluster: address.cluster,
+          type: address.type,
+          namespace: address.namespace,
+          name: address.name,
+          cells: selected === "related",
+        }
+      : undefined,
+  );
   const [mounted, setMounted] = useState<ReadonlySet<Facet>>(() => new Set([selected]));
   if (!mounted.has(selected)) setMounted(new Set([...mounted, selected]));
   const [controls, setControls] = useState<HTMLDivElement | null>(null);
@@ -53,9 +67,33 @@ export function ResourcePanel({
       />
     );
   const kind = target.resourceType?.kind ?? address.type;
-  const shared = { address, kind, manifest, lastObject, events, controls };
+  const shared = {
+    address,
+    kind,
+    manifest,
+    lastObject,
+    events,
+    related,
+    panelId: api.id,
+    controls,
+  };
+  const choose = (value: string) => {
+    const facet = resolveFacet(value as Facet, target);
+    api.updateParameters({ ...params, uri: formatResourceUri({ ...address, facet }) });
+  };
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div
+      className="flex h-full min-h-0 flex-col"
+      onClickCapture={(event) => {
+        const opened = takePointerOpened(address.cluster);
+        if (event.detail < 2 || !opened) return;
+        // The second click of a double-click on a related Resource lands here, in the tab the
+        // first click opened or brought forward, and makes a regular tab of it.
+        event.stopPropagation();
+        openResource(opened, { preview: false, pane: api.id });
+      }}
+    >
       <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
         <span className="text-muted-foreground">{kind}</span>
         <h2 className="truncate font-mono font-semibold">{address.name}</h2>
@@ -66,29 +104,14 @@ export function ResourcePanel({
           <Badge variant="destructive">{lastObject ? "Deleted" : "Not found"}</Badge>
         )}
       </header>
-      <Tabs
-        value={selected}
-        onValueChange={(value) => {
-          const facet = resolveFacet(value as Facet, target);
-          api.updateParameters({ ...params, uri: formatResourceUri({ ...address, facet }) });
-        }}
-        className="min-h-0 flex-1 gap-0"
-      >
-        <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-3">
-          <TabsList variant="line" aria-label="Facets" activateOnFocus className="shrink-0">
-            {available.map(({ id, label, Badge: FacetBadge, accessibleName }) => (
-              <TabsTrigger
-                key={id}
-                value={id}
-                aria-label={accessibleName?.({ ...shared, showing: selected === id })}
-              >
-                {label}
-                {FacetBadge && <FacetBadge {...shared} showing={selected === id} />}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          <div ref={setControls} className="flex min-w-0 items-center" />
-        </div>
+      <Tabs value={selected} onValueChange={choose} className="min-h-0 flex-1 gap-0">
+        <FacetSwitcher
+          available={available}
+          selected={selected}
+          shared={shared}
+          onChoose={choose}
+          setControls={setControls}
+        />
         {available.map(
           ({ id, View }) =>
             mounted.has(id) && (

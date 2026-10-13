@@ -102,6 +102,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
           }),
           preview: options?.preview ?? false,
           ...(options?.beside ? { beside: options.beside } : {}),
+          ...(options?.pane ? { pane: options.pane } : {}),
         });
       },
     }),

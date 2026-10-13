@@ -3,9 +3,10 @@ import type { ComponentType } from "react";
 
 import { EventsFacet, EventsBadge, eventsTabName } from "./events-facet.tsx";
 import type { FacetProps, FacetTarget } from "./facet-props.ts";
+import { RelatedFacet, RelatedBadge, relatedTabName } from "./related-facet.tsx";
 import { YamlFacet } from "./yaml-facet.tsx";
 
-interface FacetEntry {
+export interface FacetEntry {
   id: Facet;
   label: string;
   appliesTo: (target: FacetTarget) => boolean;
@@ -23,6 +24,14 @@ const facets: readonly FacetEntry[] = [
     View: EventsFacet,
     Badge: EventsBadge,
     accessibleName: eventsTabName,
+  },
+  {
+    id: "related",
+    label: "Related",
+    appliesTo: () => true,
+    View: RelatedFacet,
+    Badge: RelatedBadge,
+    accessibleName: relatedTabName,
   },
 ];
 
