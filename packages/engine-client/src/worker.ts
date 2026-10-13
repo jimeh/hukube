@@ -10,6 +10,7 @@ const scope = self as unknown as {
 };
 
 let connection: EngineConnection | undefined;
+const requests = new Map<number, AbortController>();
 const subscriptions = new Map<number, { sub: Subscription<unknown>; count: number }>();
 
 const streams = new Map<number, EngineStream>();
@@ -63,20 +64,31 @@ scope.onmessage = ({ data: msg }) => {
       for (const [token, pending] of acknowledgements)
         if (pending.id === msg.id) acknowledgements.delete(token);
       break;
-    case "request":
-      connection?.request(msg.method, msg.params as never).then(
-        (data) => scope.postMessage({ kind: "result", id: msg.id, data }),
+    case "cancel":
+      requests.get(msg.id)?.abort();
+      break;
+    case "request": {
+      const controller = new AbortController();
+      requests.set(msg.id, controller);
+      connection?.request(msg.method, msg.params as never, { signal: controller.signal }).then(
+        (data) => {
+          requests.delete(msg.id);
+          scope.postMessage({ kind: "result", id: msg.id, data });
+        },
         (err: unknown) => {
-          const code = err instanceof EngineRequestError ? err.code : "internal";
-          scope.postMessage({
-            kind: "failure",
-            id: msg.id,
-            code,
-            message: err instanceof Error ? err.message : String(err),
-          });
+          requests.delete(msg.id);
+          const error =
+            err instanceof EngineRequestError
+              ? { code: err.code, message: err.message, reason: err.reason, causes: err.causes }
+              : {
+                  code: "internal" as const,
+                  message: err instanceof Error ? err.message : String(err),
+                };
+          scope.postMessage({ kind: "failure", id: msg.id, error });
         },
       );
       break;
+    }
     case "subscribe": {
       const active = { count: 0 };
       const sub = connection?.subscribe(msg.method, msg.params as never, {

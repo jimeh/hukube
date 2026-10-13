@@ -2,6 +2,7 @@ import {
   EngineRequestError,
   type ConnectionState,
   type EngineClient,
+  type RequestOptions,
   type EngineEndpoint,
   type Subscription,
   type SubscriptionListener,
@@ -17,7 +18,6 @@ import type {
   StreamMethod,
   Streams,
 } from "./methods.gen.ts";
-import type { ErrorDetail } from "./protocol.gen.ts";
 import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
 /**
@@ -28,7 +28,10 @@ export class WorkerEngineClient implements EngineClient {
   readonly #worker: Worker;
   #state: ConnectionState = "connecting";
   #nextId = 1;
-  readonly #pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
+  readonly #pending = new Map<
+    number,
+    { resolve(v: unknown): void; reject(e: Error): void; cleanup(): void }
+  >();
   readonly #listeners = new Map<
     number,
     { listener: SubscriptionListener<unknown>; count: number }
@@ -69,10 +72,28 @@ export class WorkerEngineClient implements EngineClient {
   request<M extends RequestMethod>(
     method: M,
     params: Requests[M]["params"],
+    options?: RequestOptions,
   ): Promise<Requests[M]["result"]> {
+    if (options?.signal?.aborted)
+      return Promise.reject(
+        new EngineRequestError({ code: "cancelled", message: "Request cancelled" }),
+      );
+    if (this.#state === "closed")
+      return Promise.reject(
+        new EngineRequestError({ code: "disconnected", message: "not connected to the Engine" }),
+      );
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const signal = options?.signal;
+      const abort = () => {
+        if (!this.#pending.delete(id)) return;
+        cleanup();
+        this.#post({ kind: "cancel", id });
+        reject(new EngineRequestError({ code: "cancelled", message: "Request cancelled" }));
+      };
+      const cleanup = () => signal?.removeEventListener("abort", abort);
+      this.#pending.set(id, { resolve, reject, cleanup });
+      signal?.addEventListener("abort", abort, { once: true });
       this.#post({ kind: "request", id, method, params });
     });
   }
@@ -111,6 +132,13 @@ export class WorkerEngineClient implements EngineClient {
     this.#post({ kind: "close" });
     this.#worker.terminate();
     this.#streams.clear();
+    for (const pending of this.#pending.values()) {
+      pending.cleanup();
+      pending.reject(
+        new EngineRequestError({ code: "disconnected", message: "lost connection to the Engine" }),
+      );
+    }
+    this.#pending.clear();
     this.#state = "closed";
     for (const fn of this.#stateListeners) fn();
   }
@@ -151,11 +179,9 @@ export class WorkerEngineClient implements EngineClient {
       case "failure": {
         const pending = this.#pending.get(msg.id);
         this.#pending.delete(msg.id);
+        pending?.cleanup();
         if (msg.kind === "result") pending?.resolve(msg.data);
-        else
-          pending?.reject(
-            new EngineRequestError({ code: msg.code, message: msg.message } as ErrorDetail),
-          );
+        else pending?.reject(new EngineRequestError(msg.error));
         break;
       }
       case "data": {

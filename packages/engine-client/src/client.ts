@@ -7,7 +7,7 @@ import type {
   Streams,
 } from "./methods.gen.ts";
 import type { LogLine } from "./log-codec.ts";
-import type { ErrorDetail, StreamGap, StreamEnd } from "./protocol.gen.ts";
+import type { ErrorCause, ErrorDetail, StreamGap, StreamEnd } from "./protocol.gen.ts";
 
 /** The state of the connection to the Engine. */
 export type ConnectionState = "connecting" | "open" | "reconnecting" | "outdated" | "closed";
@@ -40,6 +40,10 @@ export interface EngineStream {
   close(): void;
 }
 
+export interface RequestOptions {
+  signal?: AbortSignal;
+}
+
 /** A client of the Engine's control and stream methods. */
 export interface EngineClient {
   openStream<M extends StreamMethod>(
@@ -50,6 +54,7 @@ export interface EngineClient {
   request<M extends RequestMethod>(
     method: M,
     params: Requests[M]["params"],
+    options?: RequestOptions,
   ): Promise<Requests[M]["result"]>;
   subscribe<M extends TopicMethod>(
     method: M,
@@ -68,12 +73,20 @@ export interface EngineEndpoint {
   token: string;
 }
 
-export class EngineRequestError extends Error {
-  readonly code: ErrorDetail["code"] | "disconnected";
+export type RequestErrorDetail = Omit<ErrorDetail, "code"> & {
+  code: ErrorDetail["code"] | "disconnected";
+};
 
-  constructor(detail: ErrorDetail | { code: "disconnected"; message: string }) {
+export class EngineRequestError extends Error {
+  readonly code: RequestErrorDetail["code"];
+  readonly reason: string | undefined;
+  readonly causes: ErrorCause[] | undefined;
+
+  constructor(detail: RequestErrorDetail) {
     super(detail.message);
     this.name = "EngineRequestError";
     this.code = detail.code;
+    this.reason = detail.reason;
+    this.causes = detail.causes;
   }
 }
