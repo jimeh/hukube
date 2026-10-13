@@ -1,6 +1,7 @@
 import type { ClusterStatus, ResourceType } from "@hukube/engine-client";
 import type { ResourceAddress, TypeKey } from "@hukube/k8s";
 import { createContext, use } from "react";
+import type { ExecSessionParams } from "../exec/sessions.ts";
 
 export interface OpenOptions {
   /** Open as a Preview Tab, replaced by the next preview in the same Pane. */
@@ -21,6 +22,10 @@ export interface WorkspaceValue {
   activeListType?: TypeKey;
   openList: (type: TypeKey, options?: OpenOptions) => void;
   openResource: (address: Omit<ResourceAddress, "cluster">, options?: OpenOptions) => void;
+  openExecSession: (
+    params: Omit<ExecSessionParams, "sessionId" | "preview">,
+    options?: OpenOptions,
+  ) => void;
 }
 
 export const WorkspaceContext = createContext<WorkspaceValue | null>(null);

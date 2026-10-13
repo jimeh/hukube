@@ -9,7 +9,7 @@ export function Notice({
   action,
 }: {
   title: string;
-  description: string;
+  description: ReactNode;
   action?: ReactNode;
 }) {
   return (

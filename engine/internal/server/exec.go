@@ -68,7 +68,15 @@ func init() {
 		s.execs[running] = struct{}{}
 		s.execMu.Unlock()
 		defer func() { s.execMu.Lock(); delete(s.execs, running); close(running.done); s.execMu.Unlock() }()
-		return execsession.Run(ctx, execCluster{c}, c.Index, p, q.input, q.sizes, execOutput{q}, execsession.DefaultTiming)
+		end := execsession.Run(ctx, execCluster{c}, c.Index, p, q.input, q.sizes, execOutput{q}, execsession.DefaultTiming)
+		s.execMu.Lock()
+		stopping := s.shuttingDown
+		s.execMu.Unlock()
+		if stopping {
+			// The hang-up made the shell exit, which is not why the session ended.
+			return streamError(&protocol.ErrorDetail{Code: protocol.ErrorCodeUnavailable, Reason: protocol.ExecReasonEngineStopped, Message: "The Engine shut down."})
+		}
+		return end
 	})
 }
 

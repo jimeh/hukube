@@ -211,11 +211,11 @@ it("shows retained lines with stopped containers, unreadable logs, Pod limits, r
   expect(screen.getByText("Connection to the Engine lost. Reconnecting…")).toBeDefined();
   expect(screen.getByRole("textbox").textContent).toBe("constructor hello");
   act(() => latest().listener.state?.("waiting"));
-  expect(screen.getByText(/Waiting for a free Log Stream/)).toBeDefined();
+  expect(screen.getByText(/Waiting for a free stream/)).toBeDefined();
   cleanup();
   mount();
   act(() => latest().listener.state?.("waiting"));
-  expect(screen.getByText("Waiting for a free Log Stream")).toBeDefined();
+  expect(screen.getByText("Waiting for a free stream")).toBeDefined();
 });
 it("shows final errors and retries only on a button, with or without retained lines", () => {
   mount();

@@ -7,6 +7,9 @@ export {
   MaxClientMessageBytes,
   ExecInputFrame,
   ExecInputWindow,
+  ExecReasonNoShell,
+  ExecReasonConnectionLost,
+  ExecReasonEngineStopped,
 } from "./protocol.gen.ts";
 export { WorkerEngineClient } from "./worker-client.ts";
 

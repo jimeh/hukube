@@ -11,6 +11,158 @@ test.afterAll(() => {
   kubectl("delete", "namespace", namespace, "--wait=false");
 });
 
+test("runs, guards, restarts, and restores Exec Sessions without reopening a process", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  for (const [name, image, command] of [
+    ["e2e-exec", "busybox:1.36", ["sh", "-c", "sleep 3600"]],
+    ["e2e-exec-no-shell", "rancher/mirrored-pause:3.6", undefined],
+  ] as const) {
+    kubectlCreate({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { name, namespace },
+      spec: { containers: [{ name: "app", image, ...(command ? { command } : {}) }] },
+    });
+    kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=60s");
+  }
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  const openPod = async (name: string) => {
+    await page.keyboard.press("ControlOrMeta+K");
+    await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${name}`);
+    await page.getByRole("option", { name: new RegExp(`^Pod ${name} ${namespace}$`) }).click();
+    const pod = page
+      .getByRole("tabpanel", { name, exact: true })
+      .filter({ has: page.getByRole("button", { name: "Open an Exec Session", exact: true }) });
+    await pod.getByRole("button", { name: "Open an Exec Session" }).click();
+  };
+  await openPod("e2e-exec");
+  const panel = page
+    .getByRole("tabpanel", { name: "e2e-exec", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  const input = panel.getByRole("textbox", { name: "Exec Session in app of e2e-exec" });
+  const screen = panel.locator(".xterm-rows");
+  // A Cluster applies a session's first size after its process starts. A shell
+  // that has already printed its prompt prints it again and drops what was
+  // typed until then, so a command is typed again until its output shows.
+  const run = async (command: string, output: string) => {
+    await expect(screen).toContainText("/ #");
+    await expect(async () => {
+      await input.focus();
+      await input.pressSequentially(command);
+      await input.press("Enter");
+      await expect(screen).toContainText(output, { timeout: 3000 });
+    }).toPass();
+  };
+  await expect(input).toBeFocused();
+  await run("echo hukube-$((6*7))", "hukube-42");
+  await input.pressSequentially(
+    "stty raw -echo; printf 'paste-%s-ready\\n' $((6*7)); head -c 1048576 | wc -c; stty sane; echo paste-done-$((6*7))",
+  );
+  await input.press("Enter");
+  await expect(screen).toContainText("paste-42-ready");
+  await input.evaluate((element) => {
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", "a".repeat(1024 * 1024));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: clipboard }));
+  });
+  await expect(screen).toContainText("paste-done-42", { timeout: 20_000 });
+  const sourceTab = page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .first();
+  for (let count = 1; count <= 8; count++) {
+    await sourceTab.click();
+    await page
+      .getByRole("tabpanel", { name: "e2e-exec", exact: true })
+      .getByRole("button", { name: "Open an Exec Session" })
+      .click();
+    if (count < 8) await expect(input).toBeVisible();
+  }
+  await expect(panel.getByText("Waiting for a free stream")).toBeVisible();
+  await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+  for (let count = 0; count < 7; count++) {
+    await page
+      .locator(".dv-tab")
+      .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+      .last()
+      .getByRole("button", { name: "Close e2e-exec", exact: true })
+      .click();
+    await page.getByRole("button", { name: "End session", exact: true }).click();
+  }
+  await page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .last()
+    .click();
+  await run("echo after-cap-$((6*7))", "after-cap-42");
+  await input.pressSequentially("vi");
+  await input.press("Enter");
+  await expect(screen).toContainText("No file");
+  await page.setViewportSize({ width: 900, height: 700 });
+  await input.pressSequentially(":q!");
+  await input.press("Enter");
+  await run("echo after-vi-$((6*7))", "after-vi-42");
+  await input.pressSequentially("top");
+  await input.press("Enter");
+  await expect(screen).toContainText("PID");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await input.press("q");
+  await run("echo after-top-$((6*7))", "after-top-42");
+  const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.userAgent));
+  await input.press(mac ? "Meta+K" : "Control+Shift+K");
+  const palette = page.getByRole("combobox", { name: "Go to Resource" });
+  await expect(palette).toBeVisible();
+  await palette.press("Escape");
+  await expect(palette).toBeHidden();
+  await input.focus();
+  await page.evaluate(() => {
+    const host = window as Window & { execKeyJ?: boolean };
+    const listener = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "j") {
+        host.execKeyJ = event.defaultPrevented;
+        window.removeEventListener("keydown", listener);
+      }
+    };
+    window.addEventListener("keydown", listener);
+  });
+  await input.press("ControlOrMeta+J");
+  expect(await page.evaluate(() => (window as Window & { execKeyJ?: boolean }).execKeyJ)).toBe(
+    false,
+  );
+  const tab = page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .last();
+  await tab.getByRole("button", { name: "Close e2e-exec", exact: true }).click();
+  await expect(page.getByText("End the Exec Session in app of e2e-exec?")).toBeVisible();
+  await page.getByRole("button", { name: "Keep session" }).click();
+  await run("echo kept-$((6*7))", "kept-42");
+  await input.pressSequentially("exit 3");
+  await input.press("Enter");
+  await expect(panel.getByText("The process exited with code 3.")).toBeVisible();
+  await panel.getByRole("button", { name: "Start again" }).click();
+  await run("echo again-$((6*7))", "again-42");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.reload();
+  await expect(panel.getByText("This session is over")).toBeVisible();
+  await expect(panel.locator(".xterm")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Start a new session" }).click();
+  await run("echo reloaded-$((6*7))", "reloaded-42");
+  await input.pressSequentially("exit");
+  await input.press("Enter");
+  await expect(panel.getByText("Ended", { exact: true })).toBeVisible();
+  await openPod("e2e-exec-no-shell");
+  const noShell = page
+    .getByRole("tabpanel", { name: "e2e-exec-no-shell", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  await expect(noShell.getByText("No shell in this container")).toBeVisible();
+  await expect(noShell.locator("pre")).toContainText("sh");
+});
+
 test("browses a live ConfigMap from the cluster picker to its YAML", async ({ page }) => {
   await page.goto(`/#token=${engineToken}`);
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();

@@ -253,9 +253,9 @@ function LogRun({
     notices.push({ text: "Connection to the Engine lost. Reconnecting…", destructive: true });
   if (state === "waiting")
     empty = {
-      title: "Waiting for a free Log Stream",
+      title: "Waiting for a free stream",
       description:
-        "hukube runs 8 at a time. This one starts when another Logs Facet is closed or hidden.",
+        "hukube runs 8 Log Streams and Exec Sessions at a time in a window. This one starts when another is closed or hidden.",
     };
   else if (end?.reason === "error") {
     loading = false;

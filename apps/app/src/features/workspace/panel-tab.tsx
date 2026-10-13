@@ -1,11 +1,12 @@
 import { Button } from "@hukube/ui/components/button";
 import { cn } from "@hukube/ui/lib/utils";
-import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon, ComputerTerminal01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import { useEffect, useState } from "react";
 
-import { guardResource, useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { isRunning, useExecSessions } from "../exec/sessions.ts";
 
 import { pinPanel } from "./dock.ts";
 
@@ -15,7 +16,11 @@ import { pinPanel } from "./dock.ts";
  */
 export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: boolean }>) {
   const dirty = useUnsavedEdits((state) => state.entries.has(api.id));
-  const close = () => guardResource(api.id, () => api.close());
+  const exec = api.id.startsWith("exec:");
+  const running = useExecSessions((state) =>
+    isRunning(exec ? state.entries.get(api.id.slice(5)) : undefined),
+  );
+  const close = () => guardPanel(api.id, () => api.close());
   const [title, setTitle] = useState(api.title ?? "");
   useEffect(() => {
     const d = api.onDidTitleChange((e) => setTitle(e.title));
@@ -30,7 +35,19 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
         if (e.button === 1) close();
       }}
     >
-      <span className={cn("max-w-56 truncate font-mono text-xs", params.preview && "italic")}>
+      {exec && (
+        <HugeiconsIcon
+          icon={ComputerTerminal01Icon}
+          className={cn("size-3.5 shrink-0", !running && "text-muted-foreground")}
+        />
+      )}
+      <span
+        className={cn(
+          "max-w-56 truncate font-mono text-xs",
+          params.preview && "italic",
+          exec && !running && "text-muted-foreground",
+        )}
+      >
         {title}
       </span>
       <Button
