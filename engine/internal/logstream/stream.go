@@ -112,7 +112,8 @@ type stream struct {
 	mu                           sync.Mutex
 	sources                      map[int]*sourceEntry
 	names                        []protocol.LogContainer
-	pods, followed, nextID       int
+	pods, followed, loaded       int
+	nextID                       int
 	tail                         int64
 	batch                        []record
 	batchBytes                   int
@@ -253,8 +254,8 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 					})
 				}
 				s.mu.Lock()
-				s.pods, s.followed = len(candidates), len(pods)
-				s.names = containerNames(pods)
+				s.pods = len(candidates)
+				s.followedLocked(pods)
 				s.mu.Unlock()
 				if !selected {
 					s.started = time.Now()
@@ -332,8 +333,7 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 				s.removePod(pod)
 				delete(pods, change.uid)
 				s.mu.Lock()
-				s.followed = len(pods)
-				s.names = containerNames(pods)
+				s.followedLocked(pods)
 				s.mu.Unlock()
 				if p.Type == "pods" {
 					return finish(protocol.StreamEndReasonDeleted, nil)
@@ -344,7 +344,7 @@ func Run(ctx context.Context, c Cluster, g Graph, p protocol.LogStreamParams, ou
 			s.updatePod(pod, &manifest, initial)
 			pod.loaded = true
 			s.mu.Lock()
-			s.names = containerNames(pods)
+			s.followedLocked(pods)
 			s.mu.Unlock()
 		case <-tick.C:
 			s.mu.Lock()
@@ -419,10 +419,23 @@ func (s *stream) removePod(pod *followedPod) {
 	}
 }
 
+// followedLocked records the followed Pods for the next status. A Pod counts
+// as loaded only after its sources are registered, so a status never claims
+// more Pods than its sources cover.
+func (s *stream) followedLocked(pods map[string]*followedPod) {
+	s.followed, s.loaded = len(pods), 0
+	for _, pod := range pods {
+		if pod.loaded {
+			s.loaded++
+		}
+	}
+	s.names = containerNames(pods)
+}
+
 func (s *stream) statusLocked(force bool) time.Duration {
 	value := emptyStatus()
 	value.Ready = s.ready
-	value.Pods, value.Followed = s.pods, s.followed
+	value.Pods, value.Followed, value.Loaded = s.pods, s.followed, s.loaded
 	value.Containers = append(value.Containers, s.names...)
 	for _, source := range s.sources {
 		value.Sources = append(value.Sources, source.source)

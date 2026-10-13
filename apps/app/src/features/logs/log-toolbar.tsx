@@ -161,14 +161,16 @@ export function LogToolbar({
         {toggle("Timestamps", Clock01Icon, timestamps, setTimestamps)}
         {toggle("Wrap", TextWrapIcon, wrap, setWrap)}
         <Tooltip>
-          <TooltipTrigger
-            render={<Button variant="ghost" />}
-            aria-label="Search"
-            disabled={disabled}
-            onClick={search}
-            className="text-muted-foreground @max-[34rem]/logs:w-7 @max-[34rem]/logs:p-0"
-          >
-            {iconLabel(Search01Icon, "Search")}
+          <TooltipTrigger render={<span className="inline-flex" />}>
+            <Button
+              variant="ghost"
+              aria-label="Search"
+              disabled={disabled}
+              onClick={search}
+              className="text-muted-foreground @max-[34rem]/logs:w-7 @max-[34rem]/logs:p-0"
+            >
+              {iconLabel(Search01Icon, "Search")}
+            </Button>
           </TooltipTrigger>
           <TooltipContent>Search</TooltipContent>
         </Tooltip>

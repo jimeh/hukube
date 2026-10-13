@@ -13,6 +13,7 @@ export const status: LogStreamStatus = {
   containers: [{ name: "constructor", kind: "container" }],
   pods: 1,
   followed: 1,
+  loaded: 1,
 };
 export function frame(
   id = 7,

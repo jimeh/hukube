@@ -152,8 +152,8 @@ function LogRun({
           document.status(value);
           const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
           // A status can be ready before a slow Pod's containers are known.
-          // Only one that lists every followed Pod says who joined and who left.
-          if (value.ready && next.size >= value.followed) {
+          // Only one whose Pods are all loaded says who joined and who left.
+          if (value.ready && value.loaded >= value.followed) {
             if (type !== "pods" && pods && !previous) {
               for (const [id, pod] of next)
                 if (!pods.has(id)) document.marker(`··· following Pod ${pod} ···`);
