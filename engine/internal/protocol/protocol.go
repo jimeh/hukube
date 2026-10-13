@@ -308,6 +308,9 @@ type ResourceEventsParams struct {
 	// UID selects the Resource incarnation, allowing empty and name-as-UID references.
 	// An empty UID selects every incarnation of the Resource.
 	UID string `json:"uid,omitempty"`
+	// OtherUIDs holds further UIDs that references to this incarnation use,
+	// such as the hash in a mirror Pod's kubernetes.io/config.mirror annotation.
+	OtherUIDs []string `json:"otherUids,omitempty"`
 }
 
 // ResourceEvents is the current set of Events about a Resource, with uncapped counts.

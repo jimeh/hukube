@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"reflect"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -151,24 +152,29 @@ func TestEventMatches(t *testing.T) {
 	for _, tc := range []struct {
 		name, targetUID, refUID, version string
 		want                             bool
+		otherUIDs                        []string
 	}{
-		{"exact UID ignores group", "new", "new", "other/v1", true},
-		{"old UID", "new", "old", "apps/v1", false},
-		{"name as UID", "new", "web", "apps/v1", true},
-		{"empty UID", "new", "", "apps/v1", true},
-		{"unknown target UID", "", "old", "apps/v1", true},
-		{"wrong group", "new", "", "other/v1", false},
-		{"unknown UID wrong group", "", "old", "other/v1", false},
-		{"missing version", "new", "", "", true},
-		{"core group differs", "new", "", "v1", false},
+		{"exact UID ignores group", "new", "new", "other/v1", true, nil},
+		{"old UID", "new", "old", "apps/v1", false, nil},
+		{"name as UID", "new", "web", "apps/v1", true, nil},
+		{"empty UID", "new", "", "apps/v1", true, nil},
+		{"unknown target UID", "", "old", "apps/v1", true, nil},
+		{"wrong group", "new", "", "other/v1", false, nil},
+		{"unknown UID wrong group", "", "old", "other/v1", false, nil},
+		{"missing version", "new", "", "", true, nil},
+		{"core group differs", "new", "", "v1", false, nil},
+		{"alias UID", "new", "hash", "apps/v1", true, []string{"hash"}},
+		{"alias UID ignores group", "new", "hash", "other/v1", true, []string{"hash"}},
+		{"alias does not match unrelated UID", "new", "old", "apps/v1", false, []string{"hash"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := eventMatches(corev1.ObjectReference{
 				UID:        types.UID(tc.refUID),
 				APIVersion: tc.version,
 			}, protocol.ResourceEventsParams{
-				Name: "web",
-				UID:  tc.targetUID,
+				Name:      "web",
+				UID:       tc.targetUID,
+				OtherUIDs: tc.otherUIDs,
 			}, "apps")
 			if got != tc.want {
 				t.Fatalf("match = %v, want %v", got, tc.want)
@@ -204,6 +210,8 @@ func TestResourceEventsOrderCapAndCounts(t *testing.T) {
 // their results. Calls record virtual time inside synctest's bubble.
 type fakeEvents struct {
 	ctx     context.Context
+	cancel  context.CancelFunc
+	done    chan struct{}
 	lists   chan eventsListCall
 	watches chan eventsWatchCall
 }
@@ -267,14 +275,17 @@ func startFakeEvents(t *testing.T) (*fakeEvents, *eventsStore, chan protocol.Res
 	timing := testTiming()
 	timing.RetryMax = 300 * time.Millisecond
 	c := &Cluster{timing: timing, log: slog.New(slog.DiscardHandler)}
-	fake := &fakeEvents{ctx: ctx, lists: make(chan eventsListCall), watches: make(chan eventsWatchCall)}
+	fake := &fakeEvents{ctx: ctx, cancel: cancel, done: make(chan struct{}), lists: make(chan eventsListCall), watches: make(chan eventsWatchCall)}
 	values := make(chan protocol.ResourceEvents, 10)
 	failures := make(chan error, 10)
 	store := &eventsStore{
 		Store: cache.NewStore(cache.MetaNamespaceKeyFunc),
 		emit:  func(d protocol.ResourceEvents) { values <- d },
 	}
-	go c.runEvents(ctx, fake, store, func(err error) { failures <- err })
+	go func() {
+		defer close(fake.done)
+		c.runEvents(ctx, fake, store, func(err error) { failures <- err })
+	}()
 	return fake, store, values, failures
 }
 
@@ -348,7 +359,7 @@ func TestEventsRefusedWatchIsReportedAndRelists(t *testing.T) {
 	for name, tc := range map[string]struct{ refused, want error }{
 		// The request's URL, which holds the field selector, is left out.
 		"connection refused": {&url.Error{Op: "Get", URL: "https://cluster/events?fieldSelector=x", Err: dial}, dial},
-		"too many requests":  {apierrors.NewTooManyRequests("slow down", 1), apierrors.NewTooManyRequests("slow down", 1)},
+		"too many requests":  {apierrors.NewTooManyRequests("slow down", 1), nil},
 	} {
 		refused, want := tc.refused, tc.want
 		t.Run(name, func(t *testing.T) {
@@ -361,11 +372,27 @@ func TestEventsRefusedWatchIsReportedAndRelists(t *testing.T) {
 				w.result <- refused
 				select {
 				case err := <-failures:
+					if want == nil {
+						t.Fatalf("429 reported instead of resuming the watch: %v", err)
+					}
 					if err.Error() != want.Error() {
 						t.Fatalf("error = %v, want %v", err, want)
 					}
-				case <-fake.watches:
-					t.Fatal("the watch was retried inside the attempt without a report")
+				case retry := <-fake.watches:
+					if want != nil {
+						t.Fatal("the watch was retried inside the attempt without a report")
+					}
+					if retry.opts.ResourceVersion != w.opts.ResourceVersion {
+						t.Fatalf("resumed at %q, want %q", retry.opts.ResourceVersion, w.opts.ResourceVersion)
+					}
+					retry.result <- nil
+					synctest.Wait()
+					if len(failures) != 0 || len(values) != 0 {
+						t.Fatalf("429 reported or relisted: errors %d values %d", len(failures), len(values))
+					}
+					return
+				case <-fake.lists:
+					t.Fatal("the watch failure relisted without reporting it")
 				}
 				next := <-fake.lists
 				if delay := next.at.Sub(first.at); delay != testTiming().ObjectRetry {
@@ -413,7 +440,10 @@ func TestEventsRetryDelayDoubles(t *testing.T) {
 			100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond, 300 * time.Millisecond,
 		} {
 			previous := call.at
-			call.result <- eventsListResult{err: denied}
+			call.result <- eventsListResult{}
+			<-values
+			w := <-fake.watches
+			w.result <- denied
 			call = <-fake.lists
 			if delay := call.at.Sub(previous); delay != want {
 				t.Fatalf("retry delay = %s, want %s", delay, want)
@@ -422,15 +452,20 @@ func TestEventsRetryDelayDoubles(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, denied)
 			}
 		}
-		// A completed list resets the delay, even if starting its watch fails.
-		listedAt := call.at
+		// A started watch resets the delay even if its next resume fails.
+		startedAt := call.at
 		call.result <- eventsListResult{}
 		<-values
 		w := <-fake.watches
-		w.result <- denied
+		w.result <- nil
+		w.watcher.Add(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "one", ResourceVersion: "2"}})
+		<-values
+		w.watcher.Stop()
+		resume := <-fake.watches
+		resume.result <- denied
 		call = <-fake.lists
-		if delay := call.at.Sub(listedAt); delay != testTiming().ObjectRetry {
-			t.Fatalf("retry after completed list = %s, want %s", delay, testTiming().ObjectRetry)
+		if delay := call.at.Sub(startedAt); delay != testTiming().ObjectRetry {
+			t.Fatalf("retry after started watch = %s, want %s", delay, testTiming().ObjectRetry)
 		}
 		if err := <-failures; !errors.Is(err, denied) {
 			t.Fatalf("watch-start error = %v, want %v", err, denied)
@@ -439,6 +474,31 @@ func TestEventsRetryDelayDoubles(t *testing.T) {
 		<-values
 		w = <-fake.watches
 		w.result <- nil
+	})
+}
+
+func TestEventsCancelStopsWatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake, _, values, _ := startFakeEvents(t)
+		call := <-fake.lists
+		call.result <- eventsListResult{}
+		<-values
+		w := <-fake.watches
+		w.result <- nil
+		synctest.Wait()
+		if w.watcher.IsStopped() {
+			t.Fatal("watch stopped before cancellation")
+		}
+		fake.cancel()
+		synctest.Wait()
+		select {
+		case <-fake.done:
+		default:
+			t.Fatal("runEvents did not return after cancellation")
+		}
+		if !w.watcher.IsStopped() {
+			t.Fatal("watch was not stopped after cancellation")
+		}
 	})
 }
 
@@ -481,7 +541,7 @@ func TestWatchEventsSelectionAndChanges(t *testing.T) {
 				Namespace:  eventNS,
 				UID:        uid,
 			},
-			Reason:        "Test",
+			Reason:        name,
 			Message:       "message",
 			Type:          "Warning",
 			Count:         1,
@@ -524,11 +584,21 @@ func TestWatchEventsSelectionAndChanges(t *testing.T) {
 		}
 	}
 	expect := observe(p)
-	expect(2, nil)
+	hasReasons := func(want ...string) func(protocol.ResourceEvents) bool {
+		return func(d protocol.ResourceEvents) bool {
+			got := make([]string, 0, len(d.Events))
+			for _, ev := range d.Events {
+				got = append(got, ev.Reason)
+			}
+			slices.Sort(got)
+			return slices.Equal(got, want)
+		}
+	}
+	expect(2, hasReasons("current", "no-uid"))
 	unknown := p
 	unknown.UID = ""
 	expectUnknown := observe(unknown)
-	expectUnknown(3, nil)
+	expectUnknown(3, hasReasons("current", "no-uid", "old"))
 	current.Count = 4
 	current.LastTimestamp = metav1.NewTime(time.Now().Add(time.Minute))
 	current, err = cs.CoreV1().Events(ns).Update(ctx, current, metav1.UpdateOptions{})
@@ -536,14 +606,14 @@ func TestWatchEventsSelectionAndChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(2, func(d protocol.ResourceEvents) bool {
-		return d.Events[0].UID == string(current.UID) && d.Events[0].Count == 4 &&
+		return hasReasons("current", "no-uid")(d) && d.Events[0].UID == string(current.UID) && d.Events[0].Count == 4 &&
 			d.Events[0].LastSeen.Equal(current.LastTimestamp.Time)
 	})
 	if err := cs.CoreV1().Events(ns).Delete(ctx, current.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	expect(1, nil)
-	expectUnknown(2, nil)
+	expect(1, hasReasons("no-uid"))
+	expectUnknown(2, hasReasons("no-uid", "old"))
 }
 
 func TestWatchEventsClusterScopedAndModern(t *testing.T) {

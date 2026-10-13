@@ -7,7 +7,7 @@
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "5af9bb1f3f695526";
+export const Hash = "870544f4acae3e14";
 
 //////////
 // source: protocol.go
@@ -373,6 +373,11 @@ export interface ResourceEventsParams {
    * An empty UID selects every incarnation of the Resource.
    */
   uid?: string;
+  /**
+   * OtherUIDs holds further UIDs that references to this incarnation use,
+   * such as the hash in a mirror Pod's kubernetes.io/config.mirror annotation.
+   */
+  otherUids?: string[];
 }
 /**
  * ResourceEvents is the current set of Events about a Resource, with uncapped counts.
