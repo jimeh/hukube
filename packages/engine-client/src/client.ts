@@ -1,8 +1,8 @@
-import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.ts";
+import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.gen.ts";
 import type { ErrorDetail } from "./protocol.gen.ts";
 
 /** The state of the connection to the Engine. */
-export type ConnectionState = "connecting" | "open" | "reconnecting" | "closed";
+export type ConnectionState = "connecting" | "open" | "reconnecting" | "outdated" | "closed";
 
 export interface SubscriptionListener<T> {
   data: (value: T) => void;

@@ -34,6 +34,8 @@ const (
 // ClientMessage is sent from a UI client to the Engine. ID is chosen by the
 // client and correlates responses and subscription data.
 type ClientMessage struct {
+	// Rev is the revision of subscription params, chosen by the client.
+	Rev    uint64          `json:"rev,omitempty"`
 	ID     uint64          `json:"id"`
 	Type   ClientType      `json:"type"`
 	Method Method          `json:"method,omitempty"`
@@ -44,6 +46,8 @@ type ClientMessage struct {
 type ServerType string
 
 const (
+	// ServerTypeHello is the first message on a control socket.
+	ServerTypeHello ServerType = "hello"
 	// ServerTypeResult answers a request.
 	ServerTypeResult ServerType = "result"
 	// ServerTypeData carries the latest value of a subscription.
@@ -54,10 +58,19 @@ const (
 
 // ServerMessage is sent from the Engine to a UI client.
 type ServerMessage struct {
+	// Rev is the revision of the params a subscription data or error answers.
+	Rev   uint64       `json:"rev,omitempty"`
+	Hello *Hello       `json:"hello,omitempty"`
 	ID    uint64       `json:"id"`
 	Type  ServerType   `json:"type"`
 	Data  any          `json:"data,omitempty" tstype:"unknown"`
 	Error *ErrorDetail `json:"error,omitempty"`
+}
+
+// Hello is the first message the Engine sends on a control socket.
+type Hello struct {
+	// Protocol is the Engine's protocol Hash.
+	Protocol string `json:"protocol"`
 }
 
 // ErrorCode classifies an ErrorDetail.
@@ -80,25 +93,6 @@ func (e *ErrorDetail) Error() string { return string(e.Code) + ": " + e.Message 
 
 // Method names a request or subscription topic.
 type Method string
-
-const (
-	// MethodClustersList returns []Cluster.
-	MethodClustersList Method = "clusters.list"
-	// MethodClusterStatus subscribes with ClusterParams to ClusterStatus.
-	MethodClusterStatus Method = "cluster.status"
-	// MethodClusterTypes subscribes with ClusterParams to []ResourceType.
-	MethodClusterTypes Method = "cluster.types"
-	// MethodResourcesQuery subscribes with QueryParams to QueryResult.
-	MethodResourcesQuery Method = "resources.query"
-	// MethodResourcesFind subscribes with FindParams to FindResult.
-	MethodResourcesFind Method = "resources.find"
-	// MethodResourceGet subscribes with ResourceRef to ResourceData.
-	MethodResourceGet Method = "resource.get"
-	// MethodSettingsWatch subscribes with SettingKey to Setting.
-	MethodSettingsWatch Method = "settings.watch"
-	// MethodSettingsPut stores a Setting and returns nothing.
-	MethodSettingsPut Method = "settings.put"
-)
 
 // Cluster is one kubeconfig context the Engine can connect to.
 type Cluster struct {
@@ -284,13 +278,10 @@ type FindParams struct {
 }
 
 // FindResult holds the best matches of a find, best first, and the number of
-// matches in total. It echoes the Text and Where it answers, so a client can
-// tell it apart from results for params it has since replaced.
+// matches in total.
 type FindResult struct {
-	Text  string `json:"text"`
-	Where *Expr  `json:"where,omitempty"`
-	Total int    `json:"total"`
-	Rows  []Row  `json:"rows"`
+	Total int   `json:"total"`
+	Rows  []Row `json:"rows"`
 }
 
 // ResourceRef addresses one Resource in a Cluster. Namespace is empty for

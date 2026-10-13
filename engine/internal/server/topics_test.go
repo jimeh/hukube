@@ -48,3 +48,30 @@ func TestQueryChangesFollowTheQuerysTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestMethodHandlersMatchDeclarations(t *testing.T) {
+	declared := make(map[protocol.Method]protocol.MethodKind)
+	for _, method := range protocol.Methods() {
+		declared[method.Name] = method.Kind
+		switch method.Kind {
+		case protocol.MethodKindRequest:
+			if requests[method.Name] == nil {
+				t.Errorf("request %q has no handler", method.Name)
+			}
+		case protocol.MethodKindTopic:
+			if topics[method.Name] == nil {
+				t.Errorf("topic %q has no handler", method.Name)
+			}
+		}
+	}
+	for name := range requests {
+		if declared[name] != protocol.MethodKindRequest {
+			t.Errorf("request handler %q has no declaration", name)
+		}
+	}
+	for name := range topics {
+		if declared[name] != protocol.MethodKindTopic {
+			t.Errorf("topic handler %q has no declaration", name)
+		}
+	}
+}

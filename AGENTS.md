@@ -66,8 +66,11 @@ can match your own shell. It never touches the clusters in your kubeconfig.
 
 ## Hazards
 
-- **Protocol changes:** edit `engine/internal/protocol`, then run
-  `mise run gen`. For tygo to generate TypeScript unions, enum constants must
+- **Protocol changes:** declare methods in `engine/internal/protocol/methods.go`
+  and edit wire types in `engine/internal/protocol`, then run `mise run gen`.
+  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Rebuild and
+  restart the Engine after a protocol change, or the UI shows the out-of-date
+  notice. For tygo to generate TypeScript unions, enum constants must
   start with their type's name (`ClusterPhaseReady`). `tstype` tags must not
   contain commas. Stage or stash all protocol source changes before the hook
   checks the staged generated types.
