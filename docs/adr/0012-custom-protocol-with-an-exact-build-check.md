@@ -75,6 +75,10 @@ match, and every rebuild in development would mismatch without cause.
 - A browser tab that outlives an Engine upgrade shows a notice and is fixed
   by reloading, which fetches the UI the new Engine serves. A desktop window
   in that state is fixed by restarting the app.
+- The tab only meets the new Engine when it comes back on the same address
+  with the same token. The Engine picks a free port and a random token unless
+  it is given both, so a web Host that should survive upgrades must pin them.
+  Otherwise the tab keeps trying to reconnect, as it did before this check.
 - In development, a running Engine refuses a UI built after a change to the
   protocol until the Engine is rebuilt. This is intended: the notice is the
   reminder.

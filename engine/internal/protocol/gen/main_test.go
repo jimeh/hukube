@@ -23,10 +23,17 @@ func TestTypeName(t *testing.T) {
 			t.Errorf("typeName(%v) = %q, %v; want %q", tt.typ, got, err, tt.want)
 		}
 	}
-	for _, typ := range []reflect.Type{reflect.TypeFor[string](), reflect.TypeFor[*protocol.Cluster](), reflect.TypeFor[map[string]protocol.Cluster]()} {
-		if _, err := typeName(typ); err == nil {
-			t.Errorf("accepted unsupported type %v", typ)
-		}
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[string](),
+		reflect.TypeFor[*protocol.Cluster](),
+		reflect.TypeFor[map[string]protocol.Cluster](),
+		reflect.TypeFor[protocol.Request[protocol.None, protocol.None]](),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			if _, err := typeName(typ); err == nil {
+				t.Errorf("accepted unsupported type %v", typ)
+			}
+		})
 	}
 }
 

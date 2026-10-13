@@ -403,6 +403,7 @@ ADR-0012 and the wording of ADR-0003 and ADR-0004 are written with this plan.
 | The palette opens a Resource from earlier input                      | Vitest for `resourceItems` with `stale`, and the existing Playwright palette test, which types at a human pace and presses Enter.                                                                                                                                                                                      |
 | The change breaks a feature                                          | The existing unit, envtest, and end-to-end suites for both Hosts.                                                                                                                                                                                                                                                      |
 | Reload fetches the old UI                                            | `server` test: a conditional request for `index.html`, at the root and at a client-side route, returns 200 with no validators.                                                                                                                                                                                         |
+| The notice says the wrong thing for a Host, or does not take focus   | Render test of the notice for both Hosts, and of focus moving to it when the state becomes `outdated`.                                                                                                                                                                                                                 |
 | The notice is missing, unclear, or does not clear                    | By hand, then by the experience review: open the web Host, replace its Engine with one built from a changed protocol definition on the same address, see the notice, reload, and see it gone. Both themes, 1280 px and a narrow width.                                                                                 |
 
 The notice has no automated end-to-end test. Producing a mismatch needs a
@@ -422,6 +423,17 @@ opens. The client tests cover the state, and the hand check covers the bar.
 - **Development loop.** After a protocol change, a running Engine refuses the
   rebuilt UI until it is restarted. This is intended, and the notice says so
   in a development build.
+- **A list that scrolls faster than the Engine answers.** A list replaces its
+  window every 100 rows. Before, a value for the window just left was still
+  shown, and it usually covered the visible rows. Now it is dropped, so while
+  the window keeps changing faster than the Engine answers, no rows arrive
+  until scrolling slows. This is an estimate, not a measurement: with the 50
+  to 90 ms a Query took over 100,000 Pods in the list columns work, it needs
+  more than about 1,100 rows a second, sustained. If it shows in use, a
+  consumer could opt in to superseded values.
+- **The notice needs the same address and token.** A tab meets a restarted
+  Engine only when both are pinned, as ADR-0012 records. With the defaults it
+  keeps reconnecting, which is what it did before this work.
 - **`Method` is a plain string in the generated types.** The envelope loses a
   union type. The typed surface, `EngineClient`, keeps exact method names
   from the generated map.
@@ -470,7 +482,12 @@ opens. The client tests cover the state, and the hand check covers the bar.
 - In the Go to Resource palette, Enter does nothing when pressed before the
   results for the current text arrive. This layer did not change that.
 - A menu or tooltip that is open at the moment the window goes out of date
-  renders outside the frozen content and stays usable until it closes.
+  renders outside the frozen content and stays usable until it closes. The
+  palette closes itself, but that was not confirmed in a browser for the case
+  where it is open at that moment.
+- `build:engine` does not run `mise run gen`, so an Engine rebuilt after a
+  protocol edit keeps the old hash until someone generates. `gen:check` and
+  the pre-commit hook catch it before a commit.
 
 ## A possible addition: refusing a stale `settings.put`
 

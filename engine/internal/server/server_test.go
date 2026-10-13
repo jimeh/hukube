@@ -193,6 +193,18 @@ func TestUnknownMethodsReturnBadRequest(t *testing.T) {
 	}
 }
 
+func TestClustersListIgnoresParams(t *testing.T) {
+	c := mustDial(t, newTestServer(t))
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeRequest, Method: protocol.RequestClustersList.Name,
+		Params: json.RawMessage(`[]`)})
+	c.await(1, func(m protocol.ServerMessage, _ json.RawMessage) bool {
+		if m.Type != protocol.ServerTypeResult {
+			t.Fatalf("clusters.list response = %+v, want result", m)
+		}
+		return true
+	})
+}
+
 // Settings written by one client reach every client watching them, which is
 // how windows share Workspace state (ADR-0009).
 func TestSettingsAreSharedAcrossClients(t *testing.T) {
@@ -209,7 +221,15 @@ func TestSettingsAreSharedAcrossClients(t *testing.T) {
 
 	writer.send(protocol.ClientMessage{ID: 7, Type: protocol.ClientTypeRequest, Method: protocol.RequestSettingsPut.Name,
 		Params: params(protocol.Setting{Key: "workspace/a", Value: json.RawMessage(`{"panes":2}`)})})
-	writer.await(7, func(m protocol.ServerMessage, _ json.RawMessage) bool { return m.Type == protocol.ServerTypeResult })
+	writer.await(7, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		if m.Type != protocol.ServerTypeResult {
+			return false
+		}
+		if len(data) != 0 {
+			t.Fatalf("settings.put result has data: %s", data)
+		}
+		return true
+	})
 
 	watcher.await(1, func(m protocol.ServerMessage, data json.RawMessage) bool {
 		var s protocol.Setting
@@ -375,9 +395,17 @@ func TestResourceGetWaitsForDiscovery(t *testing.T) {
 	ref := protocol.ResourceRef{Cluster: testenv.ClusterID, Type: "namespaces", Name: "default"}
 	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicResourceGet.Name, Params: params(ref)})
 	c.await(1, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		if m.Type != protocol.ServerTypeData {
+			return false
+		}
 		var d protocol.ResourceData
-		_ = json.Unmarshal(data, &d)
-		return m.Type == protocol.ServerTypeData && len(d.Object) > 0
+		if err := json.Unmarshal(data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.Object) == 0 {
+			t.Fatalf("resource.get sent data before a Manifest: %s", data)
+		}
+		return true
 	})
 }
 

@@ -24,7 +24,7 @@ func typeName(t reflect.Type) (string, error) {
 	if t == reflect.TypeFor[protocol.None]() {
 		return "undefined", nil
 	}
-	if t.PkgPath() == reflect.TypeFor[protocol.None]().PkgPath() && t.Name() != "" {
+	if t.PkgPath() == reflect.TypeFor[protocol.None]().PkgPath() && t.Name() != "" && !strings.Contains(t.Name(), "[") {
 		return t.Name(), nil
 	}
 	if t.Kind() == reflect.Slice {
