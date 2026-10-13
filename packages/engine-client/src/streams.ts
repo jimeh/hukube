@@ -36,8 +36,10 @@ const codecs: { [M in StreamMethod]: () => StreamCodec<M> } = {
 
 /**
  * The most input a stream holds for a process that is not reading it. A write
- * beyond this is refused and reported, so a container that never reads cannot
- * take the window's memory one paste at a time.
+ * that would add to waiting input beyond this is refused and reported, so a
+ * container that never reads cannot take the window's memory one paste at a
+ * time. A write is always accepted when nothing is waiting, however large:
+ * one paste is the user's to make.
  */
 export const streamInputPendingLimit = 8 << 20;
 
@@ -167,7 +169,7 @@ class SocketStream implements EngineStream {
   }
   write(data: Uint8Array): void {
     if (this.#codec.resumable || this.#closed || this.#ended || !data.byteLength) return;
-    if (this.#inputPending + data.byteLength > streamInputPendingLimit) {
+    if (this.#inputPending > 0 && this.#inputPending + data.byteLength > streamInputPendingLimit) {
       this.listener.inputDropped?.(data.byteLength);
       return;
     }
