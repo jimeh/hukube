@@ -103,7 +103,12 @@ func (g *Graph) Owners(node Node) []Owner {
 			}
 			return 1
 		}
-		return cmp.Or(cmp.Compare(a.Ref.Kind, b.Ref.Kind), cmp.Compare(a.Ref.Name, b.Ref.Name), cmp.Compare(a.Ref.UID, b.Ref.UID), cmp.Compare(a.Ref.APIVersion, b.Ref.APIVersion))
+		return cmp.Or(
+			cmp.Compare(a.Ref.Kind, b.Ref.Kind),
+			cmp.Compare(a.Ref.Name, b.Ref.Name),
+			cmp.Compare(a.Ref.UID, b.Ref.UID),
+			cmp.Compare(a.Ref.APIVersion, b.Ref.APIVersion),
+		)
 	})
 	return owners
 }
@@ -111,10 +116,52 @@ func (g *Graph) Owners(node Node) []Owner {
 // Owned returns direct owned Resources whose references resolve to node. A
 // Resource served under several types appears once, under the smallest key.
 func (g *Graph) Owned(node Node) []Node {
-	byUID := make(map[string]Node)
-	for _, resource := range g.store.OwnedBy(node.Meta.UID) {
-		typ, ok := g.types.Type(resource.Type)
-		if !ok || typ.State == protocol.TypeStateForbidden || typ.State == protocol.TypeStateFailed {
+	candidates, types := g.ownedCandidates(node)
+	if len(candidates) == 0 {
+		return nil
+	}
+	owned := make([]Node, 0, len(candidates))
+	for _, resource := range candidates {
+		owned = append(owned, Node{resource.Type, resource.Meta})
+	}
+	slices.SortFunc(owned, func(a, b Node) int {
+		return cmp.Or(
+			cmp.Compare(types[a.Type].Kind, types[b.Type].Kind),
+			cmp.Compare(a.Type, b.Type),
+			b.Meta.CreatedAt.Compare(a.Meta.CreatedAt),
+			cmp.Compare(a.Meta.Name, b.Meta.Name),
+			cmp.Compare(a.Meta.Namespace, b.Meta.Namespace),
+			cmp.Compare(a.Meta.UID, b.Meta.UID),
+		)
+	})
+	return owned
+}
+
+// ownedCandidates filters in place without sorting. Only candidates spanning
+// several types need UID deduplication: one type cannot serve a UID twice.
+func (g *Graph) ownedCandidates(node Node) ([]index.Resource, map[protocol.TypeKey]protocol.ResourceType) {
+	candidates := g.store.OwnedBy(node.Meta.UID)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	types := make(map[protocol.TypeKey]protocol.ResourceType)
+	for _, resource := range candidates {
+		if _, ok := types[resource.Type]; !ok {
+			typ, ok := g.types.Type(resource.Type)
+			if !ok {
+				typ.State = protocol.TypeStateFailed
+			}
+			types[resource.Type] = typ
+		}
+	}
+	var byUID map[string]index.Resource
+	if len(types) > 1 {
+		byUID = make(map[string]index.Resource)
+	}
+	owned := candidates[:0]
+	for _, resource := range candidates {
+		typ := types[resource.Type]
+		if typ.State == protocol.TypeStateForbidden || typ.State == protocol.TypeStateFailed {
 			continue
 		}
 		child := Node{resource.Type, resource.Meta}
@@ -123,22 +170,38 @@ func (g *Graph) Owned(node Node) []Node {
 			if owner.Status != protocol.RelatedStatusFound || owner.Node.identity() != node.identity() {
 				continue
 			}
-			if old, ok := byUID[child.Meta.UID]; !ok || child.Type < old.Type {
-				byUID[child.Meta.UID] = child
+			if byUID == nil {
+				owned = append(owned, resource)
+			} else if old, ok := byUID[child.Meta.UID]; !ok || child.Type < old.Type {
+				byUID[child.Meta.UID] = resource
 			}
 			break
 		}
 	}
-	owned := make([]Node, 0, len(byUID))
-	for _, child := range byUID {
-		owned = append(owned, child)
+	for _, resource := range byUID {
+		owned = append(owned, resource)
 	}
-	slices.SortFunc(owned, func(a, b Node) int {
-		at, _ := g.types.Type(a.Type)
-		bt, _ := g.types.Type(b.Type)
-		return cmp.Or(cmp.Compare(at.Kind, bt.Kind), cmp.Compare(a.Type, b.Type), b.Meta.CreatedAt.Compare(a.Meta.CreatedAt), cmp.Compare(a.Meta.Name, b.Meta.Name), cmp.Compare(a.Meta.Namespace, b.Meta.Namespace), cmp.Compare(a.Meta.UID, b.Meta.UID))
-	})
-	return owned
+	return owned, types
+}
+
+// countOwned visits each descendant once without sorting or retaining its Meta.
+func (g *Graph) countOwned(node Node) int {
+	seen := map[identity]bool{node.identity(): true}
+	var walk func(Node)
+	walk = func(current Node) {
+		candidates, _ := g.ownedCandidates(current)
+		for _, resource := range candidates {
+			child := Node{resource.Type, resource.Meta}
+			id := child.identity()
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			walk(child)
+		}
+	}
+	walk(node)
+	return len(seen) - 1
 }
 
 // AllOwned returns every descendant once, breadth first, excluding node.
@@ -204,7 +267,7 @@ func (g *Graph) Related(node Node, limits Limits) []protocol.RelatedSection {
 	if len(node.Meta.Owners) > 0 {
 		sections = append(sections, g.ownerSection(node, limits.OwnerPaths))
 	}
-	if total := len(g.AllOwned(node)); total > 0 {
+	if total := g.countOwned(node); total > 0 {
 		sections = append(sections, g.ownedSection(node, limits, total))
 	}
 	return sections
@@ -213,14 +276,29 @@ func (g *Graph) Related(node Node, limits Limits) []protocol.RelatedSection {
 func (g *Graph) row(node Node, status protocol.RelatedStatus) protocol.RelatedRow {
 	typ, _ := g.types.Type(node.Type)
 	created := node.Meta.CreatedAt
-	return protocol.RelatedRow{Status: status, Kind: typ.Kind, Type: node.Type, Namespace: node.Meta.Namespace, Name: node.Meta.Name, UID: node.Meta.UID, CreatedAt: &created}
+	return protocol.RelatedRow{
+		Status:    status,
+		Kind:      typ.Kind,
+		Type:      node.Type,
+		Namespace: node.Meta.Namespace,
+		Name:      node.Meta.Name,
+		UID:       node.Meta.UID,
+		CreatedAt: &created,
+	}
 }
 
 func (g *Graph) ownerRow(owner Owner) protocol.RelatedRow {
 	if owner.Status == protocol.RelatedStatusFound {
 		return g.row(owner.Node, owner.Status)
 	}
-	return protocol.RelatedRow{Status: owner.Status, Kind: owner.Ref.Kind, APIVersion: owner.Ref.APIVersion, Type: owner.Node.Type, Name: owner.Ref.Name, UID: owner.Ref.UID}
+	return protocol.RelatedRow{
+		Status:     owner.Status,
+		Kind:       owner.Ref.Kind,
+		APIVersion: owner.Ref.APIVersion,
+		Type:       owner.Node.Type,
+		Name:       owner.Ref.Name,
+		UID:        owner.Ref.UID,
+	}
 }
 
 type branch struct {
@@ -238,11 +316,16 @@ func flatten(branches []*branch, depth int, rows *[]protocol.RelatedRow) {
 }
 
 func sameRow(a, b protocol.RelatedRow) bool {
-	return a.Type == b.Type && a.Namespace == b.Namespace && a.Name == b.Name && a.UID == b.UID && a.Kind == b.Kind && a.APIVersion == b.APIVersion && a.Status == b.Status
+	return a.Type == b.Type && a.Namespace == b.Namespace && a.Name == b.Name && a.UID == b.UID &&
+		a.Kind == b.Kind && a.APIVersion == b.APIVersion && a.Status == b.Status
 }
 
 func (g *Graph) ownerSection(node Node, limit int) protocol.RelatedSection {
-	section := protocol.RelatedSection{Relationship: protocol.RelationshipKindOwns, Direction: protocol.RelatedDirectionIn, Rows: []protocol.RelatedRow{}}
+	section := protocol.RelatedSection{
+		Relationship: protocol.RelationshipKindOwns,
+		Direction:    protocol.RelatedDirectionIn,
+		Rows:         []protocol.RelatedRow{},
+	}
 	paths := [][]protocol.RelatedRow{}
 	var walk func(Node, []protocol.RelatedRow, map[identity]bool)
 	finish := func(path []protocol.RelatedRow) {
@@ -289,7 +372,9 @@ func (g *Graph) ownerSection(node Node, limit int) protocol.RelatedSection {
 	for _, path := range paths {
 		children := &roots
 		for _, row := range path {
-			if row.Status != protocol.RelatedStatusSelf && !slices.ContainsFunc(uniqueRows, func(r protocol.RelatedRow) bool { return sameRow(r, row) }) {
+			if row.Status != protocol.RelatedStatusSelf && !slices.ContainsFunc(uniqueRows, func(r protocol.RelatedRow) bool {
+				return sameRow(r, row)
+			}) {
 				uniqueRows = append(uniqueRows, row)
 			}
 			var found *branch
@@ -312,7 +397,12 @@ func (g *Graph) ownerSection(node Node, limit int) protocol.RelatedSection {
 }
 
 func (g *Graph) ownedSection(node Node, limits Limits, total int) protocol.RelatedSection {
-	section := protocol.RelatedSection{Relationship: protocol.RelationshipKindOwns, Direction: protocol.RelatedDirectionOut, Rows: []protocol.RelatedRow{}, Total: total}
+	section := protocol.RelatedSection{
+		Relationship: protocol.RelationshipKindOwns,
+		Direction:    protocol.RelatedDirectionOut,
+		Rows:         []protocol.RelatedRow{},
+		Total:        total,
+	}
 	root := &branch{}
 	type pending struct {
 		node   Node
@@ -352,7 +442,12 @@ func (g *Graph) ownedSection(node Node, limits Limits, total int) protocol.Relat
 			}
 			if more > 0 {
 				typ, _ := g.types.Type(children[start].Type)
-				p.parent.children = append(p.parent.children, &branch{row: protocol.RelatedRow{Status: protocol.RelatedStatusMore, Type: typ.Key, Kind: typ.Kind, More: more}})
+				p.parent.children = append(p.parent.children, &branch{row: protocol.RelatedRow{
+					Status: protocol.RelatedStatusMore,
+					Type:   typ.Key,
+					Kind:   typ.Kind,
+					More:   more,
+				}})
 				section.Truncated = true
 			}
 			start = end

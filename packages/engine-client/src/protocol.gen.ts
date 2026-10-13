@@ -470,9 +470,16 @@ export interface RelatedSection {
    */
   direction: RelatedDirection;
   rows: RelatedRow[];
+  /**
+   * Total counts distinct owners on the followed paths, resolved or not,
+   * or every owned descendant in an outgoing section.
+   */
   total: number /* int */;
   truncated?: boolean;
 }
+/**
+ * RelatedRow is a Resource, unresolved owner reference, or omitted group in a section.
+ */
 export interface RelatedRow {
   depth: number /* int */;
   status: RelatedStatus;
@@ -495,6 +502,9 @@ export interface RelatedRow {
    */
   more?: number /* int */;
 }
+/**
+ * RelatedType describes the Columns carried by rows of one Resource Type.
+ */
 export interface RelatedType {
   type: TypeKey;
   columns: Column[];
