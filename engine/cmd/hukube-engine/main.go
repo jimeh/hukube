@@ -40,6 +40,7 @@ type options struct {
 	allowOrigins     stringList
 	allowHosts       stringList
 	web              bool
+	readOnly         bool
 	uiDir            string
 	kubeconfig       string
 	dataDir          string
@@ -54,18 +55,23 @@ func main() {
 	}
 }
 
-func run() error {
-	var o options
+func registerOptions(o *options) {
 	flag.StringVar(&o.listen, "listen", "127.0.0.1:0", "loopback `address` to listen on; port 0 picks a free port")
 	flag.StringVar(&o.token, "token", os.Getenv("HUKUBE_TOKEN"), "token clients must present (default $HUKUBE_TOKEN, or random)")
 	flag.Var(&o.allowOrigins, "allow-origin", "additional browser `origin` allowed to connect (repeatable)")
 	flag.Var(&o.allowHosts, "allow-host", "additional `hostname` requests may address, besides loopback names (repeatable)")
+	flag.BoolVar(&o.readOnly, "read-only", false, "refuse requests that change a Cluster")
 	flag.BoolVar(&o.web, "web", false, "serve the UI from --ui-dir and print a URL to open it")
 	flag.StringVar(&o.uiDir, "ui-dir", "", "`directory` of the built UI bundle, served when --web is set")
 	flag.StringVar(&o.kubeconfig, "kubeconfig", "", "kubeconfig `path` (default $KUBECONFIG or ~/.kube/config)")
 	flag.StringVar(&o.dataDir, "data-dir", "", "`directory` for stored settings (default: user config dir)")
 	flag.BoolVar(&o.exitOnStdinClose, "exit-on-stdin-close", false, "exit when stdin closes, so the Engine dies with its parent")
 	flag.StringVar(&o.logLevel, "log-level", "info", "log `level`: debug, info, warn, or error")
+}
+
+func run() error {
+	var o options
+	registerOptions(&o)
 	flag.Parse()
 
 	var level slog.Level
@@ -118,6 +124,7 @@ func run() error {
 	source := kubeconfig.NewFileSource(o.kubeconfig)
 	srv := server.New(server.Config{
 		Token:          o.token,
+		ReadOnly:       o.readOnly,
 		AllowedOrigins: o.allowOrigins,
 		AllowedHosts:   o.allowHosts,
 		UIDir:          uiDir,

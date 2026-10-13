@@ -72,8 +72,12 @@ func Methods() []MethodDefinition { return append([]MethodDefinition(nil), metho
 var (
 	StreamResourceLogs = DeclareStream[LogStreamParams, LogStreamStatus]("resource.logs")
 
-	RequestClustersList = DeclareRequest[None, []Cluster]("clusters.list")
-	RequestSettingsPut  = DeclareRequest[Setting, None]("settings.put")
+	RequestClustersList   = DeclareRequest[None, []Cluster]("clusters.list")
+	RequestResourceAccess = DeclareRequest[ResourceRef, ResourceAccess]("resource.access")
+	RequestResourceReview = DeclareRequest[ResourceEdit, EditReview]("resource.review")
+	RequestResourceApply  = DeclareRequest[ResourceEdit, ApplyResult]("resource.apply")
+	RequestResourceDelete = DeclareRequest[DeleteParams, None]("resource.delete")
+	RequestSettingsPut    = DeclareRequest[Setting, None]("settings.put")
 
 	TopicClusterStatus   = DeclareTopic[ClusterParams, ClusterStatus]("cluster.status")
 	TopicClusterTypes    = DeclareTopic[ClusterParams, []ResourceType]("cluster.types")

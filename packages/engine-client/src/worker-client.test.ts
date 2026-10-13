@@ -94,3 +94,49 @@ it("acknowledges stream bytes after the main-thread data listener returns", () =
   expect(data).toHaveBeenCalledTimes(2);
   expect(worker.sent.at(-1)).toEqual({ kind: "stream-close", id: message.id });
 });
+
+it("exposes structured errors and client-only disconnected errors", async () => {
+  const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+  const worker = FakeWorker.latest;
+  const promise = client.request("clusters.list", undefined);
+  const error = {
+    code: "invalid" as const,
+    message: "invalid",
+    reason: "Invalid",
+    causes: [{ field: "spec.replicas", message: "negative" }],
+  };
+  worker.receive({ kind: "failure", id: 1, error });
+  await expect(promise).rejects.toMatchObject(error);
+  const disconnected = client.request("clusters.list", undefined);
+  worker.receive({ kind: "failure", id: 2, error: { code: "disconnected", message: "lost" } });
+  await expect(disconnected).rejects.toMatchObject({ code: "disconnected" });
+  client.close();
+});
+
+it("sends cancellation, ignores the late answer, and cleans up finished requests", async () => {
+  const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+  const worker = FakeWorker.latest;
+  const aborted = new AbortController();
+  aborted.abort();
+  await expect(
+    client.request("clusters.list", undefined, { signal: aborted.signal }),
+  ).rejects.toMatchObject({ code: "cancelled" });
+  expect(worker.sent).toHaveLength(1);
+  const controller = new AbortController();
+  const promise = client.request("clusters.list", undefined, { signal: controller.signal });
+  controller.abort();
+  expect(worker.sent.at(-1)).toEqual({ kind: "cancel", id: 1 });
+  await expect(promise).rejects.toMatchObject({ code: "cancelled" });
+  worker.receive({ kind: "result", id: 1, data: [] });
+  const active = new AbortController();
+  const complete = client.request("clusters.list", undefined, { signal: active.signal });
+  worker.receive({ kind: "result", id: 2, data: [] });
+  await expect(complete).resolves.toEqual([]);
+  active.abort();
+  expect(worker.sent.at(-1)?.kind).toBe("request");
+  const closed = client.request("clusters.list", undefined, {
+    signal: new AbortController().signal,
+  });
+  client.close();
+  await expect(closed).rejects.toMatchObject({ code: "disconnected" });
+});

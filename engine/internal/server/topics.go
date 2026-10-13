@@ -57,6 +57,17 @@ func handleRequest[P, R any](method protocol.Request[P, R], handler func(context
 	}
 }
 
+// handleMutation registers a request that changes a Cluster, enforcing read-only mode.
+func handleMutation[P, R any](method protocol.Request[P, R], handler func(context.Context, *Server, P) (R, error)) {
+	handleRequest(method, func(ctx context.Context, srv *Server, p P) (R, error) {
+		if srv.cfg.ReadOnly {
+			var zero R
+			return zero, &protocol.ErrorDetail{Code: protocol.ErrorCodeForbidden, Message: readOnlyReason}
+		}
+		return handler(ctx, srv, p)
+	})
+}
+
 // handleTopic registers a typed handler for a declared subscription topic.
 func handleTopic[P, D any](method protocol.Topic[P, D], handler func(context.Context, *Server, P, func()) (*live[D], error)) {
 	if _, ok := topics[method.Name]; ok {

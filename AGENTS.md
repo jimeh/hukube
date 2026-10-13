@@ -66,6 +66,11 @@ can match your own shell. It never touches the clusters in your kubeconfig.
 
 ## Hazards
 
+- **Cluster mutations:** register requests that change a Cluster with
+  `handleMutation`, so `--read-only` covers them. Run preflight and dry runs
+  under the request context. Never run a real PATCH or DELETE under it:
+  use `context.WithoutCancel` with `Timing.WriteTimeout`, so a write already
+  sent finishes after a cancel or a lost socket.
 - **Protocol changes:** declare methods in `engine/internal/protocol/methods.go`
   and edit wire types in `engine/internal/protocol`, then run `mise run gen`.
   It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Rebuild and
