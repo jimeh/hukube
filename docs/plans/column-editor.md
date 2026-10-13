@@ -176,7 +176,9 @@ spreadsheets, and other data grids. The list's toolbar holds filters only.
 - **A "Customize columns" button** at the right end of the header row opens
   the column checklist and "Reset to default". It is an icon button with a
   tooltip, pinned to the right edge when the list scrolls sideways, and it
-  has a grid track of its own, so it never covers the last column.
+  has a grid track of its own, so it never covers the last column. That
+  track takes the spare width when no column does, such as in a list that
+  shows only Age, so the button stays at the right end.
 - **A header's context menu** offers Sort ascending, Sort descending, Hide
   column, Move left, and Move right, and below a separator the same checklist
   and "Reset to default".
@@ -208,6 +210,11 @@ there. While the pointer is level with the header row, anywhere past the last
 column means after it, including over the pinned button, and anywhere before
 the first means before it. A release away from the header row moves nothing.
 
+The marker and the drop cannot disagree, because a drop goes to the edge the
+marker last showed. dnd-kit sends a move before it applies it, so the marker
+is worked out from the position the move carries and from the header's place
+on screen, and again whenever the list scrolls during a drag.
+
 - **The newer dnd-kit API, not `@dnd-kit/core` and `@dnd-kit/sortable`.** The
   older packages last released in December 2024. `@dnd-kit/react` released
   0.5.0 in June 2026 and betas through September 2026. It is still before
@@ -224,7 +231,13 @@ the first means before it. A release away from the header row moves nothing.
   sticky. `Scroller.getScrollableElements` is a public property but not a
   documented option, so an upgrade of dnd-kit must recheck it. The Playwright
   test's edge-scrolling step fails if it stops working.
-- **Touch does not start a drag**, so touch still scrolls the list.
+- **Touch does not start a drag**, so touch still scrolls the list. Neither
+  does a press with Control held, which opens the context menu on macOS.
+  That also rules out a Control-drag on Windows and Linux.
+- **An upgrade of dnd-kit must recheck three things** besides the scrolling
+  workaround below: that a move event carries its new position in `to`, that
+  the position is applied after the event, and that every drag that starts
+  also ends, because the scroll listener is removed there.
 - **Dockview is unaffected.** Dockview drags Tabs and Panes with HTML drag
   events, which dnd-kit's pointer sensor never starts.
 
@@ -285,7 +298,11 @@ How the Event and Pod lists look at 1280 px is checked by hand on
   not a documented option. Both packages are pinned exactly.
 - **Firefox and Safari are untested.** The web Host should work in both.
   Nothing used is specific to Chromium, but dragging has only been run in
-  Chromium.
+  Chromium. Recomputing the marker while the list scrolls made no difference
+  in Chromium, so those two are where it would matter.
+- **No test shows that a drag never scrolls the list up or down.** The
+  sample lists are too short to scroll that way. It rests on the auto-scroll
+  setting and a check by hand.
 - **Wide Event cells.** Object can grow to 48 characters, which with a long
   Reason leaves Message its least width or forces sideways scrolling in a
   narrow Pane. Resizing columns is a non-goal here.
@@ -310,6 +327,10 @@ How the Event and Pod lists look at 1280 px is checked by hand on
   copy of a header covered the marker and the labels beside it. The review
   also asked for the Event list to open sorted by Last Seen, which stays a
   non-goal here.
+- **Code review of the header row found the marker and the drop could
+  disagree**, and that the button left the right end of a list with only
+  fixed-width columns. Both are fixed as "Drag headers with dnd-kit" and
+  "Customize columns from the header row" describe.
 - **Dragging moved to dnd-kit.** The hand-rolled pointer-event drag was
   replaced on Jim's direction, because it avoided a dependency at the cost
   of the experience: a drag could not scroll the list. "Drag headers with
