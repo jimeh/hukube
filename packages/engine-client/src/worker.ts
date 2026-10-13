@@ -1,6 +1,6 @@
 // Runs the Engine connection off the main thread, so parsing bursts of
 // socket messages does not block rendering (ADR-0004).
-import { EngineRequestError, type Subscription } from "./client.ts";
+import { EngineRequestError, type Subscription, type EngineStream } from "./client.ts";
 import { EngineConnection } from "./connection.ts";
 import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
@@ -12,6 +12,9 @@ const scope = self as unknown as {
 let connection: EngineConnection | undefined;
 const subscriptions = new Map<number, { sub: Subscription<unknown>; count: number }>();
 
+const streams = new Map<number, EngineStream>();
+const acknowledgements = new Map<number, { id: number; acknowledge: () => void }>();
+let nextToken = 1;
 scope.onmessage = ({ data: msg }) => {
   switch (msg.kind) {
     case "connect": {
@@ -20,6 +23,46 @@ scope.onmessage = ({ data: msg }) => {
       conn.onStateChange(() => scope.postMessage({ kind: "state", state: conn.getState() }));
       break;
     }
+    case "stream-open": {
+      const stream = connection?.openStream(
+        msg.method,
+        msg.params as never,
+        {
+          state: (state) => scope.postMessage({ kind: "stream-state", id: msg.id, state }),
+          event: (event) => scope.postMessage({ kind: "stream-event", id: msg.id, event }),
+          data: () => {},
+          gap: (gap) => scope.postMessage({ kind: "stream-gap", id: msg.id, gap }),
+          end: (end) => scope.postMessage({ kind: "stream-end", id: msg.id, end }),
+        },
+        (data, bytes, acknowledge) => {
+          const token = nextToken++;
+          acknowledgements.set(token, { id: msg.id, acknowledge });
+          scope.postMessage({ kind: "stream-data", id: msg.id, data, bytes, token });
+        },
+      );
+      if (stream) streams.set(msg.id, stream);
+      break;
+    }
+    case "stream-ack": {
+      const pending = acknowledgements.get(msg.token);
+      if (pending?.id === msg.id) {
+        pending.acknowledge();
+        acknowledgements.delete(msg.token);
+      }
+      break;
+    }
+    case "stream-pause":
+      streams.get(msg.id)?.pause();
+      break;
+    case "stream-resume":
+      streams.get(msg.id)?.resume();
+      break;
+    case "stream-close":
+      streams.get(msg.id)?.close();
+      streams.delete(msg.id);
+      for (const [token, pending] of acknowledgements)
+        if (pending.id === msg.id) acknowledgements.delete(token);
+      break;
     case "request":
       connection?.request(msg.method, msg.params as never).then(
         (data) => scope.postMessage({ kind: "result", id: msg.id, data }),

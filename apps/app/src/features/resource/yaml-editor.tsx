@@ -1,15 +1,11 @@
 import "monaco-editor/languages/definitions/yaml/register";
 
-import * as monaco from "monaco-editor/editor/editor.api";
-// oxlint-disable-next-line import/default -- Vite provides the default export for ?worker imports.
-import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import { monaco } from "@/lib/monaco.ts";
 import { useEffect, useRef } from "react";
 
 import { useTheme } from "@/lib/theme.ts";
 
 import { applyEditorTheme } from "./editor-theme.ts";
-
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
 const monoFont = "JetBrains Mono Variable";
 
@@ -26,6 +22,7 @@ export default function YamlEditor({ value }: { value: string }) {
       value: "",
       language: "yaml",
       readOnly: true,
+      ariaLabel: "Resource YAML",
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,

@@ -249,6 +249,9 @@ func (r *containerReader) run() {
 		r.instance(previous(snapshot.status))
 		options := &corev1.PodLogOptions{Container: r.name, Timestamps: true, Previous: true, TailLines: &r.s.tail}
 		_, err := r.read(options, "", 0)
+		if err == nil && previous(snapshot.status) != "" {
+			r.exited(previous(snapshot.status))
+		}
 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			r.s.fail(err)
 		} else if err != nil && !apierrors.IsBadRequest(err) {
