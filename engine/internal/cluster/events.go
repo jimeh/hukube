@@ -2,16 +2,20 @@ package cluster
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 
@@ -91,9 +95,15 @@ func (c *Cluster) runEvents(ctx context.Context, lw cache.ListerWatcher, store *
 		if ctx.Err() != nil {
 			return
 		}
+		if expired(err) {
+			// The next attempt lists again, which is all an expired
+			// resourceVersion needs.
+			err = nil
+		}
 		wait := delay
 		switch {
 		case err != nil:
+			err = requestCause(err)
 			onErr(err)
 			c.log.Warn("events watch failed", "err", err, "retry", wait)
 			delay = min(delay*2, c.timing.RetryMax)
@@ -115,6 +125,29 @@ type eventsListerWatcher struct {
 }
 
 func (eventsListerWatcher) IsWatchListSemanticsUnSupported() bool { return true }
+
+// WatchWithContext makes a watch that cannot start end the attempt. A
+// Reflector retries a refused connection and a 429 inside the attempt without
+// returning, so an unreachable Cluster would leave the client with Events that
+// no longer update and no error. An error the Reflector does not recognize
+// returns to runEvents, which reports it and lists again.
+func (w eventsListerWatcher) WatchWithContext(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
+	result, err := w.ListerWatcherWithContext.WatchWithContext(ctx, opts)
+	if utilnet.IsConnectionRefused(err) || apierrors.IsTooManyRequests(err) {
+		return nil, errors.New(requestCause(err).Error())
+	}
+	return result, err
+}
+
+// requestCause drops the request's URL from a transport error. The URL holds
+// the whole field selector, which says nothing a user can act on.
+func requestCause(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+	return err
+}
 
 // eventsStore emits after the Reflector replaces its list or changes a row.
 // listed resets the retry delay after a completed list.

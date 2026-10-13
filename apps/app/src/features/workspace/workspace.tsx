@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { clusterScope } from "@/features/clusters/cluster-color.ts";
 import { GoToResource } from "@/features/go-to-resource/go-to-resource.tsx";
 import { ResourceListPanel } from "@/features/resource-list/resource-list-panel.tsx";
-import { previewResourceUri } from "@/features/resource/facet-rules.ts";
+import { newResourceUri } from "@/features/resource/facet-rules.ts";
 import { ResourcePanel } from "@/features/resource/resource-panel.tsx";
 import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
 import { useTheme } from "@/lib/theme.ts";
@@ -88,15 +88,15 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
           component: "resource",
           title: address.name,
           params: { uri },
-          replacePreviewParams: (params, previous) => ({
+          deriveActiveTabParams: (params, activeParams) => ({
             ...params,
-            uri: previewResourceUri(
+            uri: newResourceUri(
               params.uri,
-              previous &&
-                typeof previous === "object" &&
-                "uri" in previous &&
-                typeof previous.uri === "string"
-                ? previous.uri
+              activeParams &&
+                typeof activeParams === "object" &&
+                "uri" in activeParams &&
+                typeof activeParams.uri === "string"
+                ? activeParams.uri
                 : undefined,
             ),
           }),

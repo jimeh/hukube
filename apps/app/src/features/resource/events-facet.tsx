@@ -1,4 +1,4 @@
-// A grid keeps the message on a second line; ARIA preserves table semantics.
+// A grid puts messages and reporter details below the metadata; ARIA preserves table semantics.
 /* oxlint-disable jsx-a11y/prefer-tag-over-role */
 
 import type { ResourceEvent, ResourceEvents } from "@hukube/engine-client";
@@ -38,7 +38,7 @@ export function EventsBadge({ events }: FacetProps) {
   );
 }
 
-const columns = ["Last seen", "Type", "Reason", "Count", "From"];
+const columns = ["Last seen", "Type", "Reason"];
 
 /** Shows live Events about the Resource, including loading and recovery states. */
 export function EventsFacet({ address, kind, events }: FacetProps) {
@@ -51,7 +51,7 @@ export function EventsFacet({ address, kind, events }: FacetProps) {
         description={
           address.namespace
             ? `Your credentials cannot list Events in the ${address.namespace} Namespace.`
-            : `Your credentials cannot list Events across the cluster, which the Events of a cluster-scoped ${kind} need.`
+            : `Showing the Events of a cluster-scoped Resource such as this ${kind} needs permission to list Events in every Namespace.`
         }
       />
     );
@@ -74,69 +74,84 @@ export function EventsFacet({ address, kind, events }: FacetProps) {
           Events may be out of date: {error.message}
         </p>
       )}
-      <section
-        className="min-h-0 flex-1 overflow-auto focus-visible:outline focus-visible:outline-ring"
-        // The scrolling area must be reachable for keyboard scrolling.
-        // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-        tabIndex={0}
-        aria-label="Events"
-        aria-busy={loading}
-      >
-        <div
-          role="table"
-          aria-label="Resource Events"
-          className="grid grid-cols-[max-content_max-content_minmax(0,1fr)_max-content_minmax(0,min(28ch,30%))] gap-x-3 font-mono"
+      <div className="relative min-h-0 flex-1">
+        <section
+          className="peer h-full overflow-auto outline-none"
+          // The scrolling area must be reachable for keyboard scrolling.
+          // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+          tabIndex={0}
+          aria-label="Events"
+          aria-busy={loading}
         >
           <div
-            role="row"
-            className="sticky top-0 z-10 col-span-full grid h-7 grid-cols-subgrid items-center border-b bg-background px-3 text-muted-foreground"
+            role="table"
+            aria-label="Resource Events"
+            className="grid grid-cols-[9ch_minmax(10ch,max-content)_minmax(0,1fr)] gap-x-3 font-mono"
           >
-            {columns.map((column) => (
-              <div
-                key={column}
-                role="columnheader"
-                className={cn("min-w-0 whitespace-nowrap", column === "Count" && "text-right")}
-              >
-                {column}
-              </div>
-            ))}
-            <div role="columnheader" className="sr-only">
-              Message
-            </div>
-          </div>
-          {loading
-            ? Array.from({ length: 3 }, (_, i) => (
+            <div
+              role="row"
+              className="sticky top-0 z-10 col-span-full grid h-7 grid-cols-subgrid items-center border-b bg-background px-3 text-muted-foreground"
+            >
+              {columns.map((column) => (
                 <div
-                  key={i}
-                  role="row"
-                  className="col-span-full grid grid-cols-subgrid gap-y-1 border-b px-3 py-2"
+                  key={column}
+                  role="columnheader"
+                  className="min-w-0 truncate font-sans text-xs"
                 >
-                  {columns.map((column) => (
-                    <div key={column} role="cell" className="min-w-0">
-                      <Skeleton className="h-3 w-full max-w-16" />
-                    </div>
-                  ))}
-                  <div role="cell" className="col-[2/-1] min-w-0">
-                    <Skeleton className="h-3 w-full max-w-80" />
-                  </div>
+                  {column}
                 </div>
-              ))
-            : data.events.map((event) => <EventRow key={event.uid} event={event} />)}
-        </div>
-        {!loading && data.total > data.events.length && (
-          <p className="px-3 py-2 text-muted-foreground">
-            Showing the newest {data.events.length.toLocaleString("en-US")} of{" "}
-            {data.total.toLocaleString("en-US")} Events.
-          </p>
-        )}
-      </section>
+              ))}
+              <div role="columnheader" className="sr-only">
+                Message
+              </div>
+              <div role="columnheader" className="sr-only">
+                From and count
+              </div>
+            </div>
+            {loading
+              ? Array.from({ length: 3 }, (_, i) => (
+                  <div
+                    key={i}
+                    role="row"
+                    className="col-span-full grid grid-cols-subgrid gap-y-1 border-b px-3 py-2"
+                  >
+                    {columns.map((column) => (
+                      <div key={column} role="cell" className="min-w-0">
+                        <Skeleton className="h-3 w-full max-w-16" />
+                      </div>
+                    ))}
+                    <div role="cell" className="col-[2/-1] min-w-0">
+                      <Skeleton className="h-3 w-full max-w-80" />
+                    </div>
+                    <div role="cell" className="col-[2/-1] min-w-0">
+                      <Skeleton className="h-3 w-full max-w-40" />
+                    </div>
+                  </div>
+                ))
+              : data.events.map((event) => <EventRow key={event.uid} event={event} />)}
+          </div>
+          {!loading && data.total > data.events.length && (
+            <p className="px-3 py-2 text-muted-foreground">
+              Showing the newest {data.events.length.toLocaleString("en-US")} of{" "}
+              {data.total.toLocaleString("en-US")} Events.
+            </p>
+          )}
+        </section>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-20 peer-focus-visible:outline-1 peer-focus-visible:-outline-offset-1 peer-focus-visible:outline-ring"
+        />
+      </div>
     </div>
   );
 }
 
 function EventRow({ event }: { event: ResourceEvent }) {
   const now = useNow();
-  const from = `${event.reporter ?? ""}${event.reporterInstance ? `, ${event.reporterInstance}` : ""}`;
+  const reporter = [event.reporter, event.reporterInstance].filter(Boolean).join(", ");
+  const details = [reporter && `From ${reporter}`, event.count > 1 && `${event.count} times`]
+    .filter(Boolean)
+    .join(" · ");
   const warning = event.type === "Warning";
   return (
     <div
@@ -157,7 +172,7 @@ function EventRow({ event }: { event: ResourceEvent }) {
           warning && "font-medium",
         )}
       >
-        <span className="inline-flex items-center gap-1">
+        <span className="flex items-center gap-1">
           {warning && (
             <HugeiconsIcon
               icon={Alert02Icon}
@@ -171,14 +186,17 @@ function EventRow({ event }: { event: ResourceEvent }) {
       <div role="cell" className="min-w-0 truncate" title={event.reason}>
         {event.reason}
       </div>
-      <div role="cell" className="text-right whitespace-nowrap tabular-nums">
-        {event.count}
+      <div role="cell" className="col-[2/-1] min-w-0 wrap-break-word whitespace-pre-wrap">
+        {event.message.trim()}
       </div>
-      <div role="cell" className="min-w-0 max-w-[28ch] truncate" title={from}>
-        {from}
-      </div>
-      <div role="cell" className="col-[2/-1] min-w-0 wrap-break-word">
-        {event.message}
+      <div
+        role="cell"
+        className={cn(
+          "col-[2/-1] min-w-0 wrap-break-word text-muted-foreground",
+          !details && "sr-only",
+        )}
+      >
+        {details}
       </div>
     </div>
   );

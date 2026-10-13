@@ -75,7 +75,7 @@ export function ResourcePanel({
         className="min-h-0 flex-1 gap-0"
       >
         <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-3">
-          <TabsList variant="line" aria-label="Facets" activateOnFocus>
+          <TabsList variant="line" aria-label="Facets" activateOnFocus className="shrink-0">
             {available.map(({ id, label, Badge: FacetBadge, accessibleName }) => (
               <TabsTrigger
                 key={id}
@@ -87,7 +87,7 @@ export function ResourcePanel({
               </TabsTrigger>
             ))}
           </TabsList>
-          <div ref={setControls} className="flex shrink-0 items-center" />
+          <div ref={setControls} className="flex min-w-0 items-center" />
         </div>
         {available.map(
           ({ id, View }) =>

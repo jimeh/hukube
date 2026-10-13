@@ -36,7 +36,9 @@ switcher and the URI handling read the registry and know no Facet by name.
 - A URI that names a Facet which does not apply to its Resource shows the
   default Facet. A URI that names a Facet this build does not know is not a
   Resource URI, as before.
-- A Preview Tab that replaces another Resource's Preview Tab opens on the
-  Facet the replaced tab showed, when that Facet applies. Moving through a
-  list therefore keeps the Events Facet open, the way a browser's network
-  inspector keeps its Response tab while requests are selected.
+- A Resource tab that opens in a Pane whose active tab is a Resource tab
+  opens on that tab's Facet, when the Facet applies. Moving through a list,
+  or opening one Resource after another, therefore keeps the Events Facet
+  open, the way a browser's network inspector keeps its Response tab while
+  requests are selected. The rule reads what the user can see in the Pane,
+  not a remembered last choice.
