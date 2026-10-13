@@ -5,6 +5,9 @@ import { useUnsavedEdits, guardWorkspace, guardPanel } from "./unsaved-edits.ts"
 import { UnsavedGuard } from "./unsaved-guard.tsx";
 import { copyText } from "./clipboard.ts";
 import { useExecSessions, disposeSession, type ExecState } from "../exec/sessions.ts";
+// Imported here, not inside a test: loading the icon set takes seconds on a
+// slow machine, which would count against the first test's time limit.
+import { PanelTab } from "../workspace/panel-tab.tsx";
 afterEach(() => {
   cleanup();
   for (const id of useExecSessions.getState().entries.keys()) disposeSession(id);
@@ -24,7 +27,6 @@ function session(id: string, state: ExecState = { phase: "live" }) {
 it.each(["button", "middle click"])(
   "guards an Exec Session Tab's %s close path and keeps it running on cancel",
   async (action) => {
-    const { PanelTab } = await import("../workspace/panel-tab.tsx");
     session("id", { phase: "starting" });
     const close = vi.fn<() => void>();
     const props = {
@@ -158,7 +160,6 @@ it("copies YAML without navigator.clipboard and restores focus", async () => {
 });
 
 it.each(["button", "middle click"])("guards the Tab's %s close path", async (action) => {
-  const { PanelTab } = await import("../workspace/panel-tab.tsx");
   const close = vi.fn<() => void>();
   const props = {
     api: {
