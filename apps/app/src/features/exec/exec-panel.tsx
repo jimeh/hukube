@@ -19,13 +19,16 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { isMac } from "@/lib/platform.ts";
 import { useTheme } from "@/lib/theme.ts";
 import { useResourceAccess } from "../edit/use-access.ts";
 import { metadata } from "../edit/yaml.ts";
 import { Notice } from "../resource/notice.tsx";
+import { openGoToResource } from "../go-to-resource/open.ts";
 import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { execContainers, execDisabledReason } from "./containers.ts";
+import { execKeyLabels } from "./keys.ts";
 import {
   startSession,
   useExecSessions,
@@ -76,7 +79,18 @@ export function ExecPanel({
   }, [api]);
   const body = useRef<HTMLDivElement>(null);
   const [finding, setFinding] = useState(false);
+  const findInput = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
   const [selection, setSelection] = useState(false);
+  const restartButton = useRef<HTMLButtonElement>(null);
+  const keys = execKeyLabels(isMac);
+  // Asked for again while its bar is open, find returns to its field.
+  const find = () => {
+    setFinding(true);
+    findInput.current?.focus();
+    findInput.current?.select();
+  };
+  const findFromTerminal = useEffectEvent(find);
   const theme = useTheme();
   const showing = visible && active;
   const renderingTerminal = !!session && state?.phase !== "waiting" && state?.phase !== "failed";
@@ -90,14 +104,22 @@ export function ExecPanel({
   useEffect(() => {
     if (showing && selected && terminal) terminal.focus();
   }, [terminal, showing, selected]);
-  useEffect(() => terminal?.onFind(() => setFinding(true)), [terminal]);
+  useEffect(() => terminal?.onFind(findFromTerminal), [terminal]);
+  const phase = state?.phase;
+  useEffect(() => {
+    // An ended terminal takes no keys, so the keyboard needs somewhere to go.
+    if (phase === "ended" && terminal?.element.contains(document.activeElement))
+      restartButton.current?.focus();
+  }, [phase, terminal]);
   const restart = (label: string) => (
     <Tooltip>
       <TooltipTrigger
         render={
           <Button
+            ref={restartButton}
             variant="outline"
             size="sm"
+            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             disabled={!!reason}
             focusableWhenDisabled
             onClick={() => {
@@ -113,16 +135,21 @@ export function ExecPanel({
     </Tooltip>
   );
   const ended = state?.phase === "ended";
-  // "Starting…" shows over the terminal instead: a badge that comes and goes
-  // can rewrap the header, which resizes the terminal just as its shell starts.
-  const badge =
-    state?.phase === "waiting"
+  // The header always has a badge, in a slot of one width. One that came
+  // and went would rewrap the header and resize the terminal under a shell.
+  const badge = !session
+    ? "Not running"
+    : state?.phase === "waiting"
       ? "Waiting"
-      : ended
-        ? "Ended"
-        : state?.phase === "live" && metadata(pod.data?.object)["deletionTimestamp"]
-          ? "Terminating"
-          : undefined;
+      : state?.phase === "starting"
+        ? "Starting…"
+        : state?.phase === "failed"
+          ? "Not started"
+          : ended
+            ? "Ended"
+            : metadata(pod.data?.object)["deletionTimestamp"]
+              ? "Terminating"
+              : "Live";
   const pasteReason = "This Host cannot read the clipboard; use the keyboard.";
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -150,6 +177,8 @@ export function ExecPanel({
             >
               <span className="truncate">{params.pod}</span>
             </Button>
+          </span>
+          <span className="flex min-w-0 max-w-full items-center gap-1.5">
             <span className="text-muted-foreground">in</span>
             <span className="truncate font-mono text-muted-foreground" title={params.namespace}>
               {params.namespace}
@@ -162,11 +191,15 @@ export function ExecPanel({
             </span>
           </span>
         </div>
-        {badge && (
-          <Badge variant="secondary" className="mt-1 shrink-0">
-            {badge}
-          </Badge>
-        )}
+        <Badge
+          variant={badge === "Live" ? "outline" : "secondary"}
+          className={
+            "mt-1 min-w-[5.75rem] shrink-0 justify-center" +
+            (badge === "Live" ? " border-cluster text-cluster" : "")
+          }
+        >
+          {badge}
+        </Badge>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -176,19 +209,19 @@ export function ExecPanel({
                 className="shrink-0"
                 aria-label="Find in scrollback"
                 disabled={!terminal || !renderingTerminal}
-                onClick={() => setFinding(true)}
+                onClick={find}
               />
             }
           >
             <HugeiconsIcon icon={Search01Icon} />
           </TooltipTrigger>
-          <TooltipContent>Find in scrollback</TooltipContent>
+          <TooltipContent>Find in scrollback ({keys.find})</TooltipContent>
         </Tooltip>
       </header>
       {!session ? (
         <Notice
-          title="This session is over"
-          description="An Exec Session does not survive a reload. Its shell was told to exit."
+          title="No session is running here"
+          description="An Exec Session belongs to the window that started it, and does not survive a reload."
           action={restart("Start a new session")}
         />
       ) : state?.phase === "waiting" ? (
@@ -215,17 +248,15 @@ export function ExecPanel({
           }}
         >
           <ContextMenuTrigger
-            render={<div className="relative min-h-0 flex-1 overflow-hidden p-2" />}
+            render={<div className="relative min-h-0 flex-1 overflow-hidden px-3 py-2" />}
           >
             <div ref={body} className="h-full min-h-0" />
-            {state?.phase === "starting" && (
-              <output className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">
-                Starting…
-              </output>
-            )}
             {finding && terminal && (
               <FindBar
                 terminal={terminal}
+                query={query}
+                setQuery={setQuery}
+                input={findInput}
                 close={() => {
                   setFinding(false);
                   terminal.clearSearch();
@@ -238,6 +269,7 @@ export function ExecPanel({
             <ContextMenuGroup>
               <ContextMenuItem disabled={!selection} onClick={() => terminal?.copy()}>
                 Copy
+                <Shortcut>{keys.copy}</Shortcut>
               </ContextMenuItem>
               <ContextMenuItem
                 disabled={!navigator.clipboard?.readText || ended}
@@ -250,10 +282,21 @@ export function ExecPanel({
                 }}
               >
                 Paste
+                <Shortcut>{keys.paste}</Shortcut>
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => terminal?.selectAll()}>Select all</ContextMenuItem>
-              <ContextMenuItem onClick={() => setFinding(true)}>Find</ContextMenuItem>
+              <ContextMenuItem onClick={() => terminal?.selectAll()}>
+                Select all
+                <Shortcut>{keys.selectAll}</Shortcut>
+              </ContextMenuItem>
+              <ContextMenuItem onClick={find}>
+                Find
+                <Shortcut>{keys.find}</Shortcut>
+              </ContextMenuItem>
               <ContextMenuItem onClick={() => terminal?.clear()}>Clear</ContextMenuItem>
+              <ContextMenuItem onClick={() => openGoToResource(cluster)}>
+                Go to Resource
+                <Shortcut>{keys.goToResource}</Shortcut>
+              </ContextMenuItem>
             </ContextMenuGroup>
           </ContextMenuContent>
         </ContextMenu>
@@ -266,6 +309,12 @@ export function ExecPanel({
       )}
     </div>
   );
+}
+
+function Shortcut({ children }: { children?: string }) {
+  return children ? (
+    <span className="ml-auto pl-4 text-xs text-muted-foreground">{children}</span>
+  ) : null;
 }
 
 function FailedNotice({
@@ -291,7 +340,7 @@ function FailedNotice({
           </>
         }
         action={
-          <pre className="max-w-full whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+          <pre className="mx-3 max-w-xl rounded-md border bg-muted/40 px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
             {error.message}
           </pre>
         }
@@ -342,14 +391,27 @@ export function endMessage(state: {
   }
 }
 
-function FindBar({ terminal, close }: { terminal: ExecTerminal; close: () => void }) {
-  const [text, setText] = useState("");
+function FindBar({
+  terminal,
+  query,
+  setQuery,
+  input,
+  close,
+}: {
+  terminal: ExecTerminal;
+  query: string;
+  setQuery: (text: string) => void;
+  input: React.RefObject<HTMLInputElement | null>;
+  close: () => void;
+}) {
   const [results, setResults] = useState({ resultIndex: -1, resultCount: 0 });
-  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => terminal.onSearchResults(setResults), [terminal]);
   useEffect(() => {
     input.current?.focus();
-    return terminal.onSearchResults(setResults);
-  }, [terminal]);
+    input.current?.select();
+    // A query kept from the last time the bar was open is found again.
+    if (input.current?.value) terminal.find(input.current.value, "older", true);
+  }, [input, terminal]);
   return (
     <search
       className="absolute top-2 right-2 flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
@@ -358,12 +420,14 @@ function FindBar({ terminal, close }: { terminal: ExecTerminal; close: () => voi
       <Input
         ref={input}
         aria-label="Find"
-        value={text}
+        value={query}
         className="min-w-0 flex-1"
         placeholder="Find"
         onChange={(event) => {
-          setText(event.target.value);
-          terminal.find(event.target.value, false, true);
+          setQuery(event.target.value);
+          // A terminal's newest output is at the bottom, so finding starts there.
+          if (event.target.value) terminal.find(event.target.value, "older", true);
+          else terminal.clearSearch();
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -371,20 +435,23 @@ function FindBar({ terminal, close }: { terminal: ExecTerminal; close: () => voi
             close();
           } else if (event.key === "Enter") {
             event.preventDefault();
-            terminal.find(text, event.shiftKey);
+            if (query) terminal.find(query, event.shiftKey ? "newer" : "older");
           }
         }}
       />
       <span className="shrink-0 text-xs text-muted-foreground" aria-live="polite">
-        {results.resultCount
-          ? `${results.resultIndex + 1} of ${results.resultCount}`
-          : "No results"}
+        {!query
+          ? ""
+          : results.resultCount
+            ? `${results.resultIndex + 1} of ${results.resultCount}`
+            : "No results"}
       </span>
       <Button
         variant="ghost"
         size="icon-xs"
         aria-label="Previous match"
-        onClick={() => terminal.find(text, true)}
+        disabled={!query}
+        onClick={() => terminal.find(query, "older")}
       >
         <HugeiconsIcon icon={ArrowUp01Icon} />
       </Button>
@@ -392,7 +459,8 @@ function FindBar({ terminal, close }: { terminal: ExecTerminal; close: () => voi
         variant="ghost"
         size="icon-xs"
         aria-label="Next match"
-        onClick={() => terminal.find(text)}
+        disabled={!query}
+        onClick={() => terminal.find(query, "newer")}
       >
         <HugeiconsIcon icon={ArrowDown01Icon} />
       </Button>

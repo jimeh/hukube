@@ -3,7 +3,7 @@ import { cn } from "@hukube/ui/lib/utils";
 import { Cancel01Icon, ComputerTerminal01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { isRunning, useExecSessions } from "../exec/sessions.ts";
@@ -20,6 +20,16 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
   const running = useExecSessions((state) =>
     isRunning(exec ? state.entries.get(api.id.slice(5)) : undefined),
   );
+  const tab = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // A Tab opened or chosen beyond the strip's edge would otherwise stay out of sight.
+    const reveal = () => tab.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (api.isActive) reveal();
+    const d = api.onDidActiveChange((event) => {
+      if (event.isActive) reveal();
+    });
+    return () => d.dispose();
+  }, [api]);
   const close = () => guardPanel(api.id, () => api.close());
   const [title, setTitle] = useState(api.title ?? "");
   useEffect(() => {
@@ -29,7 +39,9 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
 
   return (
     <div
+      ref={tab}
       className="flex h-full items-center gap-1 pr-1 pl-3"
+      title={exec ? `Exec Session, ${running ? "running" : "not running"}: ${title}` : undefined}
       onDoubleClick={() => pinPanel(api, params)}
       onAuxClick={(e) => {
         if (e.button === 1) close();
@@ -38,14 +50,16 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
       {exec && (
         <HugeiconsIcon
           icon={ComputerTerminal01Icon}
-          className={cn("size-3.5 shrink-0", !running && "text-muted-foreground")}
+          // A live session's icon is in the Cluster's color, so it reads as live
+          // in a Tab that is not the active one too.
+          className={cn("size-3.5 shrink-0", running ? "text-cluster" : "opacity-40")}
         />
       )}
       <span
         className={cn(
           "max-w-56 truncate font-mono text-xs",
           params.preview && "italic",
-          exec && !running && "text-muted-foreground",
+          exec && !running && "text-muted-foreground line-through decoration-1",
         )}
       >
         {title}

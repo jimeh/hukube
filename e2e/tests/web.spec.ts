@@ -41,7 +41,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   };
   await openPod("e2e-exec");
   const panel = page
-    .getByRole("tabpanel", { name: "e2e-exec", exact: true })
+    .getByRole("tabpanel", { name: "app in e2e-exec", exact: true })
     .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
   const input = panel.getByRole("textbox", { name: "Exec Session in app of e2e-exec" });
   const screen = panel.locator(".xterm-rows");
@@ -87,15 +87,15 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   for (let count = 0; count < 7; count++) {
     await page
       .locator(".dv-tab")
-      .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+      .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })
       .last()
-      .getByRole("button", { name: "Close e2e-exec", exact: true })
+      .getByRole("button", { name: "Close app in e2e-exec", exact: true })
       .click();
     await page.getByRole("button", { name: "End session", exact: true }).click();
   }
   await page
     .locator(".dv-tab")
-    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })
     .last()
     .click();
   await run("echo after-cap-$((6*7))", "after-cap-42");
@@ -135,9 +135,9 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   );
   const tab = page
     .locator(".dv-tab")
-    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })
     .last();
-  await tab.getByRole("button", { name: "Close e2e-exec", exact: true }).click();
+  await tab.getByRole("button", { name: "Close app in e2e-exec", exact: true }).click();
   await expect(page.getByText("End the Exec Session in app of e2e-exec?")).toBeVisible();
   await page.getByRole("button", { name: "Keep session" }).click();
   await run("echo kept-$((6*7))", "kept-42");
@@ -148,7 +148,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await run("echo again-$((6*7))", "again-42");
   page.once("dialog", (dialog) => dialog.accept());
   await page.reload();
-  await expect(panel.getByText("This session is over")).toBeVisible();
+  await expect(panel.getByText("No session is running here")).toBeVisible();
   await expect(panel.locator(".xterm")).toHaveCount(0);
   await panel.getByRole("button", { name: "Start a new session" }).click();
   await run("echo reloaded-$((6*7))", "reloaded-42");
@@ -157,7 +157,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await expect(panel.getByText("Ended", { exact: true })).toBeVisible();
   await openPod("e2e-exec-no-shell");
   const noShell = page
-    .getByRole("tabpanel", { name: "e2e-exec-no-shell", exact: true })
+    .getByRole("tabpanel", { name: "app in e2e-exec-no-shell", exact: true })
     .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
   await expect(noShell.getByText("No shell in this container")).toBeVisible();
   await expect(noShell.locator("pre")).toContainText("sh");

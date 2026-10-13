@@ -7,12 +7,40 @@ export type ExecKeyAction =
   | "goToResource"
   | "leave";
 
-/** The keys kept by the Host while an Exec Session has focus. */
+type KeyFields = Pick<
+  KeyboardEvent,
+  "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"
+>;
+
+/**
+ * What a key does while an Exec Session's terminal has focus (ADR-0023). An
+ * ended session's process takes no keys, so they go back to the window and
+ * Tab moves focus again.
+ */
 export function execKey(
   mac: boolean,
-  event: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  event: KeyFields,
   selection: boolean,
+  live = true,
 ): ExecKeyAction {
+  const action = liveKey(mac, event, selection);
+  return !live && action === "terminal" ? "leave" : action;
+}
+
+/** How the keys read in a menu or a tooltip. */
+export function execKeyLabels(mac: boolean) {
+  return mac
+    ? { copy: "⌘C", paste: "⌘V", selectAll: "⌘A", find: "⌘F", goToResource: "⌘K" }
+    : {
+        copy: "Ctrl+Shift+C",
+        paste: "Ctrl+V",
+        selectAll: undefined,
+        find: "Ctrl+Shift+F",
+        goToResource: "Ctrl+Shift+K",
+      };
+}
+
+function liveKey(mac: boolean, event: KeyFields, selection: boolean): ExecKeyAction {
   const letter = event.key.toLowerCase();
   const key = /^[a-z]$/.test(letter) ? letter : event.code.replace(/^Key/, "").toLowerCase();
   if ((mac ? event.metaKey : event.ctrlKey) && key === "j" && !event.altKey && !event.shiftKey)

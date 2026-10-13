@@ -57,6 +57,7 @@ it, and its test has a case for each cell of the table.
 
 - `Ctrl+Shift+K` is a binding that exists only while a session has focus on
   Windows and Linux.
+- An ended session's terminal gives every key back to the window.
 - `Tab` goes to the process, so the keyboard leaves a live terminal through
   Go to Resource. A switch that makes `Tab` move focus, as VS Code has, would
   need a binding of its own.

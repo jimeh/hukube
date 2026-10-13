@@ -81,10 +81,13 @@ afterEach(() => {
 
 it("restores a Tab without starting anything until Start a new session is pressed", async () => {
   view();
-  expect(screen.getByText("This session is over")).toBeDefined();
+  expect(screen.getByText("No session is running here")).toBeDefined();
   expect(
-    screen.getByText("An Exec Session does not survive a reload. Its shell was told to exit."),
+    screen.getByText(
+      "An Exec Session belongs to the window that started it, and does not survive a reload.",
+    ),
   ).toBeDefined();
+  expect(screen.getByText("Not running")).toBeDefined();
   expect(mocked.streams).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Start a new session" }));
   expect(await screen.findByText("Starting…")).toBeDefined();
@@ -261,16 +264,56 @@ it("finds next and previous matches, reports the count, and restores focus on Es
   fireEvent.click(screen.getByRole("button", { name: "Find in scrollback" }));
   const input = screen.getByRole("textbox", { name: "Find" });
   expect(document.activeElement).toBe(input);
+  // Nothing is found, and nothing is reported, until there is something to find.
+  expect(screen.queryByText("No results")).toBeNull();
   fireEvent.change(input, { target: { value: "hello" } });
-  expect(fake.terminal.find).toHaveBeenCalledWith("hello", false, true);
+  // Finding starts from the newest output, as in a terminal.
+  expect(fake.terminal.find).toHaveBeenCalledWith("hello", "older", true);
   act(() => fake.results(2, 17));
   expect(screen.getByText("3 of 17")).toBeDefined();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello", "older");
   fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
-  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello", true);
+  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello", "newer");
+  fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello", "older");
   fireEvent.click(screen.getByRole("button", { name: "Next match" }));
-  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello");
+  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello", "newer");
+  // Asking to find again, with the bar open, returns to its field.
+  screen.getByRole("button", { name: "Next match" }).focus();
+  fireEvent.click(screen.getByRole("button", { name: "Find in scrollback" }));
+  expect(document.activeElement).toBe(input);
   fireEvent.keyDown(input, { key: "Escape" });
   expect(screen.queryByRole("textbox", { name: "Find" })).toBeNull();
-  expect(fake.terminal.clearSearch).toHaveBeenCalledOnce();
+  expect(fake.terminal.clearSearch).toHaveBeenCalled();
   expect(fake.terminal.focus).toHaveBeenCalled();
+  // The query is kept, and found again, when the bar opens the next time.
+  fireEvent.click(screen.getByRole("button", { name: "Find in scrollback" }));
+  expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Find" }).value).toBe("hello");
+  expect(fake.terminal.find).toHaveBeenLastCalledWith("hello", "older", true);
+});
+
+it("moves focus to Start again when a focused session ends", () => {
+  view({ phase: "live" });
+  const fake = mocked.terminal!;
+  const field = document.createElement("textarea");
+  fake.terminal.element.append(field);
+  field.focus();
+  expect(document.activeElement).toBe(field);
+  act(() =>
+    useExecSessions.setState({
+      entries: new Map([
+        [
+          params.sessionId,
+          {
+            cluster: "c",
+            params,
+            state: { phase: "ended", reason: "complete", exitCode: 0 },
+            terminal: fake.terminal,
+          },
+        ],
+      ]),
+    }),
+  );
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start again" }));
 });

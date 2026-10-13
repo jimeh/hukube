@@ -6,8 +6,20 @@ import type { ExecTerminal } from "@/features/exec/sessions.ts";
 import { execKey } from "@/features/exec/keys.ts";
 import { copyText } from "@/features/edit/clipboard.ts";
 import { cssColor } from "@/features/resource/editor-theme.ts";
+import { isMac as mac } from "@/lib/platform.ts";
 
-const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+const channel = (color: string, at: number) => Number.parseInt(color.slice(at, at + 2), 16);
+
+/** Mixes #rrggbb color a towards b by the given share of b. */
+function mix(a: string, b: string, share: number): string {
+  return `#${[1, 3, 5]
+    .map((at) =>
+      Math.round(channel(a, at) * (1 - share) + channel(b, at) * share)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
 
 /** The DOM renderer and add-ons of an Exec Session, loaded only when one starts. */
 export function createExecTerminal(): ExecTerminal {
@@ -23,6 +35,8 @@ export function createExecTerminal(): ExecTerminal {
     fontSize: 12,
     allowProposedApi: true,
     cursorBlink: true,
+    // Programs choose colors for a dark screen. White text stays readable on a light one.
+    minimumContrastRatio: 4.5,
   });
   const fit = new FitAddon();
   const search = new SearchAddon();
@@ -35,6 +49,7 @@ export function createExecTerminal(): ExecTerminal {
   let findColor = "#000000";
   let detach: (() => void) | undefined;
   let fitted: (() => void) | undefined;
+  let refit: (() => void) | undefined;
   const ready = new Promise<void>((resolve) => {
     fitted = resolve;
   });
@@ -77,7 +92,7 @@ export function createExecTerminal(): ExecTerminal {
       .catch(() => {});
   };
   terminal.attachCustomKeyEventHandler((event) => {
-    const action = execKey(mac, event, terminal.hasSelection());
+    const action = execKey(mac, event, terminal.hasSelection(), !ended);
     if (action === "terminal") return true;
     // The browser's paste event supplies clipboard text, including on plain HTTP.
     if (action === "leave" || action === "paste" || action === "goToResource") return false;
@@ -173,7 +188,12 @@ export function createExecTerminal(): ExecTerminal {
       });
       observer.observe(body);
       resize();
+      refit = () => {
+        clearTimeout(settle);
+        resize();
+      };
       const off = () => {
+        refit = undefined;
         clearTimeout(settle);
         cancelAnimationFrame(frame);
         observer.disconnect();
@@ -183,6 +203,19 @@ export function createExecTerminal(): ExecTerminal {
       return off;
     },
     theme,
+    refit: () =>
+      new Promise<void>((resolve) => {
+        // Two frames let a layout change that came with the caller's state
+        // reach the terminal. A hidden window runs no frames.
+        const timer = setTimeout(resolve, 250);
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            clearTimeout(timer);
+            refit?.();
+            resolve();
+          }),
+        );
+      }),
     onData: (fn) => {
       const d = terminal.onData(fn);
       return () => d.dispose();
@@ -208,20 +241,21 @@ export function createExecTerminal(): ExecTerminal {
         finds.delete(fn);
       };
     },
-    find: (text, previous, incremental) => {
+    find: (text, direction, incremental) => {
       if (!opened) return;
       const options = {
         incremental,
+        // The DOM renderer paints these opaque, so the other matches get a
+        // color mixed towards the background and the current one stands out.
         decorations: {
-          matchBackground: `${findColor}40`,
-          matchBorder: findColor,
+          matchBackground: mix(findColor, terminal.options.theme?.background ?? "#000000", 0.7),
           matchOverviewRuler: findColor,
-          activeMatchBackground: `${findColor}8c`,
-          activeMatchBorder: findColor,
+          activeMatchBackground: findColor,
+          activeMatchBorder: terminal.options.theme?.foreground ?? findColor,
           activeMatchColorOverviewRuler: findColor,
         },
       };
-      if (previous) search.findPrevious(text, options);
+      if (direction === "older") search.findPrevious(text, options);
       else search.findNext(text, options);
     },
     clearSearch: () => search.clearDecorations(),
