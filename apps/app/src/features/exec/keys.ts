@@ -27,6 +27,21 @@ export function execKey(
   return !live && action === "terminal" ? "leave" : action;
 }
 
+/**
+ * Whether a key pressed in a session's terminal opens Go to Resource.
+ * windowRule is what the key means outside a terminal, which an ended
+ * session's terminal goes back to.
+ */
+export function opensGoToResource(
+  mac: boolean,
+  event: KeyFields,
+  selection: boolean,
+  live: boolean,
+  windowRule: boolean,
+): boolean {
+  return execKey(mac, event, selection, live) === "goToResource" || (!live && windowRule);
+}
+
 /** How the keys read in a menu or a tooltip. */
 export function execKeyLabels(mac: boolean) {
   return mac

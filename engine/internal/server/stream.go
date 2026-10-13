@@ -19,13 +19,15 @@ import (
 type streamLimits struct {
 	queue, window, texts int
 	open, write, drain   time.Duration
-	stall                time.Duration
+	// stall and stallFloor bound how long streamQueue.write holds its caller.
+	stall      time.Duration
+	stallFloor int
 }
 
 // streamWriteFrame is the most a frame made by streamQueue.write holds.
 const streamWriteFrame = 32 << 10
 
-var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second, 30 * time.Second}
+var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second, 30 * time.Second, 4 << 20}
 
 type streamOutput[E any] struct {
 	frame func([]byte, int)
@@ -74,9 +76,14 @@ type streamQueue struct {
 	wake               chan struct{}
 	changed            chan struct{}
 	dropping           bool
-	waiting            int
-	input              *execsession.Input
-	sizes              *execsession.Sizes
+	// waitingSince is when the current stall period of a run of waiting
+	// writes began, and waitingBytes what has been queued since. waiting
+	// counts the writes waiting now.
+	waitingSince time.Time
+	waitingBytes int
+	waiting      int
+	input        *execsession.Input
+	sizes        *execsession.Sizes
 }
 
 func newStreamQueue(limits streamLimits) *streamQueue {
@@ -126,7 +133,12 @@ func (q *streamQueue) frame(data []byte, records int) {
 	q.signal()
 }
 
-// write waits for room in the output window, dropping only after a stall.
+// write waits for room in the output window. While writes have to wait, the
+// client must take at least the stall floor in each stall period, or write
+// stops waiting and drops output until the next acknowledgement. The
+// producer of an Exec Session must not be held for long: client-go reads its
+// heartbeat on the goroutine that writes output, and gives up after a minute
+// without one.
 func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 	written := 0
 	for len(data) > 0 {
@@ -136,13 +148,22 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 		}
 		frame := append([]byte{protocol.StreamChannelStdout}, data[:n]...)
 		q.mu.Lock()
-		blockedAt := time.Now()
+		waited := false
 		for !q.dropping && q.bytes+int(q.sent-q.acked)+len(frame) > q.limits.window && !q.finished && !q.overflow {
+			waited = true
+			if q.waitingSince.IsZero() {
+				q.waitingSince, q.waitingBytes = time.Now(), 0
+			}
 			changed := q.changed
-			remaining := q.limits.stall - time.Since(maxTime(blockedAt, q.lastAck))
+			remaining := q.limits.stall - time.Since(q.waitingSince)
 			if remaining <= 0 {
-				q.dropping = true
-				break
+				if q.waitingBytes < q.limits.stallFloor {
+					q.dropping = true
+					break
+				}
+				// The client is slow but reading, so a new period begins.
+				q.waitingSince, q.waitingBytes = time.Now(), 0
+				remaining = q.limits.stall
 			}
 			q.waiting++
 			q.mu.Unlock()
@@ -168,8 +189,13 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 			}
 			return written, io.ErrClosedPipe
 		}
+		// The run of waiting ends when a write finds room at once, or gives up.
+		if !waited || q.dropping {
+			q.waitingSince = time.Time{}
+		}
 		q.items = append(q.items, streamItem{data: frame})
 		q.bytes += len(frame)
+		q.waitingBytes += len(frame)
 		if q.dropping {
 			q.drop(q.limits.window)
 		}
@@ -179,12 +205,6 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 		data = data[n:]
 	}
 	return written, nil
-}
-func maxTime(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
 }
 
 // drop replaces the oldest data with a gap at its position, preserving text.
@@ -330,6 +350,7 @@ func (s *Server) runStream(ctx context.Context, conn *websocket.Conn, limits str
 	if streamInputs[open.Method] {
 		q.input = execsession.NewInput(q.acknowledgeInput)
 		q.sizes = execsession.NewSizes()
+		defer s.trackExecSocket()()
 	}
 	if open.Type != protocol.StreamClientTypeOpen {
 		q.end(streamError(badRequest(fmt.Errorf("first message must be open"))))

@@ -751,6 +751,42 @@ fixed:
 Not changed, and listed under "Follow-ups": a second way in from a list row,
 a label on the header's button, and a warning before a multi-line paste.
 
+### Code-review corrections
+
+Two reviewers, one Codex and one Claude, read the change independently.
+Neither found a blocker. What changed because of them:
+
+- **The desktop Host's close prompt named only edits,** and quitting stopped
+  the Engine before any window could ask. The prompt now names both edits and
+  Exec Sessions, and the Engine stops in `will-quit`, once every window has
+  agreed to close. The second fault predates this work: cancelling a quit
+  with unsaved edits left a window without an Engine.
+- **Input waiting in the Worker had no upper bound.** A container that never
+  reads could take the window's memory one paste at a time. A stream now
+  holds at most 8 MiB of unsent input, refuses a write beyond that, and the
+  terminal prints that the input was not sent.
+- **The stall rule could be held off by a trickle.** Any acknowledgement
+  restarted the 30 seconds, whether or not it made room. The rule is now a
+  floor: while writes have to wait, the client must take 4 MiB in each 30
+  seconds, or the Engine drops output until the next acknowledgement.
+- **A session ended by an Engine shutdown could be told its socket was
+  lost,** because the Engine could exit before the `end` was written.
+  `Server.Shutdown` now waits for each session's socket to send it.
+- **A link printed by a container could be opened.** xterm.js turns an OSC 8
+  sequence into a link that opens after a native confirm, without the
+  web-links add-on. The terminal's link handler now does nothing.
+- **`Ctrl+K` did nothing in an ended session's terminal** on Windows and
+  Linux. An ended terminal now goes back to the window's rule for Go to
+  Resource.
+- **Tests:** the end-to-end test now checks that a paste arrived whole, that
+  a printed link opens nothing, and that the shell does not receive `Mod+J`.
+  The empty-index test waits for the session to ask the Cluster before it
+  lets the process exit.
+
+Using the corrected build past midnight found a test from the Log Streams
+layer that passed only on 2026-10-13, the date in its fixture. Its clock is
+now set.
+
 ## Measurements
 
 On an Apple silicon laptop against the k3d cluster:

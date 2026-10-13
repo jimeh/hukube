@@ -71,6 +71,9 @@ export function sessionId(): string {
 export function isRunning(session: ExecSession | undefined): boolean {
   return session?.state.phase === "starting" || session?.state.phase === "live";
 }
+function mebibytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
 function put(id: string, session: ExecSession) {
   useExecSessions.setState((store) => ({ entries: new Map(store.entries).set(id, session) }));
 }
@@ -174,7 +177,13 @@ export async function startSession(
       gap: ({ bytes }) => {
         if (current())
           terminal.write(
-            `\r\n\x1b[2m[hukube: ${(bytes / 1024 / 1024).toFixed(1)} MiB of output was dropped while this window was not reading]\x1b[0m\r\n`,
+            `\r\n\x1b[2m[hukube: ${mebibytes(bytes)} of output was dropped while this window was not reading]\x1b[0m\r\n`,
+          );
+      },
+      inputDropped: (bytes) => {
+        if (current())
+          terminal.write(
+            `\r\n\x1b[2m[hukube: ${mebibytes(bytes)} of input was not sent, because the process is not reading and too much is already waiting]\x1b[0m\r\n`,
           );
       },
       end: (end) =>

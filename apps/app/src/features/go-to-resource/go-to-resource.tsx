@@ -14,8 +14,9 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
-import { execKey } from "../exec/keys.ts";
-import { useExecSessions } from "../exec/sessions.ts";
+import { opensGoToResource } from "../exec/keys.ts";
+import { isRunning, useExecSessions } from "../exec/sessions.ts";
+import { isMac } from "@/lib/platform.ts";
 
 import { onOpenGoToResource } from "./open.ts";
 import {
@@ -28,7 +29,6 @@ import {
 
 const resourceLimit = 50;
 const typeLimit = 8;
-const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
 /**
  * The Go to Resource palette of one Workspace. It finds Resource Types and
@@ -66,7 +66,13 @@ export function GoToResource({ active }: { active: boolean }) {
       const session = sessionId ? useExecSessions.getState().entries.get(sessionId) : undefined;
       if (
         session
-          ? execKey(isMac, e, session.terminal?.hasSelection() ?? false) !== "goToResource"
+          ? !opensGoToResource(
+              isMac,
+              e,
+              session.terminal?.hasSelection() ?? false,
+              isRunning(session),
+              isPaletteShortcut(e, isMac),
+            )
           : !isPaletteShortcut(e, isMac)
       )
         return;

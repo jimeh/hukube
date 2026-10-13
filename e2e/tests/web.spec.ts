@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
 import { clusterId, engineToken, kubectl, kubectlCreate } from "./env.ts";
 
@@ -70,6 +70,26 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
     element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: clipboard }));
   });
   await expect(screen).toContainText("paste-done-42", { timeout: 20_000 });
+  // Every byte arrived: `wc -c` counted what `head` read from the paste.
+  await expect(screen).toContainText("1048576");
+  // A link a process prints must not open anything, or ask to.
+  let dialogs = 0;
+  const onDialog = (dialog: Dialog) => {
+    dialogs++;
+    void dialog.dismiss();
+  };
+  page.on("dialog", onDialog);
+  const pages = page.context().pages().length;
+  await run(
+    "printf '\\033]8;;https://example.invalid/\\033\\\\printed-%s\\033]8;;\\033\\\\\\n' link",
+    "printed-link",
+  );
+  const link = await screen.getByText("printed-link").last().boundingBox();
+  await page.mouse.click(link!.x + 20, link!.y + link!.height / 2);
+  await run("echo after-link-$((6*7))", "after-link-42");
+  expect(dialogs).toBe(0);
+  expect(page.context().pages()).toHaveLength(pages);
+  page.off("dialog", onDialog);
   const sourceTab = page
     .locator(".dv-tab")
     .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
@@ -133,6 +153,13 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   expect(await page.evaluate(() => (window as Window & { execKeyJ?: boolean }).execKeyJ)).toBe(
     false,
   );
+  // The shell does not get the key either. Ctrl+J is a newline to a shell,
+  // which would run the first half of this command by itself.
+  await input.pressSequentially("echo j-");
+  await input.press("ControlOrMeta+J");
+  await input.pressSequentially("kept-$((6*7))");
+  await input.press("Enter");
+  await expect(screen).toContainText("j-kept-42");
   const tab = page
     .locator(".dv-tab")
     .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })

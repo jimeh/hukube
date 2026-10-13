@@ -197,6 +197,45 @@ it("forwards not_connected before sending and disconnected after sending", async
   });
 });
 
+it("tells the main thread when input was refused", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  FakeSocket.latest.open();
+  send({
+    kind: "stream-open",
+    id: 11,
+    method: "pod.exec",
+    params: {
+      cluster: "c",
+      namespace: "ns",
+      pod: "p",
+      uid: "u",
+      container: "main",
+      cols: 80,
+      rows: 24,
+    },
+  });
+  await Promise.resolve();
+  const socket = FakeSocket.latest;
+  socket.onopen?.(new Event("open"));
+  socket.onmessage?.(
+    new MessageEvent("message", {
+      data: JSON.stringify({ type: "hello", hello: { protocol: Hash } }),
+    }),
+  );
+  const mebibyte = 1 << 20;
+  for (let count = 0; count < 8; count++)
+    send({ kind: "stream-write", id: 11, data: new Uint8Array(mebibyte) });
+  expect(scope.postMessage).not.toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "stream-input-dropped" }),
+  );
+  send({ kind: "stream-write", id: 11, data: new Uint8Array(mebibyte) });
+  expect(scope.postMessage).toHaveBeenCalledWith({
+    kind: "stream-input-dropped",
+    id: 11,
+    bytes: mebibyte,
+  });
+});
+
 it("relays input and resize and transfers Exec bytes without copying the output buffer", async () => {
   send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
   FakeSocket.latest.open();

@@ -52,6 +52,7 @@ type Server struct {
 	cfg          Config
 	execMu       sync.Mutex
 	execs        map[*runningExec]struct{}
+	execSockets  map[chan struct{}]struct{}
 	shuttingDown bool
 }
 
