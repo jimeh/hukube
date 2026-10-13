@@ -26,6 +26,7 @@ describe("WorkerEngineClient", () => {
   it("drops data and errors that crossed an update at the Worker boundary", () => {
     const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
     const worker = FakeWorker.latest;
+    worker.receive({ kind: "state", state: "open" });
     const data = vi.fn<(value: unknown) => void>(),
       error = vi.fn<(value: unknown) => void>();
     const sub = client.subscribe("settings.watch", { key: "a" }, { data, error });
@@ -71,6 +72,7 @@ describe("WorkerEngineClient", () => {
 it("acknowledges stream bytes after the main-thread data listener returns", () => {
   const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
   const worker = FakeWorker.latest;
+  worker.receive({ kind: "state", state: "open" });
   const data = vi.fn<() => void>(() => {
     expect(worker.sent.filter((message) => message.kind === "stream-ack")).toHaveLength(0);
   });
@@ -98,6 +100,7 @@ it("acknowledges stream bytes after the main-thread data listener returns", () =
 it("exposes structured errors and client-only disconnected errors", async () => {
   const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
   const worker = FakeWorker.latest;
+  worker.receive({ kind: "state", state: "open" });
   const promise = client.request("clusters.list", undefined);
   const error = {
     code: "invalid" as const,
@@ -116,6 +119,7 @@ it("exposes structured errors and client-only disconnected errors", async () => 
 it("sends cancellation, ignores the late answer, and cleans up finished requests", async () => {
   const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
   const worker = FakeWorker.latest;
+  worker.receive({ kind: "state", state: "open" });
   const aborted = new AbortController();
   aborted.abort();
   await expect(
@@ -140,3 +144,17 @@ it("sends cancellation, ignores the late answer, and cleans up finished requests
   client.close();
   await expect(closed).rejects.toMatchObject({ code: "disconnected" });
 });
+
+it.each(["connecting", "reconnecting", "outdated", "closed"] as const)(
+  "sends nothing while %s",
+  async (state) => {
+    const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+    const worker = FakeWorker.latest;
+    worker.receive({ kind: "state", state });
+    await expect(client.request("clusters.list", undefined)).rejects.toMatchObject({
+      code: "not_connected",
+    });
+    expect(worker.sent.map((message) => message.kind)).toEqual(["connect"]);
+    client.close();
+  },
+);

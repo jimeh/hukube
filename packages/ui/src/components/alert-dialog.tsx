@@ -3,11 +3,23 @@
 import * as React from "react";
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
 import { cn } from "cn";
+import { useModalInert } from "@hukube/ui/hooks/use-modal-inert";
 
 import { Button } from "@hukube/ui/components/button";
 
-function AlertDialog({ ...props }: AlertDialogPrimitive.Root.Props) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
+function AlertDialog({ onOpenChange, ...props }: AlertDialogPrimitive.Root.Props) {
+  const [open, setOpen] = React.useState(props.defaultOpen ?? false);
+  useModalInert(props.open ?? open);
+  return (
+    <AlertDialogPrimitive.Root
+      data-slot="alert-dialog"
+      {...props}
+      onOpenChange={(value, details) => {
+        onOpenChange?.(value, details);
+        if (!details.isCanceled) setOpen(value);
+      }}
+    />
+  );
 }
 
 function AlertDialogTrigger({ ...props }: AlertDialogPrimitive.Trigger.Props) {

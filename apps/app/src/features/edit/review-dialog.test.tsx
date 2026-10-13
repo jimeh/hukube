@@ -42,6 +42,7 @@ const failure = (code: ConstructorParameters<typeof EngineRequestError>[0]["code
   new EngineRequestError({
     code,
     message: "API answer",
+    reason: "Invalid",
     causes: [{ field: "data.greeting", message: "bad field" }],
   });
 function harness(
@@ -104,6 +105,11 @@ function harness(
         connection = "open";
         for (const listener of listeners) listener();
       }),
+    setConnection: (value: ConnectionState) =>
+      act(() => {
+        connection = value;
+        for (const listener of listeners) listener();
+      }),
     setReview: (answer: EditReview) => {
       reviewAnswer = answer;
     },
@@ -160,6 +166,7 @@ it.each([
       refusal: {
         code: "invalid",
         message: "bad Manifest",
+        reason: "Invalid",
         causes: [{ field: "data.greeting", message: "bad field" }],
       },
     },
@@ -317,4 +324,40 @@ it("shows kept Cluster changes, defaulting, ignored fields, and warnings in orde
     screen.getByText("Not applied, because the Cluster sets these itself: status."),
   ).toBeDefined();
   expect(screen.getByText("Admission warning")).toBeDefined();
+});
+
+it.each([
+  ready,
+  { ...ready, overlaps: [["data", "greeting"]] },
+  {
+    ...ready,
+    dryRunUnsupported: true,
+    refusal: { code: "invalid" as const, message: "no dry run" },
+  },
+])("disables every Apply label while not connected", async (answer) => {
+  const h = harness(answer);
+  await screen.findByTestId("diff");
+  h.setConnection("reconnecting");
+  expect(screen.getByText("Reconnecting to the Engine…")).toBeDefined();
+  const button = screen.getByRole("button", { name: /apply/i });
+  expect(button.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(button);
+  expect(h.request.mock.calls.filter(([method]) => method === "resource.apply")).toHaveLength(0);
+  h.reconnect();
+  expect(button.hasAttribute("disabled")).toBe(false);
+});
+it("explains an unsent apply and keeps the accepted review usable", async () => {
+  const h = harness(ready, failure("not_connected"));
+  fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+  expect(await screen.findByText("Not connected to the Engine. Nothing was sent.")).toBeDefined();
+  expect(h.refused).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Apply" }).hasAttribute("disabled")).toBe(false);
+  h.setApply({ resourceVersion: "2", warnings: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  h.rerender({ metadata: { resourceVersion: "2" } });
+  await waitFor(() => expect(h.applied).toHaveBeenCalledOnce());
+});
+it("names a refusal without an API server reason as hukube's refusal", async () => {
+  harness({ ...ready, refusal: { code: "invalid", message: "identity changed" } });
+  expect(await screen.findByText("This edit cannot be applied")).toBeDefined();
 });

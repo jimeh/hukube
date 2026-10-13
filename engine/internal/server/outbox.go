@@ -85,16 +85,16 @@ func (o *outbox) signal() {
 }
 
 func badRequest(err error) *protocol.ErrorDetail {
-	return &protocol.ErrorDetail{Code: protocol.ErrorCodeBadRequest, Message: err.Error()}
+	return apierror.Detail(&protocol.ErrorDetail{Code: protocol.ErrorCodeBadRequest, Message: err.Error()})
 }
 
 func toProtocolError(err error) *protocol.ErrorDetail {
 	var pe *protocol.ErrorDetail
 	switch {
 	case errors.As(err, &pe):
-		return pe
+		return apierror.Detail(pe)
 	case errors.Is(err, kubeconfig.ErrUnknownCluster), errors.Is(err, cluster.ErrUnknownType):
-		return &protocol.ErrorDetail{Code: protocol.ErrorCodeNotFound, Message: err.Error()}
+		return apierror.Detail(&protocol.ErrorDetail{Code: protocol.ErrorCodeNotFound, Message: err.Error()})
 	default:
 		return apierror.Detail(err)
 	}

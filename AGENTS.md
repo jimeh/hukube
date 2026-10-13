@@ -57,7 +57,9 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   excluded from oxlint; add components with `bunx --bun shadcn@latest add`
   from `packages/ui`, piping `yes n` to keep existing components, because
   `--yes` still asks before overwriting), plus the design tokens in
-  `src/styles/globals.css`.
+  `src/styles/globals.css`. `dialog.tsx` and `alert-dialog.tsx` carry a local
+  change, `useModalInert`, which keeps Tab inside an open modal dialog; keep
+  it when the CLI offers to overwrite them.
 - `packages/host/`: the `Host` interface the UI uses for platform features.
 - `packages/k8s/`: Kubernetes helpers: Resource URIs, type keys, and ages.
 - `apps/app/`: the UI; features live in `src/features/<feature>/`.
@@ -118,10 +120,13 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   starts a line, and the view moves when lines above it are deleted
   (ADR-0018).
 - **Edit reviews and writes:** reviews and access requests are cancellable;
-  apply and delete requests must never receive an AbortSignal. A disconnected
-  write has an unknown outcome. Keep its params and repeat them when the
-  Engine reconnects. Delete confirmations retain the UID they opened for,
-  even if the live Manifest is replaced while the dialog is open.
+  apply and delete requests must never receive an AbortSignal. A write that
+  fails with `not_connected` was never sent. One that fails with
+  `disconnected` has an unknown outcome: keep its params and repeat them when
+  the Engine reconnects, but only while its edit or its confirmation still
+  exists, so nothing is written after the user backed out. Delete
+  confirmations retain the UID they opened for, even if the live Manifest is
+  replaced while the dialog is open.
 - **YAML parsing:** rendering and parsing use `features/edit/yaml.ts`, which
   matches kubectl's YAML 1.1 scalar rules. Using `yaml` defaults changes the
   meaning of values such as `0644` and `yes`.
