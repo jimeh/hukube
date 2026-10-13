@@ -12,35 +12,53 @@ function cssColor(element: Element, property: string): string {
   return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** Defines and applies a Monaco theme matching the app's tokens. */
-export function applyEditorTheme(monaco: typeof Monaco, element: Element, dark: boolean): void {
-  const color = (property: string) => cssColor(element, property);
-  monaco.editor.defineTheme("hukube", {
-    base: dark ? "vs-dark" : "vs",
-    inherit: true,
-    rules: [],
-    colors: {
-      "editor.background": color("--background"),
-      "editor.foreground": color("--foreground"),
-      "editorLineNumber.foreground": color("--muted-foreground"),
-      "editorLineNumber.activeForeground": color("--foreground"),
-      "editor.selectionBackground": color("--accent"),
-      "editor.inactiveSelectionBackground": color("--muted"),
-      "editorIndentGuide.background1": color("--border"),
-      "editorWidget.background": color("--popover"),
-      "editorWidget.border": color("--border"),
-      "input.background": color("--background"),
-      "input.foreground": color("--foreground"),
-      "input.border": color("--border"),
-      "inputOption.activeBackground": color("--accent"),
-      "inputOption.activeBorder": color("--ring"),
-      "inputOption.activeForeground": color("--foreground"),
-      "editor.findMatchBackground": color("--accent"),
-      "editor.findMatchBorder": color("--ring"),
-      "editor.findMatchHighlightBackground": color("--muted"),
-      "editor.findMatchHighlightBorder": color("--muted-foreground"),
-      "scrollbarSlider.background": `${color("--muted-foreground")}33`,
-    },
-  });
-  monaco.editor.setTheme("hukube");
+/**
+ * Defines and applies a Monaco theme matching the app's tokens, as element
+ * sees them. Returns a function that gives up if that has not happened yet.
+ */
+export function applyEditorTheme(
+  monaco: typeof Monaco,
+  element: Element,
+  dark: boolean,
+): () => void {
+  let frame = 0;
+  const apply = () => {
+    // A panel's effects can run before dockview attaches the panel, and a
+    // detached element resolves every token to nothing, which reads as black.
+    if (!element.isConnected) {
+      frame = requestAnimationFrame(apply);
+      return;
+    }
+    const color = (property: string) => cssColor(element, property);
+    monaco.editor.defineTheme("hukube", {
+      base: dark ? "vs-dark" : "vs",
+      inherit: true,
+      rules: [],
+      colors: {
+        "editor.background": color("--background"),
+        "editor.foreground": color("--foreground"),
+        "editorLineNumber.foreground": color("--muted-foreground"),
+        "editorLineNumber.activeForeground": color("--foreground"),
+        "editor.selectionBackground": color("--accent"),
+        "editor.inactiveSelectionBackground": color("--muted"),
+        "editorIndentGuide.background1": color("--border"),
+        "editorWidget.background": color("--popover"),
+        "editorWidget.border": color("--border"),
+        "input.background": color("--background"),
+        "input.foreground": color("--foreground"),
+        "input.border": color("--border"),
+        "inputOption.activeBackground": color("--accent"),
+        "inputOption.activeBorder": color("--ring"),
+        "inputOption.activeForeground": color("--foreground"),
+        "editor.findMatchBackground": color("--accent"),
+        "editor.findMatchBorder": color("--ring"),
+        "editor.findMatchHighlightBackground": color("--muted"),
+        "editor.findMatchHighlightBorder": color("--muted-foreground"),
+        "scrollbarSlider.background": `${color("--muted-foreground")}33`,
+      },
+    });
+    monaco.editor.setTheme("hukube");
+  };
+  apply();
+  return () => cancelAnimationFrame(frame);
 }

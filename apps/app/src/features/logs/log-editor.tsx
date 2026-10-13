@@ -7,6 +7,9 @@ import { useTheme } from "@/lib/theme.ts";
 import { applyEditorTheme } from "../resource/editor-theme.ts";
 import { type LogDocument, type LogRow } from "./log-document.ts";
 
+/** How many characters edits may add to the model before it is built again. */
+const rebuildAfter = 8_000_000;
+
 export interface LogEditorHandle {
   search(): void;
 }
@@ -90,11 +93,11 @@ export default function LogEditor({
       hover: { enabled: "off" },
     });
     editorRef.current = editor;
-    let shown: LogRow[] = [];
-    let decorationIds: string[][] = [];
+    const none: readonly string[] = [];
+    let decorationIds: (readonly string[])[] = [];
     const options = new Map<string, monaco.editor.IModelDecorationOptions>();
     // One call for the whole batch: each call makes Monaco announce a change.
-    const decorations = (rows: LogRow[], first: number): string[][] => {
+    const decorations = (rows: LogRow[], first: number): (readonly string[])[] => {
       const added = rows.flatMap((row, index) =>
         row.spans.map((span) => {
           let option = options.get(span.className);
@@ -111,60 +114,101 @@ export default function LogEditor({
           };
         }),
       );
-      const ids = added.length ? model.deltaDecorations([], added) : [];
+      const ids = added.length ? model.deltaDecorations([], added) : none;
       let next = 0;
-      return rows.map((row) => ids.slice(next, (next += row.spans.length)));
+      return rows.map((row) =>
+        row.spans.length ? ids.slice(next, (next += row.spans.length)) : none,
+      );
     };
+    const removeDecorations = (rows: readonly (readonly string[])[]) => {
+      const ids = rows.flat();
+      if (ids.length) model.deltaDecorations(ids, []);
+    };
+    // The model holds the rows from sequence shownFirst on. Rows leave the
+    // document at its head and join at its tail, so counting sequences says
+    // what changed without keeping a copy of the rows.
+    let shownFirst = 0;
+    let shownCount = 0;
+    let shownRewrites = log.rewrites;
+    // Monaco's text buffer only grows: an edit is added to it and text that
+    // is deleted stays. This counts what the edits have added, so the model
+    // can be built again from the rows before that outgrows them.
+    let added = 0;
+    const text = (rows: LogRow[]) =>
+      rows.length ? `${rows.map((row) => row.text).join("\n")}\n` : "";
     const synchronize = () => {
       ownScroll.current = true;
       const rows = log.rows;
-      const previousLast = shown.at(-1)?.sequence ?? -1;
-      const received = rows.filter((row) => row.sequence > previousLast).length;
-      const removed = shown.findIndex((row) => row.sequence === rows[0]?.sequence);
-      const overlap = removed >= 0 ? shown[removed] : undefined;
-      const reset = shown.length && (!overlap || overlap !== rows[0]);
-      const top = editor.getScrollTop();
-      if (reset) {
-        const view = editor.saveViewState();
-        model.deltaDecorations(decorationIds.flat(), []);
-        model.applyEdits([
-          {
-            range: model.getFullModelRange(),
-            text: rows.length ? `${rows.map((row) => row.text).join("\n")}\n` : "",
-          },
-        ]);
+      const first = rows[0]?.sequence ?? shownFirst + shownCount;
+      const next = rows.length ? rows.at(-1)!.sequence + 1 : first;
+      const received = Math.max(0, next - (shownFirst + shownCount));
+      const removed = first - shownFirst;
+      const kept = shownRewrites === log.rewrites && removed >= 0 && removed <= shownCount;
+      if (!kept || added > rebuildAfter) {
+        // Lines that are still there keep their place on screen and their selection.
+        const shift = kept ? removed : undefined;
+        const top = editor.getVisibleRanges()[0]?.startLineNumber ?? 1;
+        const offset = editor.getScrollTop() - editor.getTopForLineNumber(top);
+        const selection = editor.getSelection();
+        model.setValue(text(rows));
         decorationIds = decorations(rows, 1);
-        if (view && overlap) editor.restoreViewState(view);
-        else if (!follow.current) editor.setScrollTop(0, monaco.editor.ScrollType.Immediate);
+        added = 0;
+        if (shift !== undefined && selection && selection.startLineNumber > shift)
+          editor.setSelection(
+            new monaco.Selection(
+              selection.selectionStartLineNumber - shift,
+              selection.selectionStartColumn,
+              selection.positionLineNumber - shift,
+              selection.positionColumn,
+            ),
+          );
+        if (!follow.current)
+          editor.setScrollTop(
+            shift === undefined
+              ? 0
+              : Math.max(0, editor.getTopForLineNumber(Math.max(1, top - shift)) + offset),
+            monaco.editor.ScrollType.Immediate,
+          );
       } else {
         if (removed > 0) {
+          const top = editor.getScrollTop();
           const height = editor.getTopForLineNumber(removed + 1) - editor.getTopForLineNumber(1);
-          model.deltaDecorations(decorationIds.splice(0, removed).flat(), []);
+          removeDecorations(decorationIds.splice(0, removed));
           model.applyEdits([{ range: new monaco.Range(1, 1, removed + 1, 1), text: null }]);
           if (!follow.current)
             editor.setScrollTop(Math.max(0, top - height), monaco.editor.ScrollType.Immediate);
         }
-        const retained = Math.max(0, shown.length - Math.max(0, removed));
-        const appended = rows.slice(retained);
+        const appended = received ? rows.slice(rows.length - received) : [];
         if (appended.length) {
-          const first = model.getLineCount();
-          model.applyEdits([
-            {
-              range: new monaco.Range(first, 1, first, 1),
-              text: `${appended.map((row) => row.text).join("\n")}\n`,
-            },
-          ]);
-          decorationIds.push(...decorations(appended, first));
+          const line = model.getLineCount();
+          const inserted = text(appended);
+          model.applyEdits([{ range: new monaco.Range(line, 1, line, 1), text: inserted }]);
+          added += inserted.length;
+          for (const ids of decorations(appended, line)) decorationIds.push(ids);
         }
       }
-      shown = [...rows];
+      shownFirst = first;
+      shownCount = rows.length;
+      shownRewrites = log.rewrites;
       if (follow.current)
         editor.setScrollTop(editor.getScrollHeight(), monaco.editor.ScrollType.Immediate);
       else if (received) setNewLines((count) => count + received);
       ownScroll.current = false;
     };
+    // Lines can arrive many times a frame. One edit a frame is all that can
+    // be seen, and a large edit costs the text buffer less than many small ones.
+    let pending = 0;
+    const schedule = () => {
+      pending ||= requestAnimationFrame(() => {
+        pending = 0;
+        synchronize();
+      });
+    };
     const scroll = editor.onDidScrollChange((event) => {
-      if (ownScroll.current || !event.scrollTopChanged) return;
+      // A user's scroll moves the view and nothing else. One that comes with a
+      // new content height is Monaco wrapping or measuring again, which the
+      // content size listener answers.
+      if (ownScroll.current || !event.scrollTopChanged || event.scrollHeightChanged) return;
       follow.current = event.scrollTop + editor.getLayoutInfo().height >= event.scrollHeight - 2;
       setFollowing(follow.current);
       if (follow.current) setNewLines(0);
@@ -182,8 +226,10 @@ export default function LogEditor({
       ownScroll.current = false;
     });
     let frame = 0;
-    const resize = new ResizeObserver(() => {
+    const resize = new ResizeObserver(([entry]) => {
       cancelAnimationFrame(frame);
+      // A hidden editor has no size. Laying it out would wrap every line at nothing.
+      if (!entry?.contentRect.width || !entry.contentRect.height) return;
       frame = requestAnimationFrame(() => {
         ownScroll.current = true;
         editor.layout();
@@ -193,13 +239,18 @@ export default function LogEditor({
       });
     });
     resize.observe(container.current);
-    const unsubscribe = log.subscribe(synchronize);
+    const unsubscribe = log.subscribe(schedule);
     synchronize();
-    void document.fonts
-      .load('12px "JetBrains Mono Variable"')
-      .then(() => monaco.editor.remeasureFonts());
+    void document.fonts.load('12px "JetBrains Mono Variable"').then(() => {
+      ownScroll.current = true;
+      monaco.editor.remeasureFonts();
+      if (follow.current)
+        editor.setScrollTop(editor.getScrollHeight(), monaco.editor.ScrollType.Immediate);
+      ownScroll.current = false;
+    });
     return () => {
       unsubscribe();
+      cancelAnimationFrame(pending);
       cancelAnimationFrame(frame);
       resize.disconnect();
       scroll.dispose();
@@ -223,7 +274,7 @@ export default function LogEditor({
     ownScroll.current = false;
   }, [wrap, label]);
   useEffect(() => {
-    if (container.current) applyEditorTheme(monaco, container.current, theme === "dark");
+    if (container.current) return applyEditorTheme(monaco, container.current, theme === "dark");
   }, [theme]);
   return (
     <div className="relative h-full min-h-0">
