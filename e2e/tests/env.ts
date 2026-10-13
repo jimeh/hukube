@@ -15,3 +15,11 @@ export const clusterId = `k3d-${process.env["E2E_CLUSTER"] ?? "hukube-e2e"}`;
 export function kubectl(...args: string[]): string {
   return execFileSync("kubectl", ["--kubeconfig", kubeconfig, ...args], { encoding: "utf8" });
 }
+
+/** Creates a Resource from JSON in the e2e cluster. */
+export function kubectlCreate(resource: Record<string, unknown>): string {
+  return execFileSync("kubectl", ["--kubeconfig", kubeconfig, "create", "-f", "-"], {
+    encoding: "utf8",
+    input: JSON.stringify(resource),
+  });
+}

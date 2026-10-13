@@ -1,6 +1,7 @@
 # Plan: Facets, starting with the Events Facet
 
-Status: planned.
+Status: implemented, not merged yet. "What changed while building" lists where
+the result differs from the text below.
 
 ADR-0013 records how a Resource tab holds Facets, and ADR-0014 where a
 Resource's Events come from and how they are selected.
@@ -207,13 +208,23 @@ See ADR-0014 for the choice and the selection rule. In code:
   runs until its context ends.
 - It uses a client-go `Reflector` over a typed core `v1` Events client with
   the field selector, as type indexing does. The Reflector already handles
-  paging, resuming a watch, an expired resourceVersion, and backing off, so
-  a refused list is retried about every 30 seconds, not every 2.
+  paging, resuming a watch, and an expired resourceVersion.
+- The Engine runs the Reflector's list-and-watch in its own loop. An attempt
+  returns an error only when a list, or the start of a watch, fails. The
+  error is reported, the Events already held are kept, and the next attempt
+  waits: from `Timing.ObjectRetry`, doubling up to `Timing.RetryMax`, as a
+  Table watch does. An expired resourceVersion is handled inside the
+  Reflector and never reported.
 - The value is rebuilt after every list and every watch event. An Event the
-  Cluster deletes leaves it.
-- A failed list or watch is reported as an error and the Events already held
-  are kept. The next list or watch request that succeeds sends the Events
-  again, which clears the error for the client.
+  Cluster deletes leaves it. Every attempt starts with a list, and a
+  completed list sends the Events, which clears the error for the client.
+- A watch asks the API server for a timeout of 30 to 60 minutes, not the
+  Reflector's default of 5 to 10. Against envtest, a watch of Events that
+  had delivered nothing could resume after 8 minutes but not after 10: the
+  API server answered `410 Expired`, because etcd had compacted its
+  resourceVersion and an uncached type sends no bookmarks to move it on. With
+  the default timeout a quiet watch would therefore list its Namespace's
+  Events again about every second resume.
 - `toProtocolError` reports a `Forbidden` or `Unauthorized` answer from the
   Cluster as `forbidden`, for every topic.
 
@@ -289,19 +300,28 @@ warning count. The rules for its params:
 
 ### The Events Facet
 
-- **Layout.** A real `<table>` in the list's style: the same mono font, the
-  same `px-3` and column gap, a sticky header row of `h-7` with a bottom
-  border and muted text. It is not virtualized: at most 500 rows, and wrapped
-  messages give rows different heights.
-- **Columns,** in this order: `Last seen`, `Type`, `Reason`, `Message`,
-  `Count`, `From`. `kubectl get events` orders its first columns the same
-  way. Message takes the spare width and wraps, because it is the answer to
-  "why", and a truncated answer is no answer. The other columns do not wrap.
-  Reason and From truncate past 24 and 28 characters with the full text as a
-  title. Count is right-aligned with tabular numbers.
-- **Narrow Panes.** Message keeps a least width of 20rem and the Facet
-  scrolls sideways, as a Resource list does. Count and From are the columns
-  that scroll out first.
+- **Layout.** Each Event takes two lines. The first holds `Last seen`,
+  `Type`, `Reason`, `Count`, and `From`, in columns that line up across
+  Events under a sticky header row in the list's style: the same mono font,
+  the same `px-3` and column gap, `h-7`, a bottom border, and muted text. The
+  second line holds the message. It starts under the Type column, runs to
+  the right edge, and wraps at word boundaries, because the message is the
+  answer to "why", and a truncated answer is no answer. A hairline separates
+  Events. The list is not virtualized: it holds at most 500 Events, and
+  wrapped messages give them different heights.
+- **Why two lines.** A Resource usually opens in a Pane beside its list,
+  which is about 520 px wide in a 1280 px window. A table with a Message
+  column needs about 950 px, so it would scroll sideways in the normal
+  layout and hide part of the message. `kubectl describe` puts the message
+  last for the same reason.
+- **Narrow Panes.** Nothing scrolls sideways down to a Facet 360 px wide.
+  Reason takes the spare width. When there is too little, Reason and From
+  truncate, with the full text as a title; From is never wider than 28
+  characters. Last seen, Type, and Count never truncate. Count is
+  right-aligned with tabular numbers.
+- **Semantics.** The grid carries the ARIA table roles, with a column header
+  for the message that only assistive technology reads. A `<table>` cannot
+  put a cell on a second line and keep its semantics in every browser.
 - **Last seen** is `formatAge` of the timestamp against `useNow`, as the
   list's Age column, with the timestamp as its title.
 - **From** is the reporter, then `, ` and its instance when there is one, as
@@ -324,7 +344,7 @@ Event's UID, which is unique because one type is read.
 
 | State                                 | What shows                                                                                                                                                                                                                                                |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading: no value yet, or a stale one | The header row and three skeleton rows, marked busy. No badge.                                                                                                                                                                                            |
+| Loading: no value yet, or a stale one | The header row and three skeleton rows, marked busy. No badge. A stale value's Events are never shown, and an error that arrives meanwhile shows as it would without a value.                                                                             |
 | Empty                                 | `No recent Events`. `A cluster keeps Events for a limited time, usually one hour, so a healthy <Kind> often has none. New Events appear here as they happen.`                                                                                             |
 | Populated                             | The table. The badge counts warnings.                                                                                                                                                                                                                     |
 | Not permitted (`forbidden`)           | `Not permitted`. Namespaced: `Your credentials cannot list Events in the <namespace> Namespace.` Cluster-scoped: `Your credentials cannot list Events across the cluster, which the Events of a cluster-scoped <Kind> need.` Replaces any rows. No badge. |
@@ -349,11 +369,11 @@ the switcher row.
 ### Packages considered
 
 - **Tabs:** shadcn `tabs` over Base UI, chosen. Already a dependency.
-- **Table:** shadcn `table` is a styling wrapper whose look differs from the
-  Resource list's. A plain `<table>` with the list's classes matches the
-  application and needs no package. `@tanstack/react-table` and
-  `@tanstack/react-virtual` solve sorting, column state, and virtualization,
-  none of which this Facet has.
+- **Events list:** shadcn `table` is a styling wrapper around `<table>`,
+  which cannot lay an Event out on two lines. A CSS grid with the list's
+  classes matches the application and needs no package.
+  `@tanstack/react-table` and `@tanstack/react-virtual` solve sorting, column
+  state, and virtualization, none of which this Facet has.
 
 ## Sample Resources
 
@@ -416,8 +436,8 @@ independent experience review.
 - **Nested tab roles.** A Resource tab's panel now holds a tab list of its
   own, and a list tab can be titled `events`. End-to-end locators must be
   scoped to the Resource's panel.
-- **Firefox and Safari.** A sticky `<th>` and `oklch` colors are supported by
-  both. Nothing here is specific to Chromium.
+- **Firefox and Safari.** CSS subgrid, sticky positioning, and `oklch`
+  colors are supported by both. Nothing here is specific to Chromium.
 
 ## Non-goals
 
@@ -431,3 +451,23 @@ independent experience review.
 ## Unresolved questions
 
 None.
+
+## What changed while building
+
+- **Registry entries can supply an accessible name.** The optional
+  `accessibleName` callback keeps the switcher independent of Facet names and
+  gives the Events tab the exact name `Events, 3 warnings`. Computing the name
+  from the nested badge's text introduced a space before the comma in the
+  browser. The badge itself is decorative to assistive technology.
+- **The subscription params declare each address field explicitly.** Tygo
+  generates an embedded Go struct as a nested TypeScript property, so
+  `ResourceEventsParams` lists its fields to keep the intended flat wire
+  contract.
+- **Events take two lines.** The plan first specified a table with a Message
+  column. In a Pane beside the Resource list it scrolled sideways and hid part
+  of the message, so a grid now aligns the metadata and puts the full message
+  on the second line.
+- **The Engine owns the Events retry loop.** The plan first relied on the
+  Reflector's own retries. They logged refused lists at error level and the
+  wrappers reported expired watches, so the Engine now calls list-and-watch
+  itself with the Cluster's retry timing and Warn logging.

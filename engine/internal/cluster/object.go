@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
@@ -56,6 +57,19 @@ func (c *Cluster) WatchObject(ctx context.Context, ref protocol.ResourceRef, emi
 // it. Once the Cluster is ready, a type it does not serve is reported through
 // onErr while waiting for it to appear. It returns an error only when ctx ends.
 func (c *Cluster) objectClient(ctx context.Context, ref protocol.ResourceRef, onErr func(error)) (dynamic.ResourceInterface, error) {
+	info, err := c.waitForType(ctx, ref.Type, onErr)
+	if err != nil {
+		return nil, err
+	}
+	gvr := schema.GroupVersionResource{Group: info.Group, Version: info.Version, Resource: info.Resource}
+	if info.Namespaced {
+		return c.dyn.Resource(gvr).Namespace(ref.Namespace), nil
+	}
+	return c.dyn.Resource(gvr), nil
+}
+
+// waitForType waits for discovery, reporting an unknown type once the Cluster is ready.
+func (c *Cluster) waitForType(ctx context.Context, key protocol.TypeKey, onErr func(error)) (protocol.ResourceType, error) {
 	// Discovery finishes before the Cluster becomes ready, so wake on either
 	// signal. Subscribe before checking, so no change is missed in between.
 	typesChanged, stopTypes := c.typesChanged.Subscribe()
@@ -64,19 +78,23 @@ func (c *Cluster) objectClient(ctx context.Context, ref protocol.ResourceRef, on
 	defer stopStatus()
 	reported := false
 	for {
-		if gvr, namespaced, ok := c.resolve(ref.Type); ok {
-			if namespaced {
-				return c.dyn.Resource(gvr).Namespace(ref.Namespace), nil
-			}
-			return c.dyn.Resource(gvr), nil
+		c.mu.Lock()
+		t, ok := c.types[key]
+		var info protocol.ResourceType
+		if ok {
+			info = t.info
+		}
+		c.mu.Unlock()
+		if ok {
+			return info, nil
 		}
 		if !reported && c.Status().Phase == protocol.ClusterPhaseReady {
-			onErr(fmt.Errorf("%w: %q", ErrUnknownType, ref.Type))
+			onErr(fmt.Errorf("%w: %q", ErrUnknownType, key))
 			reported = true
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return protocol.ResourceType{}, ctx.Err()
 		case <-typesChanged:
 		case <-statusChanged:
 		}

@@ -1,7 +1,8 @@
 import type { TypeKey } from "./type-key.ts";
 
 /** A way of looking at a Resource. */
-export type Facet = "yaml";
+export const facetNames = ["yaml", "events"] as const;
+export type Facet = (typeof facetNames)[number];
 
 /** The parts of a Resource URI. `namespace` is empty for cluster-scoped Resources. */
 export interface ResourceAddress {
@@ -15,7 +16,7 @@ export interface ResourceAddress {
 const PREFIX = "hukube://resource/v1/";
 // Namespaces are DNS labels and can never be "_".
 const CLUSTER_SCOPED = "_";
-const FACETS: ReadonlySet<string> = new Set<Facet>(["yaml"]);
+const FACETS: ReadonlySet<string> = new Set<Facet>(facetNames);
 
 /**
  * Formats a Resource URI, the single way to address a Resource (ADR-0006):

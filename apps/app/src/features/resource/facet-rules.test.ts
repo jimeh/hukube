@@ -1,0 +1,64 @@
+import { formatResourceUri } from "@hukube/k8s";
+import { describe, expect, it } from "vitest";
+
+import { previewResourceUri, resourceEventsParams } from "./facet-rules.ts";
+
+const address = { cluster: "c", type: "configmaps", namespace: "ns", name: "settings" };
+const manifest = { metadata: { uid: "new" } };
+
+describe("Events subscription params", () => {
+  it("waits until the Manifest answers", () => {
+    expect(resourceEventsParams(address, { stale: false }, undefined)).toBeUndefined();
+  });
+  it("uses the UID of the last Manifest and keeps it after deletion", () => {
+    for (const data of [{ object: manifest }, { deleted: true }]) {
+      expect(resourceEventsParams(address, { stale: false, data }, manifest)).toEqual({
+        ...address,
+        uid: "new",
+      });
+    }
+    expect(
+      resourceEventsParams(
+        address,
+        { stale: false, data: { object: { metadata: { uid: "recreated" } } } },
+        { metadata: { uid: "recreated" } },
+      )?.uid,
+    ).toBe("recreated");
+  });
+  it("has no UID when never found or the Manifest fails", () => {
+    expect(
+      resourceEventsParams(address, { stale: false, data: { deleted: true } }, undefined),
+    ).toEqual(address);
+    expect(
+      resourceEventsParams(
+        address,
+        { stale: false, error: { code: "internal", message: "failed" } },
+        undefined,
+      ),
+    ).toEqual(address);
+    expect(
+      resourceEventsParams(
+        address,
+        { stale: false, data: { object: {} } },
+        { metadata: { uid: 123 } },
+      ),
+    ).toEqual(address);
+  });
+});
+
+describe("Preview Tab Facets", () => {
+  const uri = formatResourceUri(address);
+  const previous = formatResourceUri({ ...address, name: "other", facet: "events" });
+  it("inherits the replaced Preview Tab's Facet", () => {
+    expect(previewResourceUri(uri, previous)).toBe(`${uri}#events`);
+  });
+  it("respects an explicit Facet and keeps a new tab's default URI", () => {
+    expect(previewResourceUri(`${uri}#yaml`, previous)).toBe(`${uri}#yaml`);
+    expect(previewResourceUri(uri, undefined)).toBe(uri);
+  });
+  it("falls back when the inherited Facet does not apply", () => {
+    const eventUri = formatResourceUri({ ...address, type: "events" });
+    expect(previewResourceUri(eventUri, previous)).toBe(`${eventUri}#yaml`);
+    expect(previewResourceUri(uri, `${eventUri}#events`)).toBe(`${uri}#yaml`);
+  });
+});
