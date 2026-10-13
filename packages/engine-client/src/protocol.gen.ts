@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "793c1678a15aeffe";
+export const Hash = "94c2e697a81023ac";
 
 //////////
 // source: protocol.go
@@ -966,9 +966,13 @@ export const ExecReasonNoShell = "NoShell";
  */
 export const ExecReasonConnectionLost = "ConnectionLost";
 /**
+ * ExecReasonEngineStopped means the Engine shut down while the session ran.
+ */
+export const ExecReasonEngineStopped = "EngineStopped";
+/**
  * Reasons in the ErrorDetail of an Exec Session that ended with an error.
  */
-export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonConnectionLost;
+export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonConnectionLost | typeof ExecReasonEngineStopped;
 /**
  * ExecParams opens an Exec Session: a process with a TTY in a container.
  */

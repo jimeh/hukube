@@ -1,7 +1,7 @@
 import type * as Monaco from "monaco-editor/editor/editor.api";
 
 /** Resolves a CSS color custom property on element to a #rrggbb hex string. */
-function cssColor(element: Element, property: string): string {
+export function cssColor(element: Element, property: string): string {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 1;
   const ctx = canvas.getContext("2d");

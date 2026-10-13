@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
 import { UnsavedGuard } from "../edit/unsaved-guard.tsx";
-import { guardResource, useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { ResourcePanel } from "./resource-panel.tsx";
 
 const state = vi.hoisted(() => ({
@@ -100,6 +100,7 @@ it("keeps the last Manifest and a Deleted badge across Facets, or marks never-fo
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -134,6 +135,7 @@ it("chooses a Facet with complete params and keeps YAML mounted without its cont
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -169,6 +171,7 @@ function subscriptionPanel(type = "pods") {
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -219,6 +222,7 @@ it("subscribes to Related for the whole tab and requests cells only while showin
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -275,6 +279,7 @@ it("offers every Facet in More Facets only while overflowing and changes the URI
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -411,6 +416,7 @@ describe("a double-click on a related Resource", () => {
         cluster: "c",
         active: true,
         types: new Map(),
+        openExecSession: () => {},
         openList: vi.fn<() => void>(),
         openResource,
       }}
@@ -514,6 +520,7 @@ it("keeps a custom Resource's Logs entry after Pod ownership disappears and pass
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -564,6 +571,7 @@ it("pins Edit, preserves unsaved YAML across Facets and live changes, and guards
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
@@ -601,7 +609,7 @@ it("pins Edit, preserves unsaved YAML across Facets and live changes, and guards
   expect(screen.getByText(/changed on the Cluster while you were editing/)).toBeDefined();
   expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Test YAML" }).value).toBe(mine);
   const close = vi.fn<() => void>();
-  act(() => guardResource("edit", close));
+  act(() => guardPanel("edit", close));
   expect(await screen.findByRole("alertdialog")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
   expect(close).not.toHaveBeenCalled();
@@ -624,6 +632,7 @@ it("updates a clean editor when the live editable Manifest changes", async () =>
     cluster: "c",
     active: true,
     types: new Map(),
+    openExecSession: () => {},
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };

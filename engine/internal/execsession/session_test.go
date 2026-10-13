@@ -192,13 +192,17 @@ func TestExecConnectionLost(t *testing.T) {
 	}
 }
 func TestExecPreflight(t *testing.T) {
-	for _, kind := range []string{"missing", "replaced", "denied"} {
+	for _, kind := range []string{"missing", "missing and replaced", "replaced", "denied"} {
 		t.Run(kind, func(t *testing.T) {
 			c, idx := fixture(nil)
 			want := protocol.StreamEndReasonDeleted
 			switch kind {
 			case "missing":
 				idx.RemoveType("pods")
+				c.err = apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "pod")
+			case "missing and replaced":
+				idx.RemoveType("pods")
+				c.pod.UID = "other"
 			case "replaced":
 				idx.Apply([]index.Change{{Kind: index.Modified, Type: "pods", Meta: index.Meta{Namespace: "ns", Name: "pod", UID: "other"}}})
 			case "denied":
@@ -228,10 +232,36 @@ func TestExecIndexDeletion(t *testing.T) {
 		done <- Run(context.Background(), c, idx, testParams, NewInput(nil), NewSizes(), testOutput{io.Discard}, testTiming)
 	}()
 	receive(t, started)
+	c.err = apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "pod")
 	idx.RemoveType("pods")
 	receive(t, cancelled)
 	if end := receive(t, done); end.Reason != protocol.StreamEndReasonDeleted {
 		t.Fatalf("deletion=%+v", end)
+	}
+}
+
+// The Engine empties a type's index when it lists the type again. A Pod the
+// Cluster still has is not gone.
+func TestExecSurvivesAnEmptyIndex(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	c, idx := fixture(func(context.Context, remotecommand.StreamOptions) error {
+		close(started)
+		<-release
+		return nil
+	})
+	idx.RemoveType("pods")
+	done := make(chan protocol.StreamEnd, 1)
+	go func() {
+		done <- Run(context.Background(), c, idx, testParams, NewInput(nil), NewSizes(), testOutput{io.Discard}, testTiming)
+	}()
+	// The session started although the index had no Pods.
+	receive(t, started)
+	// Another Pod's change wakes the session, which still finds its Pod on the Cluster.
+	idx.Apply([]index.Change{{Kind: index.Added, Type: "pods", Meta: index.Meta{Namespace: "ns", Name: "other", UID: "other"}}})
+	idx.RemoveType("pods")
+	close(release)
+	if end := receive(t, done); end.Reason != protocol.StreamEndReasonComplete || end.ExitCode == nil || *end.ExitCode != 0 {
+		t.Fatalf("end=%+v", end)
 	}
 }
 func TestExecHangup(t *testing.T) {

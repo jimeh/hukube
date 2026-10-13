@@ -1,6 +1,6 @@
 # Sample Resources for checking UI changes with `mise run dev:verify`:
-# quiet and logging workloads, a same-named ConfigMap in a second Namespace,
-# and a custom Resource.
+# quiet and logging workloads, a container without a shell,
+# a same-named ConfigMap in a second Namespace, and a custom Resource.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -10,6 +10,24 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: sample-staging
+---
+# The sample for a container without a shell.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: no-shell
+  namespace: sample-shop
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: no-shell }
+  template:
+    metadata:
+      labels: { app: no-shell }
+    spec:
+      containers:
+        - name: pause
+          image: rancher/mirrored-pause:3.6
 ---
 apiVersion: apps/v1
 kind: Deployment

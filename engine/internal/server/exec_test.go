@@ -256,6 +256,20 @@ func TestPodExecHangupAndShutdown(t *testing.T) {
 			case <-time.After(waitTimeout):
 				t.Fatal("hang-up not delivered")
 			}
+			if !shutdown {
+				return
+			}
+			// The shell exited because of the hang-up, and the client is told why.
+			for {
+				m, _ := c.read(true)
+				if m.End == nil {
+					continue
+				}
+				if m.End.Reason != protocol.StreamEndReasonError || m.End.Error == nil || m.End.Error.Reason != protocol.ExecReasonEngineStopped {
+					t.Fatalf("end=%+v error=%+v", m.End, m.End.Error)
+				}
+				return
+			}
 		})
 	}
 }

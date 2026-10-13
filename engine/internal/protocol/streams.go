@@ -225,6 +225,8 @@ const (
 	// ExecReasonConnectionLost means the session ran and then lost its
 	// connection to the Cluster.
 	ExecReasonConnectionLost = "ConnectionLost"
+	// ExecReasonEngineStopped means the Engine shut down while the session ran.
+	ExecReasonEngineStopped = "EngineStopped"
 )
 
 // ExecParams opens an Exec Session: a process with a TTY in a container.

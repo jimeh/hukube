@@ -14,6 +14,8 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
+import { execKey } from "../exec/keys.ts";
+import { useExecSessions } from "../exec/sessions.ts";
 
 import {
   isPaletteShortcut,
@@ -56,7 +58,17 @@ export function GoToResource({ active }: { active: boolean }) {
     // Capture phase, so the shortcut wins over editors such as Monaco that
     // use Ctrl+K themselves.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!isPaletteShortcut(e, isMac)) return;
+      const sessionId =
+        e.target instanceof Element
+          ? e.target.closest<HTMLElement>("[data-exec-session]")?.dataset["execSession"]
+          : undefined;
+      const session = sessionId ? useExecSessions.getState().entries.get(sessionId) : undefined;
+      if (
+        session
+          ? execKey(isMac, e, session.terminal?.hasSelection() ?? false) !== "goToResource"
+          : !isPaletteShortcut(e, isMac)
+      )
+        return;
       e.preventDefault();
       e.stopPropagation();
       onShortcut();
