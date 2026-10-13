@@ -166,6 +166,18 @@ function createWindow(url: URL = appUrl("/")!) {
       contextIsolation: true,
     },
   });
+  win.webContents.on("will-prevent-unload", (event) => {
+    const response = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["Cancel", "Discard"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Discard unsaved edits?",
+      detail: "Your edits have not been applied.",
+      noLink: true,
+    });
+    if (response === 1) event.preventDefault();
+  });
   // Links to other sites open in the system browser, never inside the app.
   win.webContents.setWindowOpenHandler((details) => {
     openExternal(details.url);

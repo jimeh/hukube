@@ -23,12 +23,14 @@ export function FacetSwitcher({
   shared,
   onChoose,
   setControls,
+  dirty = false,
 }: {
   available: readonly FacetEntry[];
   selected: Facet;
   visible: boolean;
   shared: Omit<FacetProps, "showing" | "visible">;
   onChoose: (value: string) => void;
+  dirty?: boolean;
   setControls: (element: HTMLDivElement | null) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -110,6 +112,9 @@ export function FacetSwitcher({
               })}
             >
               {label}
+              {id === "yaml" && dirty && (
+                <span className="size-1.5 rounded-full bg-foreground" aria-label="Unsaved edits" />
+              )}
               {Badge && (
                 <Badge {...shared} showing={selected === id} visible={visible && selected === id} />
               )}
@@ -139,6 +144,12 @@ export function FacetSwitcher({
                   })}
                 >
                   {label}
+                  {id === "yaml" && dirty && (
+                    <span
+                      className="size-1.5 rounded-full bg-foreground"
+                      aria-label="Unsaved edits"
+                    />
+                  )}
                   {Badge && (
                     <Badge
                       {...shared}
