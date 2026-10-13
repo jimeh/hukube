@@ -21,8 +21,8 @@ interface OpenPanelOptions<P> {
   preview: boolean;
   /** The panel this one was opened from; the new panel opens in a Pane beside it. */
   beside?: string;
-  /** Derives params from the Preview Tab being replaced, when there is one. */
-  replacePreviewParams?: (params: P, previous: unknown) => P;
+  /** Derives params from the active tab of the Pane the new panel opens in, when there is one. */
+  deriveActiveTabParams?: (params: P, active: unknown) => P;
 }
 
 /**
@@ -34,7 +34,7 @@ interface OpenPanelOptions<P> {
  */
 export function openPanel<P extends { preview?: boolean }>(
   api: DockviewApi,
-  { id, component, title, params, preview, beside, replacePreviewParams }: OpenPanelOptions<P>,
+  { id, component, title, params, preview, beside, deriveActiveTabParams }: OpenPanelOptions<P>,
 ): void {
   const existing = api.getPanel(id);
   if (existing) {
@@ -45,6 +45,7 @@ export function openPanel<P extends { preview?: boolean }>(
 
   const source = beside ? api.getPanel(beside) : undefined;
   const group = source ? api.groups.find((g) => g !== source.group) : api.activeGroup;
+  const active = group?.activePanel;
   const previous = preview
     ? group?.panels.find((p) => (p.params as { preview?: boolean } | undefined)?.preview)
     : undefined;
@@ -60,9 +61,7 @@ export function openPanel<P extends { preview?: boolean }>(
     title,
     tabComponent: "tab",
     params: {
-      ...(previous && replacePreviewParams
-        ? replacePreviewParams(params, previous.params)
-        : params),
+      ...(active && deriveActiveTabParams ? deriveActiveTabParams(params, active.params) : params),
       preview,
     },
     ...(position ? { position } : {}),

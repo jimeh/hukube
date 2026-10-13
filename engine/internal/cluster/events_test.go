@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"reflect"
 	"sync"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -329,6 +332,70 @@ func TestEventsExpiredWatchRelistsWithoutError(t *testing.T) {
 		}
 		if len(failures) != 0 {
 			t.Fatalf("expired watch reported %d errors", len(failures))
+		}
+		next.result <- eventsListResult{}
+		<-values
+		w = <-fake.watches
+		w.result <- nil
+	})
+}
+
+// A Reflector retries a refused watch inside an attempt without returning. The
+// attempt must end instead, so the failure is reported and the next list
+// clears it.
+func TestEventsRefusedWatchIsReportedAndRelists(t *testing.T) {
+	dial := &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}
+	for name, tc := range map[string]struct{ refused, want error }{
+		// The request's URL, which holds the field selector, is left out.
+		"connection refused": {&url.Error{Op: "Get", URL: "https://cluster/events?fieldSelector=x", Err: dial}, dial},
+		"too many requests":  {apierrors.NewTooManyRequests("slow down", 1), apierrors.NewTooManyRequests("slow down", 1)},
+	} {
+		refused, want := tc.refused, tc.want
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fake, _, values, failures := startFakeEvents(t)
+				first := <-fake.lists
+				first.result <- eventsListResult{}
+				<-values
+				w := <-fake.watches
+				w.result <- refused
+				select {
+				case err := <-failures:
+					if err.Error() != want.Error() {
+						t.Fatalf("error = %v, want %v", err, want)
+					}
+				case <-fake.watches:
+					t.Fatal("the watch was retried inside the attempt without a report")
+				}
+				next := <-fake.lists
+				if delay := next.at.Sub(first.at); delay != testTiming().ObjectRetry {
+					t.Fatalf("relisted after %s, want %s", delay, testTiming().ObjectRetry)
+				}
+				next.result <- eventsListResult{}
+				<-values
+				w = <-fake.watches
+				w.result <- nil
+			})
+		})
+	}
+}
+
+// The API server can also refuse an expired resourceVersion when the watch
+// starts, instead of sending an error event.
+func TestEventsExpiredWatchStartRelistsWithoutError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake, _, values, failures := startFakeEvents(t)
+		first := <-fake.lists
+		first.result <- eventsListResult{}
+		<-values
+		w := <-fake.watches
+		w.result <- apierrors.NewResourceExpired("old version")
+		next := <-fake.lists
+		if delay := next.at.Sub(first.at); delay != testTiming().ObjectRetry {
+			t.Fatalf("relisted after %s, want %s", delay, testTiming().ObjectRetry)
+		}
+		if len(failures) != 0 {
+			t.Fatalf("expired watch start reported %d errors", len(failures))
 		}
 		next.result <- eventsListResult{}
 		<-values

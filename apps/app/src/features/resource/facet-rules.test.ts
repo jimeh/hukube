@@ -1,7 +1,7 @@
 import { formatResourceUri } from "@hukube/k8s";
 import { describe, expect, it } from "vitest";
 
-import { previewResourceUri, resourceEventsParams } from "./facet-rules.ts";
+import { newResourceUri, resourceEventsParams } from "./facet-rules.ts";
 
 const address = { cluster: "c", type: "configmaps", namespace: "ns", name: "settings" };
 const manifest = { metadata: { uid: "new" } };
@@ -46,19 +46,20 @@ describe("Events subscription params", () => {
   });
 });
 
-describe("Preview Tab Facets", () => {
+describe("New Resource tab Facets", () => {
   const uri = formatResourceUri(address);
-  const previous = formatResourceUri({ ...address, name: "other", facet: "events" });
-  it("inherits the replaced Preview Tab's Facet", () => {
-    expect(previewResourceUri(uri, previous)).toBe(`${uri}#events`);
+  const active = formatResourceUri({ ...address, name: "other", facet: "events" });
+  it("inherits the Pane's active Resource tab's Facet", () => {
+    expect(newResourceUri(uri, active)).toBe(`${uri}#events`);
   });
   it("respects an explicit Facet and keeps a new tab's default URI", () => {
-    expect(previewResourceUri(`${uri}#yaml`, previous)).toBe(`${uri}#yaml`);
-    expect(previewResourceUri(uri, undefined)).toBe(uri);
+    expect(newResourceUri(`${uri}#yaml`, active)).toBe(`${uri}#yaml`);
+    expect(newResourceUri(uri, undefined)).toBe(uri);
+    expect(newResourceUri(uri, "list:pods")).toBe(uri);
   });
   it("falls back when the inherited Facet does not apply", () => {
     const eventUri = formatResourceUri({ ...address, type: "events" });
-    expect(previewResourceUri(eventUri, previous)).toBe(`${eventUri}#yaml`);
-    expect(previewResourceUri(uri, `${eventUri}#events`)).toBe(`${uri}#yaml`);
+    expect(newResourceUri(eventUri, active)).toBe(`${eventUri}#yaml`);
+    expect(newResourceUri(uri, `${eventUri}#events`)).toBe(`${uri}#yaml`);
   });
 });

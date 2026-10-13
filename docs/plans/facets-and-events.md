@@ -166,10 +166,12 @@ that needs its own data subscribes inside its `View`.
 4. A `View` mounts when its Facet is first shown and stays mounted, hidden,
    until the tab closes. Only the showing Facet renders controls into the
    switcher row.
-5. When `openPanel` replaces a Preview Tab with another Resource's Preview
-   Tab, the new tab takes the Facet of the replaced one, through the same
-   `resolveFacet`. An address that names a Facet keeps it. Opening a Resource
-   that is already open focuses its tab and leaves its Facet alone.
+5. A Resource tab that opens in a Pane whose active tab is a Resource tab
+   takes that tab's Facet, through the same `resolveFacet`. It does not
+   matter whether either tab is a Preview Tab, so a click, Enter, and the Go
+   to Resource palette behave alike. An address that names a Facet keeps it.
+   Opening a Resource that is already open focuses its tab and leaves its
+   Facet alone.
 6. The tab's ID stays the Resource URI without a Facet.
 
 ### Events come from a watch scoped to the Resource
@@ -213,8 +215,13 @@ See ADR-0014 for the choice and the selection rule. In code:
   returns an error only when a list, or the start of a watch, fails. The
   error is reported, the Events already held are kept, and the next attempt
   waits: from `Timing.ObjectRetry`, doubling up to `Timing.RetryMax`, as a
-  Table watch does. An expired resourceVersion is handled inside the
-  Reflector and never reported.
+  Table watch does. An expired resourceVersion is never reported.
+- A watch that cannot start because the connection is refused, or because
+  the API server answers 429, also ends the attempt. The Reflector would
+  retry it inside the attempt without returning, so an unreachable Cluster
+  would leave the Facet with Events that no longer update and no error.
+- A transport error is reported without its request URL, which holds the
+  whole field selector.
 - The value is rebuilt after every list and every watch event. An Event the
   Cluster deletes leaves it. Every attempt starts with a list, and a
   completed list sends the Events, which clears the error for the client.
@@ -300,39 +307,49 @@ warning count. The rules for its params:
 
 ### The Events Facet
 
-- **Layout.** Each Event takes two lines. The first holds `Last seen`,
-  `Type`, `Reason`, `Count`, and `From`, in columns that line up across
-  Events under a sticky header row in the list's style: the same mono font,
-  the same `px-3` and column gap, `h-7`, a bottom border, and muted text. The
-  second line holds the message. It starts under the Type column, runs to
-  the right edge, and wraps at word boundaries, because the message is the
-  answer to "why", and a truncated answer is no answer. A hairline separates
-  Events. The list is not virtualized: it holds at most 500 Events, and
-  wrapped messages give them different heights.
-- **Why two lines.** A Resource usually opens in a Pane beside its list,
-  which is about 520 px wide in a 1280 px window. A table with a Message
-  column needs about 950 px, so it would scroll sideways in the normal
-  layout and hide part of the message. `kubectl describe` puts the message
-  last for the same reason.
-- **Narrow Panes.** Nothing scrolls sideways down to a Facet 360 px wide.
-  Reason takes the spare width. When there is too little, Reason and From
-  truncate, with the full text as a title; From is never wider than 28
-  characters. Last seen, Type, and Count never truncate. Count is
-  right-aligned with tabular numbers.
-- **Semantics.** The grid carries the ARIA table roles, with a column header
-  for the message that only assistive technology reads. A `<table>` cannot
-  put a cell on a second line and keep its semantics in every browser.
+- **Layout.** Each Event takes three lines. The first holds `Last seen`,
+  `Type`, and `Reason`, in columns that line up across Events under a sticky
+  header row in the list's style: the list headers' font, the same `px-3`
+  and column gap, `h-7`, a bottom border, and muted text. The second line
+  holds the message. The third, in muted text, says what reported the Event
+  and how often it occurred: `From kubelet, node-1 · 241 times`. The second
+  and third lines start under the Type column and run to the right edge. A
+  hairline separates Events. The list is not virtualized: it holds at most
+  500 Events, and wrapped messages give them different heights.
+- **The message** wraps at word boundaries and keeps its own line breaks,
+  with the white space around it trimmed, because it is the answer to "why",
+  and a truncated answer is no answer.
+- **Why lines and not columns.** A Resource usually opens in a Pane beside
+  its list, which is about 520 px wide in a 1280 px window and 330 px wide in
+  a 900 px one. A table with a Message column needs about 950 px. A first
+  line that also held `Count` and `From` left Reason, which names the
+  problem, a few characters at 330 px. The OpenShift console lays its Events
+  out the same way: what happened, the message, then "Generated from" and how
+  many times.
+- **Narrow Panes.** Nothing scrolls sideways. Last seen and Type have fixed
+  widths, so a first Warning does not move the columns, and Reason takes the
+  rest of the line. Reason truncates, with the full text as a title, only
+  when even that is too little, which starts below about 330 px. The third
+  line wraps.
+- **Count** is left out when the Event occurred once, as `kubectl describe`
+  leaves it out. `2 times` and more are shown.
+- **Semantics.** The grid carries the ARIA table roles. The message and the
+  third line are one cell each, and their column headers, `Message` and
+  `From and count`, are read only by assistive technology. A `<table>`
+  cannot put cells on further lines and keep its semantics in every browser.
 - **Last seen** is `formatAge` of the timestamp against `useNow`, as the
   list's Age column, with the timestamp as its title.
 - **From** is the reporter, then `, ` and its instance when there is one, as
-  `kubectl get events -o wide` prints it.
+  `kubectl get events -o wide` prints it. An Event without a reporter has no
+  `From` part.
 - **Warning and Normal.** A Warning row has a warning icon and `Warning` in
   medium weight in its Type cell, and a faint warning tint behind the whole
   row. A Normal row's Type is muted. The difference does not rest on color
   alone. Any other type shows as text.
 - **Rows are not interactive.** They have no hover highlight, which would
   suggest that a click does something, and their text can be selected and
-  copied. The scrolling area is focusable so the keyboard can scroll it.
+  copied. The scrolling area is focusable so the keyboard can scroll it, and
+  shows the focus ring inside its edge, where the Pane does not clip it.
 - **More than 500.** A muted line under the rows says
   `Showing the newest 500 of 1,234 Events.`
 
@@ -342,19 +359,19 @@ Event's UID, which is unique because one type is read.
 
 ### States of the Events Facet
 
-| State                                 | What shows                                                                                                                                                                                                                                                |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading: no value yet, or a stale one | The header row and three skeleton rows, marked busy. No badge. A stale value's Events are never shown, and an error that arrives meanwhile shows as it would without a value.                                                                             |
-| Empty                                 | `No recent Events`. `A cluster keeps Events for a limited time, usually one hour, so a healthy <Kind> often has none. New Events appear here as they happen.`                                                                                             |
-| Populated                             | The table. The badge counts warnings.                                                                                                                                                                                                                     |
-| Not permitted (`forbidden`)           | `Not permitted`. Namespaced: `Your credentials cannot list Events in the <namespace> Namespace.` Cluster-scoped: `Your credentials cannot list Events across the cluster, which the Events of a cluster-scoped <Kind> need.` Replaces any rows. No badge. |
-| Another error, no Events yet          | `Events unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                                                                                     |
-| Another error, with Events            | A line above the table in the destructive color, `Events may be out of date: <message>`. The rows and the badge stay.                                                                                                                                     |
-| The Cluster is unreachable            | The status bar says so, as today. The watch fails, which is the row above. It clears when the watch recovers.                                                                                                                                             |
-| The connection to the Engine is lost  | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                                                                                    |
-| The Resource is deleted while open    | The header's `Deleted` badge, in every Facet. The Events stay live for the same incarnation, because the deletion's own Events are often the useful ones.                                                                                                 |
-| The Resource was never found          | The header's `Not found` badge. Events about anything with that kind, name, and Namespace, or the empty state.                                                                                                                                            |
-| The window is out of date             | Frozen by the root layout, as everything else.                                                                                                                                                                                                            |
+| State                                 | What shows                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading: no value yet, or a stale one | The header row and three skeleton rows, marked busy. No badge. A stale value's Events are never shown, and an error that arrives meanwhile shows as it would without a value.                                                                                           |
+| Empty                                 | `No recent Events`. `A cluster keeps Events for a limited time, usually one hour, so a healthy <Kind> often has none. New Events appear here as they happen.`                                                                                                           |
+| Populated                             | The table. The badge counts warnings.                                                                                                                                                                                                                                   |
+| Not permitted (`forbidden`)           | `Not permitted`. Namespaced: `Your credentials cannot list Events in the <namespace> Namespace.` Cluster-scoped: `Showing the Events of a cluster-scoped Resource such as this <Kind> needs permission to list Events in every Namespace.` Replaces any rows. No badge. |
+| Another error, no Events yet          | `Events unavailable`, the error's message, and `hukube keeps trying.`                                                                                                                                                                                                   |
+| Another error, with Events            | A line above the table in the destructive color, `Events may be out of date: <message>`. The rows and the badge stay.                                                                                                                                                   |
+| The Cluster is unreachable            | The status bar says so, as today. The watch fails, which is the row above. It clears when the watch recovers.                                                                                                                                                           |
+| The connection to the Engine is lost  | The status bar says so, as today. The rows stay and their ages keep ticking. The client subscribes again on reconnect.                                                                                                                                                  |
+| The Resource is deleted while open    | The header's `Deleted` badge, in every Facet. The Events stay live for the same incarnation, because the deletion's own Events are often the useful ones.                                                                                                               |
+| The Resource was never found          | The header's `Not found` badge. Events about anything with that kind, name, and Namespace, or the empty state.                                                                                                                                                          |
+| The window is out of date             | Frozen by the root layout, as everything else.                                                                                                                                                                                                                          |
 
 The empty state uses the `Empty` component as other notices do. It names the
 time limit so that it reads as the normal state of a healthy Resource, not as
@@ -401,23 +418,23 @@ is the sample for that case.
 
 ## Testing
 
-| Risk                                                | Evidence                                                                                                                                                                                                                               |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A Resource's Events do not arrive or go stale       | envtest: an Event about a ConfigMap arrives; an update to its count and `lastTimestamp` arrives; deleting it removes it.                                                                                                               |
-| Events about other Resources leak in                | envtest: Events about another name, the same name in another Namespace, and the same name with another kind do not arrive.                                                                                                             |
-| A recreated Resource shows its predecessor's Events | envtest: with the new UID, the old incarnation's Event is left out and one without a UID stays; without a UID, both incarnations arrive.                                                                                               |
-| A cluster-scoped Resource gets nothing              | envtest: a Node's Events in `default` arrive whether the reference has the Node's UID, its name as UID, or none; a namespaced Event with the same kind and name does not.                                                              |
-| An Event shows twice                                | envtest: an Event written through `events.k8s.io` arrives once, with its series count and last observed time.                                                                                                                          |
-| A user without permission sees an empty Facet       | envtest through the control socket: the topic answers `forbidden`, and sends Events after the permission is granted.                                                                                                                   |
-| The wrong timestamp, count, or reporter             | Go table tests for each writer in the table above, and for each fallback.                                                                                                                                                              |
-| The match rule is wrong                             | Go table test over UID, name-as-UID, empty UID, unknown target UID, and API group.                                                                                                                                                     |
-| Order, cap, and counts                              | Go test: 501 Events give 500 rows, a total of 501, warnings counted before the cap, ties ordered by UID.                                                                                                                               |
-| A Facet shows for the wrong Resources               | Vitest for `facetsFor` and `resolveFacet`: both Event types, another type, an unknown `ResourceType`, and a requested Facet that does not apply.                                                                                       |
-| A URI's Facet does not survive                      | Vitest for the URI: `#events` round-trips, and an unknown Facet is still refused.                                                                                                                                                      |
-| The subscription asks for the wrong incarnation     | Vitest for the params rule: nothing before the Manifest answers, the UID of the last Manifest, none when never found, kept after deletion.                                                                                             |
-| A replaced Preview Tab loses its Facet              | Vitest for the rule that picks the new tab's URI.                                                                                                                                                                                      |
-| A state of the Events Facet shows the wrong thing   | Vitest with jsdom for each row of the states table that the Facet renders, the warning row's accessible text, the badge's name, the cap line, and an age that advances with the clock.                                                 |
-| The feature does not work end to end                | Playwright: open a ConfigMap, switch to Events, see the empty state, create a Warning Event with `kubectl`, see its row and the badge without a reload, reload once the layout is stored, and find the Events Facet showing the Event. |
+| Risk                                                   | Evidence                                                                                                                                                                                                                               |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Resource's Events do not arrive or go stale          | envtest: an Event about a ConfigMap arrives; an update to its count and `lastTimestamp` arrives; deleting it removes it.                                                                                                               |
+| Events about other Resources leak in                   | envtest: Events about another name, the same name in another Namespace, and the same name with another kind do not arrive.                                                                                                             |
+| A recreated Resource shows its predecessor's Events    | envtest: with the new UID, the old incarnation's Event is left out and one without a UID stays; without a UID, both incarnations arrive.                                                                                               |
+| A cluster-scoped Resource gets nothing                 | envtest: a Node's Events in `default` arrive whether the reference has the Node's UID, its name as UID, or none; a namespaced Event with the same kind and name does not.                                                              |
+| An Event shows twice                                   | envtest: an Event written through `events.k8s.io` arrives once, with its series count and last observed time.                                                                                                                          |
+| A user without permission sees an empty Facet          | envtest through the control socket: the topic answers `forbidden`, and sends Events after the permission is granted.                                                                                                                   |
+| The wrong timestamp, count, or reporter                | Go table tests for each writer in the table above, and for each fallback.                                                                                                                                                              |
+| The match rule is wrong                                | Go table test over UID, name-as-UID, empty UID, unknown target UID, and API group.                                                                                                                                                     |
+| Order, cap, and counts                                 | Go test: 501 Events give 500 rows, a total of 501, warnings counted before the cap, ties ordered by UID.                                                                                                                               |
+| A Facet shows for the wrong Resources                  | Vitest for `facetsFor` and `resolveFacet`: both Event types, another type, an unknown `ResourceType`, and a requested Facet that does not apply.                                                                                       |
+| A URI's Facet does not survive                         | Vitest for the URI: `#events` round-trips, and an unknown Facet is still refused.                                                                                                                                                      |
+| The subscription asks for the wrong incarnation        | Vitest for the params rule: nothing before the Manifest answers, the UID of the last Manifest, none when never found, kept after deletion.                                                                                             |
+| A tab that opens over another Resource loses its Facet | Vitest for the rule that picks the new tab's URI, and for `openPanel` passing the Pane's active tab to it.                                                                                                                             |
+| A state of the Events Facet shows the wrong thing      | Vitest with jsdom for each row of the states table that the Facet renders, the warning row's accessible text, the badge's name, the cap line, and an age that advances with the clock.                                                 |
+| The feature does not work end to end                   | Playwright: open a ConfigMap, switch to Events, see the empty state, create a Warning Event with `kubectl`, see its row and the badge without a reload, reload once the layout is stored, and find the Events Facet showing the Event. |
 
 Each new test is run once against a deliberately broken implementation, to
 see it fail at its assertion.
@@ -463,11 +480,22 @@ None.
   generates an embedded Go struct as a nested TypeScript property, so
   `ResourceEventsParams` lists its fields to keep the intended flat wire
   contract.
-- **Events take two lines.** The plan first specified a table with a Message
-  column. In a Pane beside the Resource list it scrolled sideways and hid part
-  of the message, so a grid now aligns the metadata and puts the full message
-  on the second line.
+- **Events take three lines.** The original table's Message column scrolled
+  sideways in a Pane beside the Resource list. Putting the message on a second
+  line fixed that, but keeping Count and From on the first left Reason only a
+  few characters in a narrow Pane and truncated From beside unused space in a
+  wide one. The first line now holds Last seen, Type, and Reason; the message
+  and the reporter and count each use a further line under Type.
+- **New Resource tabs inherit the active tab's Facet.** The plan first limited
+  inheritance to a Preview Tab replacing another. Enter and opening after
+  pinning therefore reset the Facet. Reading the destination Pane's active tab
+  makes clicks, Enter, and the Go to Resource palette keep the shown Facet.
 - **The Engine owns the Events retry loop.** The plan first relied on the
   Reflector's own retries. They logged refused lists at error level and the
   wrappers reported expired watches, so the Engine now calls list-and-watch
   itself with the Cluster's retry timing and Warn logging.
+- **A refused watch ends the attempt.** Stopping the test cluster with a
+  Resource's Events on screen showed the status bar's notice but no error in
+  the Facet: the Reflector retries a refused connection inside its watch and
+  never returns. The watch function now returns such an error in a form the
+  Reflector does not retry.

@@ -24,10 +24,13 @@ export function YamlFacet({ address, kind, manifest, lastObject, showing, contro
           <Button
             variant="ghost"
             size="sm"
+            className="min-w-0 shrink"
             aria-pressed={showManagedFields}
             onClick={() => setShowManagedFields(!showManagedFields)}
           >
-            {showManagedFields ? "Hide managed fields" : "Show managed fields"}
+            <span className="truncate">
+              {showManagedFields ? "Hide managed fields" : "Show managed fields"}
+            </span>
           </Button>,
           controls,
         )}
