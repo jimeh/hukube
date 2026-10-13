@@ -5,8 +5,18 @@ import {
   type EngineEndpoint,
   type Subscription,
   type SubscriptionListener,
+  type EngineStream,
+  type StreamListener,
+  type StreamData,
 } from "./client.ts";
-import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.gen.ts";
+import type {
+  RequestMethod,
+  Requests,
+  TopicMethod,
+  Topics,
+  StreamMethod,
+  Streams,
+} from "./methods.gen.ts";
 import type { ErrorDetail } from "./protocol.gen.ts";
 import type { FromWorker, ToWorker } from "./worker-protocol.ts";
 
@@ -23,6 +33,7 @@ export class WorkerEngineClient implements EngineClient {
     number,
     { listener: SubscriptionListener<unknown>; count: number }
   >();
+  readonly #streams = new Map<number, { listener: StreamListener<StreamMethod>; bytes: number }>();
   readonly #stateListeners = new Set<() => void>();
 
   constructor(endpoint: EngineEndpoint) {
@@ -32,6 +43,27 @@ export class WorkerEngineClient implements EngineClient {
     });
     this.#worker.onmessage = (event: MessageEvent<FromWorker>) => this.#receive(event.data);
     this.#post({ kind: "connect", endpoint });
+  }
+
+  openStream<M extends StreamMethod>(
+    method: M,
+    params: Streams[M]["params"],
+    listener: StreamListener<M>,
+  ): EngineStream {
+    const id = this.#nextId++;
+    this.#streams.set(id, { listener: listener as StreamListener<StreamMethod>, bytes: 0 });
+    this.#post({ kind: "stream-open", id, method, params });
+    return {
+      pause: () => {
+        if (this.#streams.has(id)) this.#post({ kind: "stream-pause", id });
+      },
+      resume: () => {
+        if (this.#streams.has(id)) this.#post({ kind: "stream-resume", id });
+      },
+      close: () => {
+        if (this.#streams.delete(id)) this.#post({ kind: "stream-close", id });
+      },
+    };
   }
 
   request<M extends RequestMethod>(
@@ -78,11 +110,38 @@ export class WorkerEngineClient implements EngineClient {
   close(): void {
     this.#post({ kind: "close" });
     this.#worker.terminate();
+    this.#streams.clear();
     this.#state = "closed";
     for (const fn of this.#stateListeners) fn();
   }
 
   #receive(msg: FromWorker): void {
+    if (msg.kind.startsWith("stream-")) {
+      if (!("id" in msg)) return;
+      const active = this.#streams.get(msg.id);
+      if (!active) return;
+      switch (msg.kind) {
+        case "stream-state":
+          if (msg.state === "connecting" || msg.state === "reconnecting") active.bytes = 0;
+          active.listener.state?.(msg.state);
+          break;
+        case "stream-event":
+          active.listener.event(msg.event as Streams[StreamMethod]["event"]);
+          break;
+        case "stream-gap":
+          active.listener.gap(msg.gap);
+          break;
+        case "stream-end":
+          active.listener.end(msg.end);
+          break;
+        case "stream-data":
+          active.listener.data(msg.data as StreamData[StreamMethod]);
+          active.bytes += msg.bytes;
+          this.#post({ kind: "stream-ack", id: msg.id, token: msg.token, bytes: active.bytes });
+          break;
+      }
+      return;
+    }
     switch (msg.kind) {
       case "state":
         this.#state = msg.state;

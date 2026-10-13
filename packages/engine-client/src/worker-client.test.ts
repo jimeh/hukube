@@ -67,3 +67,30 @@ describe("WorkerEngineClient", () => {
     expect(client.getState()).toBe("closed");
   });
 });
+
+it("acknowledges stream bytes after the main-thread data listener returns", () => {
+  const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+  const worker = FakeWorker.latest;
+  const data = vi.fn<() => void>(() => {
+    expect(worker.sent.filter((message) => message.kind === "stream-ack")).toHaveLength(0);
+  });
+  const stream = client.openStream(
+    "resource.logs",
+    { cluster: "c", type: "pods", name: "p", uid: "u" },
+    { data, event: vi.fn<() => void>(), gap: vi.fn<() => void>(), end: vi.fn<() => void>() },
+  );
+  const message = worker.sent[1]!;
+  if (message.kind !== "stream-open") throw new Error("missing stream-open");
+  worker.receive({ kind: "stream-data", id: message.id, data: [], bytes: 42, token: 1 });
+  expect(data).toHaveBeenCalledOnce();
+  expect(worker.sent.at(-1)).toEqual({ kind: "stream-ack", id: message.id, token: 1, bytes: 42 });
+  data.mockImplementation(() => {});
+  worker.receive({ kind: "stream-data", id: message.id, data: [], bytes: 20, token: 2 });
+  expect(worker.sent.at(-1)).toEqual({ kind: "stream-ack", id: message.id, token: 2, bytes: 62 });
+  stream.pause();
+  stream.resume();
+  stream.close();
+  worker.receive({ kind: "stream-data", id: message.id, data: [], bytes: 20, token: 3 });
+  expect(data).toHaveBeenCalledTimes(2);
+  expect(worker.sent.at(-1)).toEqual({ kind: "stream-close", id: message.id });
+});

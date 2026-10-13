@@ -4,6 +4,8 @@ import type { ComponentType } from "react";
 import { EventsFacet, EventsBadge, eventsTabName } from "./events-facet.tsx";
 import type { FacetProps, FacetTarget } from "./facet-props.ts";
 import { RelatedFacet, RelatedBadge, relatedTabName } from "./related-facet.tsx";
+import { LogsFacet } from "./logs-facet.tsx";
+import { typeHasLogs } from "./logs-rule.ts";
 import { YamlFacet } from "./yaml-facet.tsx";
 
 export interface FacetEntry {
@@ -17,6 +19,12 @@ export interface FacetEntry {
 
 const facets: readonly FacetEntry[] = [
   { id: "yaml", label: "YAML", appliesTo: () => true, View: YamlFacet },
+  {
+    id: "logs",
+    label: "Logs",
+    appliesTo: ({ type, logs }) => typeHasLogs(type) || !!logs,
+    View: LogsFacet,
+  },
   {
     id: "events",
     label: "Events",

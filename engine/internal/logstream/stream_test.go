@@ -355,7 +355,9 @@ func TestLogContainerSelection(t *testing.T) {
 }
 
 func TestLogPrevious(t *testing.T) {
-	f, g := newFake(pod("pod", "yes", "none"))
+	pod := pod("pod", "yes", "none")
+	pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "yes-0", Reason: "Error", ExitCode: 1}
+	f, g := newFake(pod)
 	f.open = func(_ context.Context, _ string, o *corev1.PodLogOptions) (io.ReadCloser, error) {
 		if !o.Previous || o.Follow || o.TailLines == nil {
 			t.Errorf("previous options=%+v", o)
@@ -370,7 +372,7 @@ func TestLogPrevious(t *testing.T) {
 	out, end, _ := start(t, f, g, p)
 	e := awaitEnd(t, end)
 	r, _ := out.snapshot()
-	if e.Reason != protocol.StreamEndReasonComplete || len(r) != 1 || string(r[0].content) != "previous" {
+	if e.Reason != protocol.StreamEndReasonComplete || len(r) != 2 || string(r[0].content) != "previous" || r[1].flags != protocol.LogRecordFlagExited || string(r[1].content) != "Error, exit code 1" {
 		t.Fatalf("previous run: end=%+v records=%s", e, describe(r))
 	}
 }

@@ -1,5 +1,13 @@
-import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.gen.ts";
-import type { ErrorDetail } from "./protocol.gen.ts";
+import type {
+  RequestMethod,
+  Requests,
+  TopicMethod,
+  Topics,
+  StreamMethod,
+  Streams,
+} from "./methods.gen.ts";
+import type { LogLine } from "./log-codec.ts";
+import type { ErrorDetail, StreamGap, StreamEnd } from "./protocol.gen.ts";
 
 /** The state of the connection to the Engine. */
 export type ConnectionState = "connecting" | "open" | "reconnecting" | "outdated" | "closed";
@@ -15,8 +23,30 @@ export interface Subscription<P> {
   close: () => void;
 }
 
-/** A client of the Engine's control socket. */
+export type StreamState = "waiting" | "connecting" | "open" | "reconnecting" | "paused" | "ended";
+export interface StreamData {
+  "resource.logs": LogLine[];
+}
+export interface StreamListener<M extends StreamMethod> {
+  state?: (state: StreamState) => void;
+  event: (event: Streams[M]["event"]) => void;
+  data: (data: StreamData[M]) => void;
+  gap: (gap: StreamGap) => void;
+  end: (end: StreamEnd) => void;
+}
+export interface EngineStream {
+  pause(): void;
+  resume(): void;
+  close(): void;
+}
+
+/** A client of the Engine's control and stream methods. */
 export interface EngineClient {
+  openStream<M extends StreamMethod>(
+    method: M,
+    params: Streams[M]["params"],
+    listener: StreamListener<M>,
+  ): EngineStream;
   request<M extends RequestMethod>(
     method: M,
     params: Requests[M]["params"],

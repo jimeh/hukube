@@ -155,3 +155,152 @@
     font-feature-settings: "calt" 1;
   }
 }
+
+:root {
+  --ansi-black: var(--muted-foreground);
+  --ansi-red: #a31515;
+  --ansi-green: #176a27;
+  --ansi-yellow: #735a00;
+  --ansi-blue: #2457b3;
+  --ansi-magenta: #8c278f;
+  --ansi-cyan: #006a70;
+  --ansi-white: var(--muted-foreground);
+  --ansi-bright-black: #575757;
+  --ansi-bright-red: #b31c27;
+  --ansi-bright-green: #176b27;
+  --ansi-bright-yellow: #756000;
+  --ansi-bright-blue: #3b52ad;
+  --ansi-bright-magenta: #922a99;
+  --ansi-bright-cyan: #007078;
+  --ansi-bright-white: var(--muted-foreground);
+}
+.dark {
+  --ansi-black: var(--muted-foreground);
+  --ansi-red: #f48771;
+  --ansi-green: #89d185;
+  --ansi-yellow: #d7ba7d;
+  --ansi-blue: #75beff;
+  --ansi-magenta: #d4a0e5;
+  --ansi-cyan: #4ec9b0;
+  --ansi-white: #d4d4d4;
+  --ansi-bright-black: #9b9b9b;
+  --ansi-bright-red: #ff9999;
+  --ansi-bright-green: #a8df9b;
+  --ansi-bright-yellow: #e8d18a;
+  --ansi-bright-blue: #9bbcff;
+  --ansi-bright-magenta: #e4b4ef;
+  --ansi-bright-cyan: #9cdcfe;
+  --ansi-bright-white: #eeeeee;
+}
+
+.monaco-editor .view-line .log-muted {
+  color: var(--muted-foreground);
+}
+.monaco-editor .view-line .log-fg-0 {
+  color: var(--ansi-black);
+}
+.monaco-editor .view-line .log-bg-0 {
+  background-color: var(--ansi-black);
+}
+.monaco-editor .view-line .log-fg-1 {
+  color: var(--ansi-red);
+}
+.monaco-editor .view-line .log-bg-1 {
+  background-color: var(--ansi-red);
+}
+.monaco-editor .view-line .log-fg-2 {
+  color: var(--ansi-green);
+}
+.monaco-editor .view-line .log-bg-2 {
+  background-color: var(--ansi-green);
+}
+.monaco-editor .view-line .log-fg-3 {
+  color: var(--ansi-yellow);
+}
+.monaco-editor .view-line .log-bg-3 {
+  background-color: var(--ansi-yellow);
+}
+.monaco-editor .view-line .log-fg-4 {
+  color: var(--ansi-blue);
+}
+.monaco-editor .view-line .log-bg-4 {
+  background-color: var(--ansi-blue);
+}
+.monaco-editor .view-line .log-fg-5 {
+  color: var(--ansi-magenta);
+}
+.monaco-editor .view-line .log-bg-5 {
+  background-color: var(--ansi-magenta);
+}
+.monaco-editor .view-line .log-fg-6 {
+  color: var(--ansi-cyan);
+}
+.monaco-editor .view-line .log-bg-6 {
+  background-color: var(--ansi-cyan);
+}
+.monaco-editor .view-line .log-fg-7 {
+  color: var(--ansi-white);
+}
+.monaco-editor .view-line .log-bg-7 {
+  background-color: var(--ansi-white);
+}
+.monaco-editor .view-line .log-fg-8 {
+  color: var(--ansi-bright-black);
+}
+.monaco-editor .view-line .log-bg-8 {
+  background-color: var(--ansi-bright-black);
+}
+.monaco-editor .view-line .log-fg-9 {
+  color: var(--ansi-bright-red);
+}
+.monaco-editor .view-line .log-bg-9 {
+  background-color: var(--ansi-bright-red);
+}
+.monaco-editor .view-line .log-fg-10 {
+  color: var(--ansi-bright-green);
+}
+.monaco-editor .view-line .log-bg-10 {
+  background-color: var(--ansi-bright-green);
+}
+.monaco-editor .view-line .log-fg-11 {
+  color: var(--ansi-bright-yellow);
+}
+.monaco-editor .view-line .log-bg-11 {
+  background-color: var(--ansi-bright-yellow);
+}
+.monaco-editor .view-line .log-fg-12 {
+  color: var(--ansi-bright-blue);
+}
+.monaco-editor .view-line .log-bg-12 {
+  background-color: var(--ansi-bright-blue);
+}
+.monaco-editor .view-line .log-fg-13 {
+  color: var(--ansi-bright-magenta);
+}
+.monaco-editor .view-line .log-bg-13 {
+  background-color: var(--ansi-bright-magenta);
+}
+.monaco-editor .view-line .log-fg-14 {
+  color: var(--ansi-bright-cyan);
+}
+.monaco-editor .view-line .log-bg-14 {
+  background-color: var(--ansi-bright-cyan);
+}
+.monaco-editor .view-line .log-fg-15 {
+  color: var(--ansi-bright-white);
+}
+.monaco-editor .view-line .log-bg-15 {
+  background-color: var(--ansi-bright-white);
+}
+.monaco-editor .view-line .log-bold {
+  font-weight: 700;
+}
+.monaco-editor .view-line .log-dim {
+  opacity: 0.7;
+}
+.monaco-editor .view-line .log-italic {
+  font-style: italic;
+}
+.monaco-editor .view-line .log-underline {
+  text-decoration: underline;
+}

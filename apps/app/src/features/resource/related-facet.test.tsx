@@ -32,10 +32,12 @@ const props: FacetProps = {
   related: { stale: false },
   panelId: "source",
   showing: true,
+  visible: true,
   controls: null,
 };
 const workspace: WorkspaceValue = {
   cluster: "c",
+  active: true,
   types: new Map(),
   openResource: vi.fn<WorkspaceValue["openResource"]>(),
   openList: vi.fn<WorkspaceValue["openList"]>(),
