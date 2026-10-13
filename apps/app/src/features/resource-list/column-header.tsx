@@ -9,7 +9,6 @@ import {
   PreventSelection,
   Scroller,
   type DragMoveEvent,
-  type DragOverEvent,
 } from "@dnd-kit/dom";
 import { DragDropProvider } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
@@ -25,7 +24,7 @@ import {
 import { cn } from "@hukube/ui/lib/utils";
 import { ArrowDown01Icon, ArrowUp01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 import {
   columnSort,
@@ -41,7 +40,8 @@ import { ColumnMenuItems, type ColumnMenuProps } from "./column-menu.tsx";
 const sensors = [
   PointerSensor.configure({
     activationConstraints: () => [new PointerActivationConstraints.Distance({ value: 5 })],
-    preventActivation: (event) => event.pointerType === "touch",
+    // Touch scrolls the list, and Control-click opens the context menu on macOS.
+    preventActivation: (event) => event.pointerType === "touch" || event.ctrlKey,
   }),
 ];
 const plugins = [
@@ -51,13 +51,18 @@ const plugins = [
   PreventSelection,
 ];
 
-/** The header edge a drop would land on, while the pointer is level with the row. */
-function dropAt(operation: DragMoveEvent["operation"]) {
-  const bounds = operation.target?.shape?.boundingRectangle;
-  const pointer = operation.position.current;
-  if (!operation.target || !bounds || pointer.y < bounds.top || pointer.y > bounds.bottom)
-    return undefined;
-  return { id: String(operation.target.id), edge: dropEdge(pointer.x, bounds) };
+/** A drag in progress: the header a drop would go to, and the pointer. */
+type DropOperation = Pick<DragMoveEvent["operation"], "target" | "position">;
+
+/**
+ * The header edge a drop would land on, while the pointer is level with the
+ * row. It reads the header's place on screen, which auto-scroll changes
+ * under a pointer that is not moving.
+ */
+function dropAt({ target, position }: DropOperation, pointer = position.current) {
+  const bounds = target?.element?.getBoundingClientRect();
+  if (!target || !bounds || pointer.y < bounds.top || pointer.y > bounds.bottom) return undefined;
+  return { id: String(target.id), edge: dropEdge(pointer.x, bounds) };
 }
 
 interface ColumnHeadersProps extends ColumnMenuProps {
@@ -77,8 +82,14 @@ export function ColumnHeaders({
   hasStored,
 }: ColumnHeadersProps & { scrollRef: RefObject<HTMLDivElement | null> }) {
   const [marker, setMarker] = useState<{ id: string; edge: DropEdge }>();
-  const updateMarker = ({ operation }: DragMoveEvent | DragOverEvent) =>
-    setMarker(dropAt(operation));
+  // A drop goes where the marker last showed, so the two cannot disagree.
+  const shown = useRef(marker);
+  const show = (next: typeof marker) => {
+    shown.current = next;
+    setMarker(next);
+  };
+  const stopFollowing = useRef<() => void>(undefined);
+  useEffect(() => () => stopFollowing.current?.(), []);
   return (
     <DragDropProvider
       sensors={sensors}
@@ -89,15 +100,23 @@ export function ColumnHeaders({
         if (scroller)
           scroller.getScrollableElements = () =>
             scrollRef.current ? new Set([scrollRef.current]) : null;
+        // Auto-scroll moves the headers under a pointer that sends no events.
+        const list = scrollRef.current;
+        const follow = () => show(dropAt(manager.dragOperation));
+        list?.addEventListener("scroll", follow, { passive: true });
+        stopFollowing.current = () => list?.removeEventListener("scroll", follow);
       }}
       onDragStart={({ operation }) => {
-        if (operation.source) setMarker({ id: String(operation.source.id), edge: "left" });
+        if (operation.source) show({ id: String(operation.source.id), edge: "left" });
       }}
-      onDragOver={updateMarker}
-      onDragMove={updateMarker}
+      onDragOver={({ operation }) => show(dropAt(operation))}
+      // dnd-kit sends a move before it applies it; `to` is where the pointer is.
+      onDragMove={({ operation, to }) => show(dropAt(operation, to ?? undefined))}
       onDragEnd={({ operation, canceled }) => {
-        setMarker(undefined);
-        const at = dropAt(operation);
+        stopFollowing.current?.();
+        stopFollowing.current = undefined;
+        const at = shown.current;
+        show(undefined);
         if (canceled || !operation.source || !at) return;
         // Resolve the destination against the layout current at release.
         const source = String(operation.source.id);

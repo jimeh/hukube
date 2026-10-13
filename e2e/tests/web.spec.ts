@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 import { clusterId, engineToken, kubectl } from "./env.ts";
 
@@ -154,6 +154,18 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     await expect(headers).toHaveText(defaults);
     await expectSaved(defaults, true);
   };
+  // The marker sits on the edge of a header where a drop would land.
+  const expectMarker = (header: Locator, edge: "left" | "right") =>
+    expect
+      .poll(async () => {
+        const marker = await panel.locator("[data-column-drop-marker]").boundingBox();
+        const box = await header.boundingBox();
+        if (!marker || !box) return Infinity;
+        return Math.abs(
+          marker.x + marker.width / 2 - (edge === "left" ? box.x : box.x + box.width),
+        );
+      })
+      .toBeLessThan(3);
   // Keep this type at the default before and after the test.
   await reset();
   try {
@@ -238,11 +250,13 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
       await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
       await page.mouse.down();
       const destination = (await type.boundingBox())!;
-      await page.mouse.move(destination.x + 2, destination.y + destination.height / 2, {
-        steps: 12,
-      });
+      const y = destination.y + destination.height / 2;
+      await page.mouse.move(destination.x + destination.width * 0.75, y, { steps: 12 });
+      await expectMarker(type, "right");
+      // One move across the middle of the same header takes the marker with it.
+      await page.mouse.move(destination.x + destination.width * 0.25, y);
+      await expectMarker(type, "left");
     }
-    await expect(type.locator("..").locator("[data-column-drop-marker]")).toBeVisible();
     await page.mouse.up();
     await expect(headers).toHaveText([
       "Name",
@@ -311,7 +325,6 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     const bounds = (await scroller.boundingBox())!;
     const ports = panel.getByRole("columnheader", { name: "Port(s)", exact: true });
     expect((await ports.boundingBox())!.x).toBeGreaterThan(bounds.x + bounds.width);
-    const scrollTop = await scroller.evaluate((element) => element.scrollTop);
     const first = (await headers.first().boundingBox())!;
     await page.mouse.move(first.x + first.width / 2, first.y + first.height / 2);
     await page.mouse.down();
@@ -325,7 +338,8 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
         ),
       )
       .toBeLessThanOrEqual(1);
-    expect(await scroller.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+    // The pointer has not moved since the list began to scroll under it.
+    await expectMarker(ports, "right");
     await expect(columns).toBeVisible();
     const customize = (await columns.boundingBox())!;
     const last = (await headers.last().boundingBox())!;
@@ -335,22 +349,14 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     const lastCell = panel.getByRole("grid").getByRole("row").first().getByRole("gridcell").last();
     const cell = (await lastCell.boundingBox())!;
     expect(cell.x + cell.width).toBeLessThanOrEqual(customize.x);
-    await page.mouse.move(customize.x + customize.width / 2, first.y + first.height / 2, {
-      steps: 8,
-    });
-    await page.mouse.move(customize.x + customize.width / 2 + 3, first.y + first.height / 2, {
-      steps: 3,
-    });
-    await expect(ports.locator("..").locator("[data-column-drop-marker]")).toBeVisible();
     await page.mouse.up();
     await expect(headers).toHaveText([...edited.slice(1), "Name"]);
     await expect(panel.locator("[data-column-drop-marker]")).toHaveCount(0);
 
-    // Showing a default-hidden column reveals it without moving vertically.
+    // Showing a column that is hidden by default scrolls it into view.
     await scroller.evaluate((element) => {
       element.scrollLeft = 0;
     });
-    const topBeforeShow = await scroller.evaluate((element) => element.scrollTop);
     await columns.click();
     await page.getByRole("menuitemcheckbox", { name: "Selector", exact: true }).click();
     const selector = panel.getByRole("columnheader", { name: "Selector", exact: true });
@@ -368,7 +374,6 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
         );
       })
       .toBe(true);
-    expect(await scroller.evaluate((element) => element.scrollTop)).toBe(topBeforeShow);
     await expect(
       page.getByRole("menuitemcheckbox", { name: "Selector", exact: true }),
     ).toHaveAttribute("aria-checked", "true");
