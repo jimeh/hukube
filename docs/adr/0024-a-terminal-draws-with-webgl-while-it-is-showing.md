@@ -14,9 +14,14 @@ Chrome. Every other browser keeps the DOM renderer.
 ## The DOM renderer is always underneath
 
 A terminal starts with the DOM renderer and then takes a WebGL context. It
-keeps the DOM renderer when the add-on cannot start. When the browser takes
-the context back, the terminal returns to the DOM renderer with its buffer
-as it was, and stays on it until it is next shown.
+keeps the DOM renderer when the add-on cannot start, and then no terminal in
+the window tries again.
+
+When the browser takes a context back, the terminal returns to the DOM
+renderer at once, with its buffer as it was, and stays on it until it is
+next shown. The add-on would wait 3 seconds for the context to return, with
+nothing drawn and keys still reaching the process. The terminal does not
+wait for that.
 
 ## Only a terminal that is showing holds a context
 
@@ -45,9 +50,10 @@ The number showing is bounded by the Panes a window has, not by its Tabs.
 ## Consequences
 
 - The two renderers measure a cell differently, so a change of renderer can
-  change the grid's size. A terminal takes its context before it is first
-  sized, and a hidden one is not sized, so in practice only a lost context
-  does this to a live session.
+  change the grid's size, which a shell sees as a resize. A terminal takes
+  its context before it is first sized, and a hidden one is not sized, so
+  in practice only a lost context does this to a live session: once when
+  the context is lost, and once more when the terminal is next shown.
 - A canvas cannot be read by a test. The setting `hukube.terminal.renderer`
   keeps the DOM renderer when it holds `dom`. The end-to-end tests set it,
   and one test reads a WebGL terminal through Find instead.
