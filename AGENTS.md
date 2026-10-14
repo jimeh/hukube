@@ -137,8 +137,9 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   Chromium a terminal that is showing draws with WebGL (ADR-0024), so its
   screen is a canvas: a test that reads the screen sets `localStorage`'s
   `hukube.terminal.renderer` to `dom` first. Playwright's `deviceScaleFactor`
-  makes the WebGL canvas draw at twice its size; use the browser's
-  `--force-device-scale-factor` to look at a high-density screen.
+  does not reach the WebGL canvas, which then draws at the wrong scale. To
+  look at a high-density screen, launch with `--force-device-scale-factor`
+  and a `null` viewport.
 - **Monaco:** `monaco-editor/editor/editor.api` has no find, clipboard, or
   icon font. `apps/app/src/lib/monaco.ts` imports them and removes the key
   bindings they add beyond find, so import Monaco from there. Its text

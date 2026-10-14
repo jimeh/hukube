@@ -39,7 +39,18 @@ const chromium =
 // and at most this many do.
 const maxWebglTerminals = 8;
 let webglTerminals = 0;
-let terminals = 0;
+// Set when the add-on could not start. A start that fails part of the way
+// leaves listeners nothing can remove, so no terminal in this window tries
+// again.
+let webglFailed = false;
+// The numbers of the terminals that exist, each of which has its own.
+const terminalNumbers = new Set<number>();
+
+const loseContext = (canvas: HTMLCanvasElement) => {
+  const context = canvas.getContext("webgl2");
+  if (context && !context.isContextLost())
+    context.getExtension("WEBGL_lose_context")?.loseContext();
+};
 
 /** The renderers and add-ons of an Exec Session, loaded only when one starts. */
 export function createExecTerminal(): ExecTerminal {
@@ -82,27 +93,44 @@ export function createExecTerminal(): ExecTerminal {
   // wrong glyphs. A color no program is likely to use, different for each
   // terminal by an amount nobody can see, gives each its own texture: at
   // most 6 of 255 in each channel of color 16, which is black.
-  const ownTexture = `#${[1, 7, 49].map((place) => `0${Math.floor(terminals / place) % 7}`).join("")}`;
-  terminals = (terminals + 1) % 343;
+  let number = 0;
+  while (terminalNumbers.has(number)) number++;
+  terminalNumbers.add(number);
+  const ownTexture = `#${[1, 7, 49].map((place) => `0${Math.floor(number / place) % 7}`).join("")}`;
+  // The add-on keeps a glyph as it first drew it. A font that arrives in
+  // parts, by range of characters, would leave text drawn before its part
+  // came in the fallback font.
+  const redrawGlyphs = () => webgl?.clearTextureAtlas();
   // Takes a WebGL context for this terminal if it may have one. The DOM
   // renderer stays when it may not, or when the add-on cannot start.
   const takeWebgl = () => {
-    if (webgl || lostWebgl || !chromium || webglTerminals >= maxWebglTerminals) return;
+    if (webgl || lostWebgl || webglFailed || !chromium) return;
+    if (webglTerminals >= maxWebglTerminals) return;
     if (localStorage.getItem(rendererSetting) === "dom") return;
+    const before = new Set(element.querySelectorAll("canvas"));
+    let addon: WebglAddon | undefined;
     try {
-      const addon = new WebglAddon();
-      // A browser can take a context back at any time. The terminal then
-      // carries on with the DOM renderer, with its buffer as it was.
-      addon.onContextLoss(() => {
-        lostWebgl = true;
-        releaseWebgl();
-      });
+      addon = new WebglAddon();
       terminal.loadAddon(addon);
-      webgl = addon;
-      webglTerminals++;
     } catch {
-      // The DOM renderer is already drawing.
+      // The DOM renderer is already drawing. A start that failed after it
+      // made a context leaves canvases that the add-on does not remove.
+      webglFailed = true;
+      try {
+        addon?.dispose();
+      } catch {
+        // Nothing more can be undone.
+      }
+      for (const canvas of element.querySelectorAll("canvas")) {
+        if (before.has(canvas)) continue;
+        loseContext(canvas);
+        canvas.remove();
+      }
+      return;
     }
+    webgl = addon;
+    webglTerminals++;
+    document.fonts.addEventListener("loadingdone", redrawGlyphs);
   };
   // Gives the context back, which returns the terminal to the DOM renderer.
   const releaseWebgl = () => {
@@ -110,19 +138,32 @@ export function createExecTerminal(): ExecTerminal {
     const addon = webgl;
     webgl = undefined;
     webglTerminals--;
+    document.fonts.removeEventListener("loadingdone", redrawGlyphs);
     // Disposing the add-on removes its canvas and leaves the context to the
     // garbage collector, so contexts that nothing shows count against the
     // document's limit (xterm.js issue 6068). Losing them here frees them.
-    const contexts = [...element.querySelectorAll("canvas")].map((canvas) =>
-      canvas.getContext("webgl2"),
-    );
+    const canvases = [...element.querySelectorAll("canvas")];
     try {
       addon.dispose();
     } catch {
       // A context that is already lost can make the add-on's cleanup throw.
     }
-    for (const context of contexts) context?.getExtension("WEBGL_lose_context")?.loseContext();
+    canvases.forEach(loseContext);
   };
+  // A browser can take a context back at any time. The add-on then waits 3
+  // seconds for it to return, drawing nothing. The terminal does not wait: it
+  // carries on with the DOM renderer at once, with its buffer as it was, and
+  // is sized again because the two renderers measure a cell differently.
+  element.addEventListener(
+    "webglcontextlost",
+    () => {
+      if (!webgl) return;
+      lostWebgl = true;
+      releaseWebgl();
+      refit?.();
+    },
+    true,
+  );
   let fitted: (() => void) | undefined;
   let refit: (() => void) | undefined;
   const ready = new Promise<void>((resolve) => {
@@ -147,7 +188,7 @@ export function createExecTerminal(): ExecTerminal {
         `bright${name[0]!.toUpperCase()}${name.slice(1)}` as Exclude<keyof ITheme, "extendedAnsi">
       ] = color(`--ansi-bright-${name}`);
     }
-    colors.extendedAnsi = [ownTexture];
+    if (chromium) colors.extendedAnsi = [ownTexture];
     terminal.options.theme = colors;
     findColor = color("--warning");
   };
@@ -203,6 +244,7 @@ export function createExecTerminal(): ExecTerminal {
     dispose: () => {
       detach?.();
       releaseWebgl();
+      terminalNumbers.delete(number);
       terminal.dispose();
       element.remove();
     },
@@ -273,6 +315,10 @@ export function createExecTerminal(): ExecTerminal {
         resize();
       };
       const off = () => {
+        // A later attachment has replaced this one, and its state is not
+        // this one's to end.
+        if (detach !== off) return;
+        detach = undefined;
         refit = undefined;
         // A terminal that is not showing gives its context to one that is.
         releaseWebgl();

@@ -202,38 +202,48 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await expect(noShell.locator("pre")).toContainText("sh");
 });
 
-test("draws an Exec Session with WebGL, frees it while hidden, and falls back when it is lost", async ({
-  page,
-}) => {
+// Opens an Exec Session in a new Pod with one container, `app`.
+async function openSession(page: Page, pod: string) {
   kubectlCreate({
     apiVersion: "v1",
     kind: "Pod",
-    metadata: { name: "e2e-webgl", namespace },
+    metadata: { name: pod, namespace },
     spec: {
       containers: [{ name: "app", image: "busybox:1.36", command: ["sh", "-c", "sleep 3600"] }],
     },
   });
-  kubectl("-n", namespace, "wait", "--for=condition=Ready", "pod/e2e-webgl", "--timeout=60s");
+  kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${pod}`, "--timeout=60s");
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${pod}`);
+  await page.getByRole("option", { name: new RegExp(`^Pod ${pod} ${namespace}$`) }).click();
+  await page
+    .getByRole("tabpanel", { name: pod, exact: true })
+    .getByRole("button", { name: "Open an Exec Session" })
+    .click();
+  const panel = page
+    .getByRole("tabpanel", { name: `app in ${pod}`, exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+  return { panel, input: panel.getByRole("textbox", { name: `Exec Session in app of ${pod}` }) };
+}
+
+const webglCanvas = ".xterm canvas:not(.xterm-link-layer)";
+
+test("draws an Exec Session with WebGL, frees it while hidden, and falls back when it is lost", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "only Chromium draws a terminal with WebGL");
   await page.goto(`/#token=${engineToken}`);
   test.skip(
     !(await page.evaluate(() => !!document.createElement("canvas").getContext("webgl2"))),
     "this browser has no WebGL 2, so every terminal uses the DOM renderer",
   );
-  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
-  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+K");
-  await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/e2e-webgl`);
-  await page.getByRole("option", { name: new RegExp(`^Pod e2e-webgl ${namespace}$`) }).click();
-  await page
-    .getByRole("tabpanel", { name: "e2e-webgl", exact: true })
-    .getByRole("button", { name: "Open an Exec Session" })
-    .click();
-  const panel = page
-    .getByRole("tabpanel", { name: "app in e2e-webgl", exact: true })
-    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
-  const input = panel.getByRole("textbox", { name: "Exec Session in app of e2e-webgl" });
-  const webgl = page.locator(".xterm canvas:not(.xterm-link-layer)");
-  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+  const { panel, input } = await openSession(page, "e2e-webgl");
+  const webgl = page.locator(webglCanvas);
+  const screen = panel.locator(".xterm-screen");
   await expect(webgl.first()).toBeAttached();
   // The screen is a canvas, so output is looked for with Find. The command
   // itself does not contain what it prints.
@@ -246,12 +256,16 @@ test("draws an Exec Session with WebGL, frees it while hidden, and falls back wh
     await expect(panel.getByRole("search")).toContainText(/\b1 of [12]\b/);
     await find.press("Escape");
   };
+  const before = await screen.screenshot();
   await expect(async () => {
     await input.focus();
     await input.pressSequentially("echo webgl-$((6*7))");
     await input.press("Enter");
     await expect(async () => found("webgl-42")).toPass({ timeout: 3000 });
   }).toPass();
+  // Find reads the terminal's buffer, which a canvas that draws nothing
+  // would not change.
+  expect(await screen.screenshot()).not.toEqual(before);
   // A hidden terminal holds no WebGL context, and takes one again when shown.
   const tabs = page.locator(".dv-tab");
   await tabs
@@ -264,18 +278,56 @@ test("draws an Exec Session with WebGL, frees it while hidden, and falls back wh
   await expect(webgl.first()).toBeAttached();
   await found("webgl-42");
   // The browser takes the context away. The terminal carries on with the DOM
-  // renderer, with what it had on screen.
+  // renderer, with what it had on screen, and is sized for it: a DOM cell is
+  // wider, so the grid WebGL sized would run past the panel's edge.
   await page.evaluate(() => {
     for (const canvas of document.querySelectorAll<HTMLCanvasElement>(".xterm canvas"))
       canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
   });
   const rows = panel.locator(".xterm-rows");
-  await expect(rows).toContainText("webgl-42", { timeout: 15_000 });
+  await expect(rows).toContainText("webgl-42");
   await expect(webgl).toHaveCount(0);
+  await expect
+    .poll(() =>
+      screen.evaluate((element) => {
+        const body = element.closest(".xterm")!.parentElement!;
+        return element.getBoundingClientRect().right - body.getBoundingClientRect().right;
+      }),
+    )
+    .toBeLessThanOrEqual(0);
   await input.focus();
   await input.pressSequentially("echo after-loss-$((6*7))");
   await input.press("Enter");
   await expect(rows).toContainText("after-loss-42");
+});
+
+test("keeps the DOM renderer for an Exec Session when WebGL cannot start", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "only Chromium draws a terminal with WebGL");
+  await page.addInitScript(() => {
+    const real = Reflect.get(HTMLCanvasElement.prototype, "getContext") as (
+      ...args: unknown[]
+    ) => unknown;
+    Reflect.set(
+      HTMLCanvasElement.prototype,
+      "getContext",
+      function (this: HTMLCanvasElement, ...args: unknown[]) {
+        return args[0] === "webgl2" ? null : Reflect.apply(real, this, args);
+      },
+    );
+  });
+  await page.goto(`/#token=${engineToken}`);
+  const { panel, input } = await openSession(page, "e2e-no-webgl");
+  const rows = panel.locator(".xterm-rows");
+  await expect(async () => {
+    await input.focus();
+    await input.pressSequentially("echo dom-$((6*7))");
+    await input.press("Enter");
+    await expect(rows).toContainText("dom-42", { timeout: 3000 });
+  }).toPass();
+  await expect(page.locator(webglCanvas)).toHaveCount(0);
 });
 
 test("browses a live ConfigMap from the cluster picker to its YAML", async ({ page }) => {
