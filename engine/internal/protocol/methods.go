@@ -70,9 +70,10 @@ func Methods() []MethodDefinition { return append([]MethodDefinition(nil), metho
 // register against these values, and mise run gen generates the TypeScript method
 // map from them.
 var (
-	StreamPodExec      = DeclareStream[ExecParams, None]("pod.exec")
+	StreamPodExec      = DeclareStream[ExecParams, ExecSync]("pod.exec")
 	StreamResourceLogs = DeclareStream[LogStreamParams, LogStreamStatus]("resource.logs")
 
+	RequestExecEnd        = DeclareRequest[ExecEndParams, None]("exec.end")
 	RequestClustersList   = DeclareRequest[None, []Cluster]("clusters.list")
 	RequestResourceAccess = DeclareRequest[ResourceRef, ResourceAccess]("resource.access")
 	RequestResourceReview = DeclareRequest[ResourceEdit, EditReview]("resource.review")

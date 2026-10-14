@@ -174,7 +174,18 @@ it("transfers Exec input and resize to the Worker and defers byte acknowledgemen
   const inputDropped = vi.fn<(bytes: number) => void>();
   const stream = client.openStream(
     "pod.exec",
-    { cluster: "c", namespace: "ns", pod: "p", uid: "u", container: "main", cols: 80, rows: 24 },
+    {
+      cluster: "c",
+      namespace: "ns",
+      pod: "p",
+      uid: "u",
+      container: "main",
+      session: "s",
+      window: "w",
+      start: true,
+      cols: 80,
+      rows: 24,
+    },
     { data, event: () => {}, gap: () => {}, end: () => {}, inputDropped },
   );
   const opened = worker.sent[1]!;

@@ -7,7 +7,9 @@ import type {
   ClusterStatus,
   DeleteParams,
   EditReview,
+  ExecEndParams,
   ExecParams,
+  ExecSync,
   FindParams,
   FindResult,
   LogStreamParams,
@@ -28,6 +30,7 @@ import type {
 } from "./protocol.gen.ts";
 
 export interface Requests {
+  "exec.end": { params: ExecEndParams; result: undefined };
   "clusters.list": { params: undefined; result: Cluster[] };
   "resource.access": { params: ResourceRef; result: ResourceAccess };
   "resource.review": { params: ResourceEdit; result: EditReview };
@@ -48,7 +51,7 @@ export interface Topics {
 }
 
 export interface Streams {
-  "pod.exec": { params: ExecParams; event: undefined };
+  "pod.exec": { params: ExecParams; event: ExecSync };
   "resource.logs": { params: LogStreamParams; event: LogStreamStatus };
 }
 

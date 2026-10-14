@@ -125,10 +125,6 @@ it.each<[ExecState, string]>([
     },
     "The Engine shut down, which ended the session. Its shell was told to exit.",
   ],
-  [
-    { phase: "ended", reason: "lost" },
-    "The session lost its connection to the Engine. A command that was running may still be running in the container.",
-  ],
 ])("shows the end state %j", (state, copy) => {
   view(state);
   expect(screen.getByText("Ended")).toBeDefined();

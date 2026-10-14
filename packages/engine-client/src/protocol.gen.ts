@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "94c2e697a81023ac";
+export const Hash = "4d46975e1790c81c";
 
 //////////
 // source: protocol.go
@@ -809,7 +809,12 @@ export const StreamEndReasonStopped = "stopped";
  * StreamEndReasonError means the stream failed, with Error saying how.
  */
 export const StreamEndReasonError = "error";
-export type StreamEndReason = typeof StreamEndReasonComplete | typeof StreamEndReasonDeleted | typeof StreamEndReasonStopped | typeof StreamEndReasonError;
+/**
+ * StreamEndReasonDetached means the Exec Session carries on, and this
+ * stream is not attached to it: another window is.
+ */
+export const StreamEndReasonDetached = "detached";
+export type StreamEndReason = typeof StreamEndReasonComplete | typeof StreamEndReasonDeleted | typeof StreamEndReasonStopped | typeof StreamEndReasonError | typeof StreamEndReasonDetached;
 /**
  * StreamEnd is the Engine's last message on a stream. A socket that closes
  * without one was lost.
@@ -970,9 +975,19 @@ export const ExecReasonConnectionLost = "ConnectionLost";
  */
 export const ExecReasonEngineStopped = "EngineStopped";
 /**
+ * ExecReasonSessionGone means the Engine has no session with the ID a
+ * stream tried to attach to.
+ */
+export const ExecReasonSessionGone = "SessionGone";
+/**
+ * ExecReasonTooManySessions means the Engine runs as many sessions as it
+ * allows, and did not start another.
+ */
+export const ExecReasonTooManySessions = "TooManySessions";
+/**
  * Reasons in the ErrorDetail of an Exec Session that ended with an error.
  */
-export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonConnectionLost | typeof ExecReasonEngineStopped;
+export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonConnectionLost | typeof ExecReasonEngineStopped | typeof ExecReasonSessionGone | typeof ExecReasonTooManySessions;
 /**
  * ExecParams opens an Exec Session: a process with a TTY in a container.
  */
@@ -991,8 +1006,72 @@ export interface ExecParams {
    */
   command?: string[];
   /**
-   * Cols and Rows are the terminal's size when the session starts.
+   * Session identifies the Exec Session. The client chooses it when the user
+   * starts the session. Window identifies the window that attaches.
+   */
+  session: string;
+  window: string;
+  /**
+   * Start asks for a new session when none has this ID. Without it the
+   * stream only attaches.
+   */
+  start?: boolean;
+  /**
+   * Takeover attaches although another window is attached, which detaches
+   * that window.
+   */
+  takeover?: boolean;
+  /**
+   * Resume is the position in the session's output that the client's
+   * terminal has read to. It is absent when the terminal has read nothing
+   * of this session.
+   */
+  resume?: number /* uint64 */;
+  /**
+   * Cols and Rows are the terminal's size. Start requires them. A stream
+   * that attaches gives them only when its terminal has been sized.
+   */
+  cols?: number /* uint16 */;
+  rows?: number /* uint16 */;
+}
+/**
+ * ExecSync says where the output that follows it belongs in an Exec Session.
+ * It is the first message on a session's stream, and is sent again whenever
+ * the output that follows does not continue what the client has.
+ */
+export interface ExecSync {
+  /**
+   * Offset is the position of the next byte of output.
+   */
+  offset: number /* uint64 */;
+  /**
+   * Reset is set when Offset is not the client's position. The client
+   * clears its terminal before what follows.
+   */
+  reset?: boolean;
+  /**
+   * Skipped counts the output the client will not receive.
+   */
+  skipped?: number /* uint64 */;
+  /**
+   * Restore sets a reset terminal's modes to what they were at Offset.
+   */
+  restore?: string;
+  /**
+   * Replay counts the bytes that follow which the process had written when
+   * this was sent. The client answers no query in them.
+   */
+  replay?: number /* uint64 */;
+  /**
+   * Cols and Rows are the session's terminal size.
    */
   cols: number /* uint16 */;
   rows: number /* uint16 */;
+}
+/**
+ * ExecEndParams names an Exec Session to end, because its Tab closed.
+ */
+export interface ExecEndParams {
+  cluster: string;
+  session: string;
 }

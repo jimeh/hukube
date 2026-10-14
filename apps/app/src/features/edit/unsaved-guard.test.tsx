@@ -113,7 +113,7 @@ it.each<[ExecState, boolean]>([
   [{ phase: "starting" }, true],
   [{ phase: "live" }, true],
   [{ phase: "waiting" }, false],
-  [{ phase: "ended", reason: "lost" }, false],
+  [{ phase: "ended", reason: "complete", exitCode: 0 }, false],
 ])("prompts at unload only for starting or live sessions: %j", (state, guarded) => {
   session("id", state);
   render(<UnsavedGuard />);

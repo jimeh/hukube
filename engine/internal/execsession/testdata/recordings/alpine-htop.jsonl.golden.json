@@ -1,0 +1,352 @@
+{
+  "safe": "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",
+  "samples": [
+    {
+      "at": 8,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 9,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 10,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 11,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 12,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 13,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 14,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 15,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 16,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 17,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 18,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 19,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 20,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 21,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 22,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 30,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 31,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 39,
+      "restore": "\u001b[?1049h\u001b[?25h"
+    },
+    {
+      "at": 48,
+      "restore": "\u001b[?1049h\u001b[?25h"
+    },
+    {
+      "at": 55,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?25h"
+    },
+    {
+      "at": 998,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "at": 4986,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "at": 5983,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "at": 8974,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "at": 15268,
+      "restore": "\u001b[?12l\u001b[?25h"
+    }
+  ],
+  "attachments": [
+    {
+      "mark": "painted",
+      "at": 3396,
+      "ring": 512,
+      "cut": 2885,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "painted",
+      "at": 3396,
+      "ring": 2048,
+      "cut": 1349,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "painted",
+      "at": 3396,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 3396,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 3396,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3396,
+      "ring": 512,
+      "cut": 2885,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3396,
+      "ring": 2048,
+      "cut": 1349,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3396,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3396,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3396,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 3766,
+      "ring": 512,
+      "cut": 3256,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-same",
+      "at": 3766,
+      "ring": 2048,
+      "cut": 1718,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-same",
+      "at": 3766,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 3766,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 3766,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6757,
+      "ring": 512,
+      "cut": 6245,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6757,
+      "ring": 2048,
+      "cut": 4709,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6757,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6757,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6757,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9670,
+      "ring": 512,
+      "cut": 9158,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9670,
+      "ring": 2048,
+      "cut": 7622,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9670,
+      "ring": 8192,
+      "cut": 1481,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9670,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9670,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 12583,
+      "ring": 512,
+      "cut": 12071,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 12583,
+      "ring": 2048,
+      "cut": 10535,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 12583,
+      "ring": 8192,
+      "cut": 4391,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 12583,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 12583,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 15247,
+      "ring": 512,
+      "cut": 14735,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "left",
+      "at": 15247,
+      "ring": 2048,
+      "cut": 13203,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "left",
+      "at": 15247,
+      "ring": 8192,
+      "cut": 7059,
+      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+    },
+    {
+      "mark": "left",
+      "at": 15247,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 15247,
+      "ring": 15268,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    }
+  ]
+}

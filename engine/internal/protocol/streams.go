@@ -107,6 +107,9 @@ const (
 	StreamEndReasonStopped StreamEndReason = "stopped"
 	// StreamEndReasonError means the stream failed, with Error saying how.
 	StreamEndReasonError StreamEndReason = "error"
+	// StreamEndReasonDetached means the Exec Session carries on, and this
+	// stream is not attached to it: another window is.
+	StreamEndReasonDetached StreamEndReason = "detached"
 )
 
 // StreamEnd is the Engine's last message on a stream. A socket that closes
@@ -227,6 +230,12 @@ const (
 	ExecReasonConnectionLost = "ConnectionLost"
 	// ExecReasonEngineStopped means the Engine shut down while the session ran.
 	ExecReasonEngineStopped = "EngineStopped"
+	// ExecReasonSessionGone means the Engine has no session with the ID a
+	// stream tried to attach to.
+	ExecReasonSessionGone = "SessionGone"
+	// ExecReasonTooManySessions means the Engine runs as many sessions as it
+	// allows, and did not start another.
+	ExecReasonTooManySessions = "TooManySessions"
 )
 
 // ExecParams opens an Exec Session: a process with a TTY in a container.
@@ -240,7 +249,49 @@ type ExecParams struct {
 	Container string `json:"container"`
 	// Command replaces the default shell.
 	Command []string `json:"command,omitempty"`
-	// Cols and Rows are the terminal's size when the session starts.
+	// Session identifies the Exec Session. The client chooses it when the user
+	// starts the session. Window identifies the window that attaches.
+	Session string `json:"session"`
+	Window  string `json:"window"`
+	// Start asks for a new session when none has this ID. Without it the
+	// stream only attaches.
+	Start bool `json:"start,omitempty"`
+	// Takeover attaches although another window is attached, which detaches
+	// that window.
+	Takeover bool `json:"takeover,omitempty"`
+	// Resume is the position in the session's output that the client's
+	// terminal has read to. It is absent when the terminal has read nothing
+	// of this session.
+	Resume *uint64 `json:"resume,omitempty"`
+	// Cols and Rows are the terminal's size. Start requires them. A stream
+	// that attaches gives them only when its terminal has been sized.
+	Cols uint16 `json:"cols,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
+}
+
+// ExecSync says where the output that follows it belongs in an Exec Session.
+// It is the first message on a session's stream, and is sent again whenever
+// the output that follows does not continue what the client has.
+type ExecSync struct {
+	// Offset is the position of the next byte of output.
+	Offset uint64 `json:"offset"`
+	// Reset is set when Offset is not the client's position. The client
+	// clears its terminal before what follows.
+	Reset bool `json:"reset,omitempty"`
+	// Skipped counts the output the client will not receive.
+	Skipped uint64 `json:"skipped,omitempty"`
+	// Restore sets a reset terminal's modes to what they were at Offset.
+	Restore string `json:"restore,omitempty"`
+	// Replay counts the bytes that follow which the process had written when
+	// this was sent. The client answers no query in them.
+	Replay uint64 `json:"replay,omitempty"`
+	// Cols and Rows are the session's terminal size.
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
+}
+
+// ExecEndParams names an Exec Session to end, because its Tab closed.
+type ExecEndParams struct {
+	Cluster string `json:"cluster"`
+	Session string `json:"session"`
 }

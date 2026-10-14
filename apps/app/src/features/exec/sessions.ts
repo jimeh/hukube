@@ -1,7 +1,10 @@
 import type { EngineClient, EngineStream, ExecParams, StreamEnd } from "@hukube/engine-client";
 import { create } from "zustand";
 
-export type ExecSessionParams = Omit<ExecParams, "cluster" | "cols" | "rows" | "command"> & {
+export type ExecSessionParams = Omit<
+  ExecParams,
+  "cluster" | "cols" | "rows" | "command" | "session" | "window" | "start" | "takeover" | "resume"
+> & {
   sessionId: string;
   preview?: boolean;
 };
@@ -9,7 +12,7 @@ export type ExecState =
   | { phase: "waiting" | "starting" | "live" }
   | {
       phase: "ended";
-      reason: StreamEnd["reason"] | "lost";
+      reason: StreamEnd["reason"];
       exitCode?: number;
       error?: StreamEnd["error"];
     }
@@ -62,6 +65,14 @@ const terminalFactory = async () => (await import("@/lib/xterm.ts")).createExecT
 // A session whose panel is not showing cannot size its terminal. It starts at
 // the terminal's default size after this long.
 const readyTimeoutMs = 1000;
+let windowId: string | undefined;
+function execWindowId(): string {
+  if (!windowId) {
+    windowId = sessionStorage.getItem("hukube.exec.window") ?? sessionId();
+    sessionStorage.setItem("hukube.exec.window", windowId);
+  }
+  return windowId;
+}
 
 export function sessionId(): string {
   return [...crypto.getRandomValues(new Uint8Array(16))]
@@ -150,6 +161,9 @@ export async function startSession(
     "pod.exec",
     {
       cluster,
+      session: id,
+      window: execWindowId(),
+      start: true,
       namespace: params.namespace,
       pod: params.pod,
       uid: params.uid,
@@ -160,8 +174,7 @@ export async function startSession(
     {
       event: () => {},
       state: (state) => {
-        if (state === "lost") publish({ phase: "ended", reason: "lost" });
-        else if (state === "waiting") publish({ phase: "waiting" });
+        if (state === "waiting") publish({ phase: "waiting" });
         else if (["connecting", "reconnecting", "open"].includes(state) && !output) {
           publish({ phase: "starting" });
         }

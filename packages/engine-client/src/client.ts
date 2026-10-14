@@ -23,14 +23,7 @@ export interface Subscription<P> {
   close: () => void;
 }
 
-export type StreamState =
-  | "waiting"
-  | "connecting"
-  | "open"
-  | "reconnecting"
-  | "paused"
-  | "ended"
-  | "lost";
+export type StreamState = "waiting" | "connecting" | "open" | "reconnecting" | "paused" | "ended";
 export interface StreamData {
   "resource.logs": LogLine[];
   "pod.exec": Uint8Array;
@@ -41,8 +34,9 @@ export interface StreamListener<M extends StreamMethod> {
   data: (data: StreamData[M]) => void | Promise<void>;
   gap: (gap: StreamGap) => void;
   /**
-   * Called when a write was not accepted, with its size, because too much
-   * input was already waiting for a process that is not reading.
+   * Called with the size of input that was accepted and then not sent: it was
+   * waiting when the socket was lost, or too much was already waiting for a
+   * process that is not reading.
    */
   inputDropped?: (bytes: number) => void;
   end: (end: StreamEnd) => void;

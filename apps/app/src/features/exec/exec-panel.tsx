@@ -382,6 +382,8 @@ export function endMessage(state: {
       return "The container stopped, which ended the session.";
     case "deleted":
       return "The Pod was deleted, which ended the session.";
+    case "detached":
+      return "This session is open in another window.";
     case "lost":
       return "The session lost its connection to the Engine. A command that was running may still be running in the container.";
     case "error":

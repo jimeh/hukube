@@ -97,13 +97,12 @@ it.each<StreamEnd>([
   expect(s.streams[0]!.write).not.toHaveBeenCalled();
 });
 
-it("ends a lost stream even before output and distinguishes a start failure", async () => {
+it("keeps a reconnecting stream starting and distinguishes a start failure", async () => {
   const s = setup();
   await s.start();
-  s.streams[0]!.listener.state?.("lost");
-  expect(s.state()).toEqual({ phase: "ended", reason: "lost" });
-  await s.start();
-  s.streams[1]!.listener.end({
+  s.streams[0]!.listener.state?.("reconnecting");
+  expect(s.state()).toEqual({ phase: "starting" });
+  s.streams[0]!.listener.end({
     reason: "error",
     error: { code: "not_found", reason: "NoShell", message: "no sh" },
   });
@@ -160,7 +159,7 @@ it("attaches twice without another stream, ignores duplicate starts, resets on r
   expect(s.streams[0]!.close).toHaveBeenCalledOnce();
   expect(s.terminal.reset).toHaveBeenCalledTimes(2);
   s.streams[1]!.listener.state?.("connecting");
-  s.streams[0]!.listener.state?.("lost");
+  s.streams[0]!.listener.state?.("reconnecting");
   expect(s.state()).toEqual({ phase: "starting" });
   disposeClusterSessions("other");
   expect(s.state()).toBeDefined();

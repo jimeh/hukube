@@ -1,0 +1,114 @@
+{
+  "safe": "3///if///3///////////3/8////////nw4AANz8/wn////9///zx/8BAACD//+Px/+AH0AAAAAAHAAA/v///gMAAAAAAAgA/Df8/99/HgACAAAAAADAAwAA/P/////////x/v/////vdz5/8A8AAAAAAAAAAAAAAAAAAEAEAPCvv//vef///wMAAADA1wAAAAAAAID//3/+HwAAAAAA8M///+8DAQCAAwAAAADw/////x8AAACA////f38A+P///39AAAAAAAAAwAMAAAAAAPw//v////8P/38AAAAA////DwAAAAAAPgAAAAAAAAAAAADO//+BBwA8/z8CAPj//gAAAAAAAAAAgPj/f/z///8XAAAAAAAAAAAAAAAAAAAAAAAAAAD/HwAAAPD//z/4/4H/////////DwAAAAAAgCb+/////x/8AQAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAACc7v//D////z8AAAA+/v+/fwCA///A/+C/AP3/9//////9//8fwP////3/GQAA4P8/AID////f7//z////fwCA//8PAAD+//8BAAAAAAAAAIAAAAAAAAAAAAAAAAAA4P/v///8////FwUAAAAAAAAAAAAA8D8AAAAAAPDf////HwAAAAAAAAAAAPABAADw//////mD////////P//7z///////CQD+3x8A/MPf///9/gEAAAAABPzA/38HgP/////fZwgAAP7//wD8//z/BwAA+P//////5/8DAACAAP7//6/43//v/wcAAAD/////+f8fAAAA+v///7//////////+P////kJgAAAAAAA+IP////4fwAAAP4h8P9X/////4///////78AAP/0vz+A/P//7/////d/YN///////zoAAAAAAAAA4v+fAAAAAAD+////f//////////x////HwD+////HwAAAAAAAAD+/z/w//f/DwAAAAAAAAAAAAAAAAAAAAAA/v///wMA+P//3/8OAMDv9P/3////////+wcAAAAAAAAAAAAAAAD//wf6/P/3/////w8AAAAAAAAAAADg//8HAAAAAAD///8BAAAAAAAEAAAAAAAAAOD//////+//PwAAAP8P8I/////////4/38AAAAAAMD/+P////8YAAAAAAD0P//7///9////fwAA/f8///f//u//8e//+v8AAAAAAAAAvv7///8/8H8AAADAHwD////////////////////H//8B/P9jgAAAAAAAAAAAAAAAAAAAABDw////////H4D//w8AAmL4/v///+7///////+P/+//AAAAAAAAAAAAAAAA4P8BAAAAAAAA////AQAAAAAAAAAA////fwAAgMf/fwD8Af7//+H/+3/+//8f4P///z/AH/CB/wCI/18AAAAAAADy4D////8f+H8AAAAAAAAAAAAAAAD4/+H/f/D7DwAAAAAAAAAAAAAAAAAAAPgH+P//AwAAAAAAAAAAAPh//v/////////f///f////wAAAAACAI/4PAO//9////3cAkAMA4AcA+AcAAAAAAAAAoP//AQD8//7//wcx9v/4/wkA+P//DwD//wAAf/////8PAAAA/f8DAAD+//3/AP7/////HwAAAAAAAMD///////v/H4gxAAAAAAAAAAAAAID///////////9//v8PAAD/8fcAAAD4AwAAAAAAAAD///3///////+nf/yH/z8AAAAAAAAAAACA/wPj//ccwPz7/+EDAAAAgPDP/////5////////9PBsD///8PAABAAMD/////AAAA/////38AAB7A9wfA//////7///8HAAAAAOb//v///f////8HAAAAAADAOQAAAAAAgAYAAADw//9/HwDA+DUAAAD+PwAe/79/AAD4////Af4PAAAA+A8AAAAA/P9/AAAAAODf/z8AIAAAAAAA7f8BAAAA+J////v7BwAA////5z8AAAAAAAD/////7////////8e/////+////x8AwAH+/z/vwv///wMAAPz//////38/P/7/cBfw/+P///8L/n/+HwAY/9///////x8A/v9f//8bAPz/TwB8wf+XDwAAAADy/v8BAAAAAAAAAAAAAAAAAAAAAAAAdA8AAAAAgPz///////////////P/////5////////w84/r///z8AAAD+AAAABAAA4P////////8H//8BAPz/AAAAAAAAAAAAAAAAAPgf6P///////z8AAPDf//+/eAD4/x8A/P///8///wcEgOf/////AwBg/////wfA////HwAAAP////9/AAAAAHz+APD/AAAAAAAAAAAA9P8//z8AAAAAAAAAAAAAAAAAABgA4P//x/cHAAAAAAAAAAAA/P//fwAAAMD/////f/7fz//////3/z/+//////f/P+D7AwAAAMT///////8BAAAAAAAAAADg/////38A4P/f388fAAAAAPj//x8AAAAAAAAAAPn///////83/v/f/wNAAAAAAAAAAAAAAPz//f/j////////6/8A8P//////AQAA/v//PwIAAAAAwP//348AAAAAAACAwP///z8AAAAAnAIAAAAAAAAA+P8/AAAAAPz/wx8AAADAPwAAAAAAAAAAAPu//9///38AAAAAAADA//+/fwAAAAAA6P/4/////wcAAID/AQAAAAAA+P9/hv/v/3////+/AAAAAAAAAAA=",
+  "samples": [
+    {
+      "at": 1,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 2,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 3,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 4,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 5,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 7,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 8,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 9,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 10,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 11,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 12,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 13,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 14,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 15,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 16,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 17,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 18,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 19,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 20,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 21,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 1995,
+      "restore": "\u000e\u001b[?25h"
+    },
+    {
+      "at": 3989,
+      "restore": "\u001b*A\u000e\u001b[?25l\u001b[?6h"
+    },
+    {
+      "at": 5983,
+      "restore": "\u001b[?25h\u001b[?66h\u001b[?1002h\u001b[4h"
+    },
+    {
+      "at": 10968,
+      "restore": "\u001b[?1049h\u001b[?25h\u001b[?66h\u001b[?1016h\u001b[4h"
+    },
+    {
+      "at": 11965,
+      "restore": "\u001b[?1h\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 12962,
+      "restore": "\u000e\u001b[?1h\u001b[?25h\u001b[?66h\u001b[?1004h\u001b[?2004h\u001b[?1006h"
+    },
+    {
+      "at": 13959,
+      "restore": "\u001b[?1h\u001b[?12h\u001b[?25h\u001b[?66h\u001b[?2004h\u001b[?1006h"
+    }
+  ],
+  "attachments": []
+}

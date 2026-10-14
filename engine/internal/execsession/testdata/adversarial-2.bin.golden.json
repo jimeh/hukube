@@ -1,0 +1,114 @@
+{
+  "safe": "AAAAAAAAAAAAwP8vBPv//wcgAAAAAAAAAPD/A/7//////////3//H/+P/v///38AAAAAAACA/P8DAAAAAAAAAAD4/z9/gAAAAAAAAAAAAAAAAAAAAAAA////HwDgH///AQAAAAD8/9//AwcAAPz/+wMAAAAAgP7/B/x/////AQAAwP4BAAD+PwAAAKD/DQAA+EcAAACA/wP0////8f//z///3wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADQ/////3/+//8/AAAAAACAx/8HAAAAAAD+///3//8dIAIA4MfH//9/////PwAAAAAAAAAAAAAAAAAADgAAAAAAAAAAAP7///9/AICf//8PAMD//+9/AQDAf///P/Dn//8PAO///////+5/AADA//7/AwAAAPD/////w/9/AAAAAAAA/jcAAAAAAAAAAH8AAAAAAAAQAAAA8P/7BwD///+/////BwAAAPwDAAAAAAAAAAAAAAD9BwAAAAAAAAAA3gf8PwAAAAAAAP7///////////9H////h/+//////3cAwAAAAADA////////AwAAAAAAAAAAAAAAAAAAAAAAAACAAAD8//7gP/7//8AfAAAAAAIA+/f//wAAAACAgP//HwDA//////9/FPDP//9/AAAAAACAz///v7//HwAAAAAAAAAMAAAAAAAAwOD//3///v//////P/9/AB4AAAAAAAAAAAAA4P/x/////////wAAAAAAAPB/8f///8f/////////AAAAAP4DgH8AAABQ///////4/38AAAAAAADw////AP//DwDA+3/9/z8A/////+D/3///D//+//cAAAAAAPA/AACAAAAAAPAf//////+H/gPI/+f//z8AAASAX8D/NwAA/v////v/////78/f//8D8P8///9/AAAAAAD8//7///4eAAAAwP3///3/+gAAAAAAAAAAAAAEAAAAAAAAABAAAID/f/7/BwAAAMD/////HwAAAAAAAAAA4P/9/w8AAAAAAACY///////9l/8AAP+D/9///w/+/+u/H/D///8BAACA////fwAA4D8AAAAAAP//H/+f////+///n///nz/AHwD4/w8APAAAAAAAAAAAAAAAAAAAAADA/////3/+////H3AA//H/HwAAAAD+///f/////wEBAAAAAACA//8fAAAAAAAAwP7/v38/AAD8+P/d//////+f//9/EAAAAAAAAAAAAAAA8P8/0AcAAAAA9P//z/////////3///8H//7/f/+P////AQAAAACA////BwAAIAAA4MP/f/z/4///////AwAAwPz/AwAAAP//////////A/69/////3////z///8/Pof/fwQAAAAAAID/v///+///AQAAwNf//+f//zf4/////wEA+P//AIC3//8PAAAA8P+PAAAAAAAAAGAA+P8I/v8BAP7/////93////9/AAAAAADg//z/f////78MAPj/l///////JQAAAAAAAAD+f8D/33++f/z/AQAAwP////kHAAAAAPgDAAAAAAD+/////z/q3AAAAACAfwD4/z0AAAjA/7/n/7/jAQAAAAAAAAAAAAAAAAAAAAAA/Pv/AQAAABDwAAAAAACA/////wAAAAAAAPz/NwAAPwAAAAAAAAAAEAAA4P77///+////////7/8H////7x/wd/8PAP//f/4/AAAAIEAAAAAAAAAAAAAAAAAAAAD+34D/////AQEADAAAAAAA/P//H57//v9f0IH/AwAAAAAAAPD//wMAANif////PwDw/wcAAADA/wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4HsA+P//////x38AAAAAAACAB8D/8///GwDw//sHAPD//39Ab/iJ//8vAAAAAAAAAAAAAADAfwAAAAAA/vz/HQDg///797/7//8/3B8AAMD///7///////8BAMD/////////////PwAAACD+/////////8Hz/z+I/38AAAAAgP//y/9/AAD8/////////f8HAAAAAA4CAAAAAAAAAMD//9//wf//dwIAgP/w5///AeAPAAAA+A8AAAD+//7///////v/8////wP+/8P//w8AAAAAAPD//7/+/38AAOD//+//v//r///v+P/3//+//+///////7//AAAwv///////D//93z8AAAAA4P/////5/x8AgP8/AAAAAAAAAADE/f8BAADg//8BAAAAAAAA+B8AAMD//5f/9/////8B4P///vsHAAAAAADgHwAfAAAAAAAAAAAAAAAAAAAAQH/4B/Dv/wEAAAAAAADw/////////z/+/wcAAAAAAPADAACA/X//////7/8fAAAAAAAAAIAf/v/7/z/+AwAA7/8AAAAAAADg/wcAAAAA/v////6AAADE/38AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw/Xv+0x8AAgDg/wcAAAAAAAAAAPwDAPgjAAAAAAAAAAAA/v//////BwAAAOD///H/AQAAAAD/PwAAAAAA4P8/AAAAAAD+/////////x8AwP8PAAAAAAAA+AEAAAAAAAABAJ//////A+zvAAAAAEAEAAAAAAAAAAAAAAAAAAAA+P///2fg//f/PwAAAA8AAAAA/v///wAAAAAAAADwLwAAAEAAAAAAAAAA/f8BAAAAAAAAAP4/AAAAAAAAAAEC/oH/////9////////P///W8A",
+  "samples": [
+    {
+      "at": 79,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 80,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 81,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 82,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 83,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 84,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 85,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 86,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 87,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 88,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 89,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 90,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 91,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 92,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 94,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 99,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 105,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 106,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 108,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 109,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 998,
+      "restore": "\u001b[?25h\u001b[?2004h\u001b[?1016h\u001b[20l"
+    },
+    {
+      "at": 3989,
+      "restore": "\u001b[5;20r\u000e\u001b[?25h\u001b[?1000h\u001b[20l\u001b[?6h"
+    },
+    {
+      "at": 4986,
+      "restore": "\u001b[?12h\u001b[?25h\u001b[?1000h\u001b[20l\u001b[?6h"
+    },
+    {
+      "at": 6980,
+      "restore": "\u001b[?12h\u001b[?25h\u001b[?1000h\u001b[20l\u001b[?6h"
+    },
+    {
+      "at": 8974,
+      "restore": "\u000e\u001b[?12h\u001b[?25h\u001b[20l"
+    },
+    {
+      "at": 12962,
+      "restore": "\u001b[?1049h\u001b[1;10r\u001b)0\u000e\u001b[?12h\u001b[?25h\u001b[?1000h\u001b[20l\u001b[2 q\u001b[?6h"
+    },
+    {
+      "at": 13959,
+      "restore": "\u001b[?1049h\u001b[1;10r\u001b)0\u000e\u001b[?12h\u001b[?25h\u001b[?1000h\u001b[20l\u001b[2 q"
+    }
+  ],
+  "attachments": []
+}
