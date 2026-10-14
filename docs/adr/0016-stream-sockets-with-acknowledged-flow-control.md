@@ -78,12 +78,25 @@ built. `docs/plans/exec-sessions.md` has the measurements.
 - **Output is held back, but not for long.** The Engine stops reading the
   container's output while the client's window is full, which is what a slow
   terminal does to a process. The sketch expected that to last as long as it
-  had to. It cannot: client-go's WebSocket executor reads the connection and
+  had to. It cannot. client-go's WebSocket executor reads the connection and
   writes output on one goroutine, and ends the session when that goroutine
-  has not read a heartbeat for 61 seconds. So a write waits for room only
-  while the client keeps up: output has waited for less than 30 seconds, or
-  the client acknowledged at least 4 MiB in the last 30. Otherwise the
-  Engine does not wait, and drops the oldest output, leaving a gap.
+  has read no heartbeat for 61 seconds. A heartbeat arrives behind the output
+  the Cluster had already sent. Measured against the test cluster, a session
+  whose output was taken at 115 KiB a second ended at 61 seconds, having read
+  6.8 MiB without reaching a heartbeat. One taken at 131 KiB a second
+  carried on.
+
+  So the Engine holds one invariant: **it makes a process wait only while
+  every byte it has queued for the client, and the client has not
+  acknowledged, was queued less than 3 seconds ago.** Once the oldest such
+  byte is older, the Engine does not wait. It queues the new output and drops
+  the oldest queued output, keeping the newest 64 KiB, and leaves a gap where
+  the rest was. Nothing renews the wait: a silent client, a trickle of
+  acknowledgements, and acknowledgements in batches all age the oldest byte
+  the same way. A process is made to wait only for a client that takes a
+  window (1 MiB) in under 3 seconds, which is 341 KiB a second, 2.6 times
+  the rate that was measured to be enough.
+
 - **Input is acknowledged too.** The sketch left input to TCP, with the
   Engine as the reader. But the client's acknowledgements of output arrive on
   the same socket, so the Engine can never stop reading it, or a container
