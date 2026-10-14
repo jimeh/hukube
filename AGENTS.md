@@ -133,7 +133,12 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   a change to the session Tab's header must not change its height while a
   session is live.
 - **xterm.js:** import it only through `apps/app/src/lib/xterm.ts`, which
-  loads it on demand. It cannot be sized in a hidden or detached element.
+  loads it on demand. It cannot be sized in a hidden or detached element. In
+  Chromium a terminal that is showing draws with WebGL (ADR-0024), so its
+  screen is a canvas: a test that reads the screen sets `localStorage`'s
+  `hukube.terminal.renderer` to `dom` first. Playwright's `deviceScaleFactor`
+  makes the WebGL canvas draw at twice its size; use the browser's
+  `--force-device-scale-factor` to look at a high-density screen.
 - **Monaco:** `monaco-editor/editor/editor.api` has no find, clipboard, or
   icon font. `apps/app/src/lib/monaco.ts` imports them and removes the key
   bindings they add beyond find, so import Monaco from there. Its text

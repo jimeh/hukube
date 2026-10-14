@@ -65,6 +65,8 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
       },
     });
     const window = await app.firstWindow();
+    // A terminal drawn with WebGL is a canvas, which a test cannot read.
+    await window.evaluate(() => localStorage.setItem("hukube.terminal.renderer", "dom"));
     await window.getByRole("button", { name: new RegExp(clusterId) }).click();
     await expect(window.getByText(/Kubernetes v\d/)).toBeVisible();
     await window.keyboard.press("ControlOrMeta+K");
