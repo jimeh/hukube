@@ -1,6 +1,7 @@
 # Plan: Exec Sessions that survive a reload
 
-Status: planned.
+Status: implemented, not merged yet. "What changed while building" lists
+where the result differs from the text below.
 
 ## Outcome
 
@@ -427,8 +428,8 @@ what was typed (ADR-0021's rule for the header, and the measurement above).
 | Replaying, after attaching        | "Live"          | The terminal fills. It takes no input until it has caught up, which takes milliseconds.                                                                                                                       |
 | Connection to the Engine lost     | "Reconnecting…" | The terminal, dimmed, taking no input. Over the terminal, along its bottom edge: "Reconnecting to the Engine. The session keeps running, and the Engine keeps its recent output."                             |
 | Attached in another window        | "Not attached"  | The terminal, dimmed. Over the terminal, centered: "This session is open in another window", "An Exec Session shows in one window at a time. Using it here detaches the other window.", button "Use it here". |
-| Session gone, terminal empty      | "Gone"          | Notice "This session is gone": "The Engine no longer has it. The Engine restarted, or the session was told to exit after 10 minutes with no window attached." Button "Start a new session".                   |
-| Session gone, terminal has output | "Gone"          | The terminal, dimmed, as an ended one. Bottom strip: "This session is gone. The Engine restarted, or the session was told to exit after 10 minutes with no window attached." Start a new session              |
+| Session gone, terminal empty      | "Gone"          | Notice "This session is gone": "The Engine no longer has it. It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached." Button "Start a new session".                  |
+| Session gone, terminal has output | "Gone"          | The terminal, dimmed, as an ended one. Bottom strip: "This session is gone. It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached." Start a new session             |
 | Ended while this window was away  | "Ended"         | The terminal with what it missed, then as any ended session, with its reason.                                                                                                                                 |
 | Too many sessions                 | "Not started"   | Notice "Too many Exec Sessions": "The Engine runs at most 64 at a time. End one and try again." Button "Try again".                                                                                           |
 | Waiting for a socket              | "Waiting"       | As now. Cancel closes the Tab, which ends a session the Tab was waiting to attach to.                                                                                                                         |
@@ -586,3 +587,104 @@ row of "Closing", on the web Host and the desktop Host.
 ## Unresolved questions
 
 None.
+
+## What changed while building
+
+### Engine and client
+
+- **A replay ends before an unfinished character.** The first build held an
+  attaching window's sync until a character at the ring's end was complete,
+  which would leave a window attaching for as long as a process left a
+  partial character as its last output. The unfinished character is now
+  live output, sent when the rest of it arrives, or at the session's end.
+- **A failure in the tracker while cutting** cuts at the ring's start with a
+  reset terminal's modes. The tracker already recovered a panic while
+  reading bytes; a cut ran on a copy of it without that guard.
+- **The tracker keeps only the last three bytes of a sequence's
+  intermediates.** xterm.js shifts them into a 32-bit identifier with the
+  final byte, so earlier ones cannot change what a sequence does. The
+  prototype kept them all, without bound.
+- **Input written while a stream is not attached is dropped without a
+  report.** The terminal already shows that it takes no input. Input that
+  was accepted and then lost with its socket is still reported, as
+  "[hukube: 3.0 KiB of input was not sent]".
+- **A client closes its socket with a normal closure after an `end`,** so
+  the Engine can tell the `end` was received and remove the session.
+
+### UI
+
+- **"Use it here" resumes from the terminal's position,** so the window
+  that takes a session over keeps what its terminal shows and gets only
+  what it missed.
+- **The desktop Host's prompts name what is lost.** A window with unsaved
+  edits only asks "Discard unsaved edits?"; quitting with Exec Sessions
+  only asks "Quit and end the Exec Sessions?"; both together keep the
+  combined wording.
+
+### Experience-review corrections
+
+A reviewer with no history of the work used the running app in Chromium and
+WebKit. It found reload, reconnection, and the closing prompts sound, and
+these problems, which are fixed:
+
+- **A session Tab could vanish on reload.** Workspace layouts are saved per
+  Cluster and the last window to save wins (ADR-0009), so a reload could
+  restore another window's layout without this window's session Tab, and
+  the session ran on with no way back to it. Each window now keeps its
+  session Tabs in `sessionStorage` (`features/exec/window-tabs.ts`) and adds
+  back any the restored layout lacks, inactive, and attaches them.
+- **Skipped output went untold.** The notice line at the top of the cleared
+  terminal is pushed out of the 5,000 lines of scrollback at once by a
+  256 KiB tail of short lines. Measured: a window throttled 50 times during
+  `seq 1 1500000` skipped 10.5 MiB and showed nothing. The message is now
+  also a line over the bottom of the terminal, until dismissed, typed past,
+  or the session leaves the live phase.
+- **"Use it here" left focus on the page,** so typing went nowhere. It now
+  focuses the terminal.
+- **The reconnecting line was see-through** over the prompt. It is opaque,
+  with a top border. The other-window notice is on an opaque card.
+- **The gone text claimed a cause it could not know.** A window that showed
+  the session open elsewhere learns it is gone only when it tries to use
+  it, and it may simply have ended. The text is now "The Engine no longer
+  has it. It ended, the Engine restarted, or it was told to exit after 10
+  minutes with no window attached."
+
+Not changed, and listed under "Follow-ups": a window showing the session
+open elsewhere is not told when it ends; the status badges share one grey
+style; "Start again" and "Start a new session" name one action twice; a
+take-over by a window of another size resizes the session, which makes
+`ash` print its prompt again.
+
+## Measurements
+
+On an Apple silicon laptop against the k3d cluster, with a hand-started
+Engine (`--exec-buffer=16384 --exec-unattached-timeout=10s`) and a WebSocket
+client:
+
+- A window that dropped its socket and attached again with its position got
+  exactly the 12 bytes it missed, once, and the shell took input.
+- A `start` sent again by the same window attached to the running shell; a
+  window with another ID was refused, and took the session over with
+  `takeover`, which gave the session its size (`stty size`: `30 100`).
+- A window that stopped acknowledging during 2 MB of output was caught up
+  repeatedly, each time with `reset` and the bytes skipped.
+- A window cut in while busybox `vi` was open got a restore sequence with
+  `ESC [ ? 1049 h`, then 3,995 bytes of repaint after the two resizes, the
+  same two paints the recording shows.
+- `exit 3` reached the window as `complete` with code 3, after which the
+  session was gone. A session with no window attached was still there at 8
+  seconds and gone at 12.5, and its shell had exited in the container.
+
+## Follow-ups
+
+- Tell a window that shows a session open elsewhere when the session ends,
+  through a subscription to the window's sessions.
+- List the running sessions of a Pod in its "Exec Session in" menu, so a
+  session can be reached from another window or after its Tab was closed
+  elsewhere.
+- A snapshot of the screen from an emulator, if the normal screen's rows
+  lost with the ring's start turn out to matter.
+- A heartbeat on stream sockets, so a stalled connection to a remote Engine
+  is noticed before the operating system gives up on it.
+- Distinct tones for the status badges, and one label for starting a
+  session again.
