@@ -4,6 +4,11 @@ Status: implemented, not merged yet. "What changed while building" lists
 where the result differs from the text below. The Windows and Linux rows of
 "Keys" await Jim's confirmation.
 
+`docs/plans/exec-resume.md` replaces what this plan says about holding
+output, the `lost` state, a session ending with its socket, and the prompts
+for closing a Cluster tab or a window. The Engine now owns a session
+(ADR-0025).
+
 ## Outcome
 
 After this work:
@@ -992,15 +997,6 @@ On an Apple silicon laptop against the k3d cluster:
 ## Follow-ups
 
 - Jim's confirmation of the Windows and Linux keys.
-- The known limit of the output rule: a client that keeps up can lose
-  output when more than 256 frames are in flight. One reviewer tried a
-  correction in a copy: bound the list of queue times by time instead of
-  count, joining a sent frame to the newest entry only when their times are
-  within about 12 ms, and joining the two oldest entries when the list is
-  full. The six tests passed with it and its reproducer lost nothing from
-  360 KiB a second up. It needs a test that reaches the list's bound with
-  the default limits, and tests for the gaps listed under "Code-review
-  corrections".
 - Killing what a closed session left running, by tracking its process.
 - Choosing the command, and `powershell` for Windows containers.
 - Links in a session's output, once the app has a rule for external links.
@@ -1010,6 +1006,5 @@ On an Apple silicon laptop against the k3d cluster:
 - A text label for the header's button, which is an icon among icons.
 - A warning before a paste of several lines into a shell that does not ask
   for bracketed paste, as VS Code gives.
-- Tabs of sessions that ended with a reload stay until they are closed.
 - A name for `features/edit/unsaved-edits.ts` that covers sessions.
 - A live check of the Windows and Linux keys in Firefox.
