@@ -942,6 +942,14 @@ changed because of them:
   that the screen is no wider than its panel after the loss. A second test
   makes WebGL 2 unavailable and reads the DOM renderer.
 
+Both reviewers then checked these corrections and found no new defect. What
+they noted stands as it is: a window with more than 343 terminals at once
+gives two of them the same color; no test would fail if the fallback took
+the add-on's 3 seconds, if a start that failed part of the way left its
+canvases, if glyphs were not redrawn, or if a number were reused wrongly,
+which rest on the checks by hand; a start that fails once, for whatever
+reason, keeps the window on the DOM renderer until it is reloaded.
+
 Not changed, and accepted: no test fills the cap of 8 or checks that a
 context was freed, the desktop test keeps the DOM renderer, and the other
 session tests now run the renderer that Chromium users do not get. A start
