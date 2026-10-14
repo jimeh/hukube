@@ -655,6 +655,50 @@ style; "Start again" and "Start a new session" name one action twice; a
 take-over by a window of another size resizes the session, which makes
 `ash` print its prompt again.
 
+### Code-review corrections
+
+Two reviewers, one Codex and one Claude, read the change independently. Each
+reproduced its findings with a scratch test. What changed because of them:
+
+- **A replay could freeze a session.** A frame that ended exactly at the
+  replay's end was trimmed to a character boundary like any other. When the
+  bytes before that end were an invalid, cut-short sequence, the frame was
+  trimmed to nothing, the replay never finished, live output never followed,
+  and the terminal took no input, in every window that attached. Such a
+  frame is no longer trimmed.
+- **The repaint could reach a shell.** It was asked for when the alternate
+  screen was on at the cut, even if the program had left it since. It is now
+  asked for only when the alternate screen is on both at the cut and at the
+  ring's end.
+- **Closing a Tab could lose to its own start.** If `exec.end` reached the
+  Engine before the stream's `open`, the end found nothing and the start
+  then made a session that ran until the unattached limit. The Engine now
+  remembers an ended ID it did not have for a minute, at most 256 of them,
+  and refuses one start for it as `SessionGone`.
+- **Only a Tab the user closes ends its session.** dockview also removes
+  panels when a layout is replaced, including when an unreadable one is
+  cleared, which ended the window's sessions. The close button, middle
+  click, and the waiting notice's Cancel now end the session; any other
+  removal only detaches.
+- **The tracker took scroll regions xterm.js refuses.** It now applies
+  xterm.js's rule with the session's current rows, and keeps the previous
+  region when one is refused. It reads bytes after they were written, so a
+  resize in between can still make it judge a region against the wrong
+  height. It also tracks synchronized output (mode 2026).
+- **The limit of 64 counts sessions still hanging up,** so ending and
+  starting quickly cannot run more than 64 processes at once.
+- **CI's end-to-end run failed on Linux:** a restored session Tab now
+  attaches and takes focus, and there a focused terminal sends `Ctrl+K` to
+  the shell. The helpers move focus out of the terminal before they open Go
+  to Resource.
+
+Not changed, and accepted: when the ring holds no safe place to cut, an
+attaching window's stream scans the whole ring again each time output
+arrives, which slows the writer while one control string longer than the
+ring is in it; a window cut in mid-stream takes no input, and answers no
+query, from the moment the catch-up arrives, so a query that live output
+was still being parsed for goes unanswered.
+
 ## Measurements
 
 On an Apple silicon laptop against the k3d cluster, with a hand-started
