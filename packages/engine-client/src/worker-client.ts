@@ -57,6 +57,15 @@ export class WorkerEngineClient implements EngineClient {
     this.#streams.set(id, { listener: listener as StreamListener<StreamMethod>, bytes: 0 });
     this.#post({ kind: "stream-open", id, method, params });
     return {
+      write: (data) => {
+        if (method !== "pod.exec" || !this.#streams.has(id)) return;
+        const bytes = data.buffer instanceof ArrayBuffer ? data : data.slice();
+        this.#post({ kind: "stream-write", id, data: bytes }, [bytes.buffer as ArrayBuffer]);
+      },
+      resize: (cols, rows) => {
+        if (method === "pod.exec" && this.#streams.has(id))
+          this.#post({ kind: "stream-resize", id, cols, rows });
+      },
       pause: () => {
         if (this.#streams.has(id)) this.#post({ kind: "stream-pause", id });
       },
@@ -159,14 +168,28 @@ export class WorkerEngineClient implements EngineClient {
         case "stream-gap":
           active.listener.gap(msg.gap);
           break;
+        case "stream-input-dropped":
+          active.listener.inputDropped?.(msg.bytes);
+          break;
         case "stream-end":
           active.listener.end(msg.end);
           break;
-        case "stream-data":
-          active.listener.data(msg.data as StreamData[StreamMethod]);
+        case "stream-data": {
           active.bytes += msg.bytes;
-          this.#post({ kind: "stream-ack", id: msg.id, token: msg.token, bytes: active.bytes });
+          const bytes = active.bytes;
+          const acknowledge = () => {
+            if (this.#streams.get(msg.id) === active)
+              this.#post({ kind: "stream-ack", id: msg.id, token: msg.token, bytes });
+          };
+          try {
+            const result = active.listener.data(msg.data as StreamData[StreamMethod]);
+            if (result) void Promise.resolve(result).then(acknowledge, acknowledge);
+            else acknowledge();
+          } catch {
+            acknowledge();
+          }
           break;
+        }
       }
       return;
     }
@@ -197,7 +220,8 @@ export class WorkerEngineClient implements EngineClient {
     }
   }
 
-  #post(msg: ToWorker): void {
-    this.#worker.postMessage(msg);
+  #post(msg: ToWorker, transfer?: Transferable[]): void {
+    if (transfer) this.#worker.postMessage(msg, transfer);
+    else this.#worker.postMessage(msg);
   }
 }

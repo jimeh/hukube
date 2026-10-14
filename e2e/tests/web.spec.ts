@@ -1,4 +1,6 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
+
+import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
 import { clusterId, engineToken, kubectl, kubectlCreate } from "./env.ts";
 
@@ -9,6 +11,323 @@ test.beforeAll(() => {
 });
 test.afterAll(() => {
   kubectl("delete", "namespace", namespace, "--wait=false");
+});
+
+// A terminal drawn with WebGL is a canvas, which a test cannot read. This
+// setting keeps the DOM renderer, whose rows are text.
+const domRenderer = () => localStorage.setItem("hukube.terminal.renderer", "dom");
+
+test("runs, guards, restarts, and restores Exec Sessions without reopening a process", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(domRenderer);
+  for (const [name, image, command] of [
+    ["e2e-exec", "busybox:1.36", ["sh", "-c", "sleep 3600"]],
+    ["e2e-exec-no-shell", "rancher/mirrored-pause:3.6", undefined],
+  ] as const) {
+    kubectlCreate({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { name, namespace },
+      spec: { containers: [{ name: "app", image, ...(command ? { command } : {}) }] },
+    });
+    kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=60s");
+  }
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  const openPod = async (name: string) => {
+    await page.keyboard.press("ControlOrMeta+K");
+    await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${name}`);
+    await page.getByRole("option", { name: new RegExp(`^Pod ${name} ${namespace}$`) }).click();
+    const pod = page
+      .getByRole("tabpanel", { name, exact: true })
+      .filter({ has: page.getByRole("button", { name: "Open an Exec Session", exact: true }) });
+    await pod.getByRole("button", { name: "Open an Exec Session" }).click();
+  };
+  await openPod("e2e-exec");
+  const panel = page
+    .getByRole("tabpanel", { name: "app in e2e-exec", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  const input = panel.getByRole("textbox", { name: "Exec Session in app of e2e-exec" });
+  const screen = panel.locator(".xterm-rows");
+  // A Cluster applies a session's first size after its process starts. A shell
+  // that has already printed its prompt prints it again and drops what was
+  // typed until then, so a command is typed again until its output shows.
+  const run = async (command: string, output: string) => {
+    await expect(screen).toContainText("/ #");
+    await expect(async () => {
+      await input.focus();
+      await input.pressSequentially(command);
+      await input.press("Enter");
+      await expect(screen).toContainText(output, { timeout: 3000 });
+    }).toPass();
+  };
+  await expect(input).toBeFocused();
+  await run("echo hukube-$((6*7))", "hukube-42");
+  await input.pressSequentially(
+    "stty raw -echo; printf 'paste-%s-ready\\n' $((6*7)); head -c 1048576 | md5sum; stty sane; echo paste-done-$((6*7))",
+  );
+  await input.press("Enter");
+  await expect(screen).toContainText("paste-42-ready");
+  // Patterned, so a paste that arrived reordered or doubled has another digest.
+  let pasted = "";
+  for (let index = 0; pasted.length < 1024 * 1024; index++) pasted += `${index.toString(36)}.`;
+  pasted = pasted.slice(0, 1024 * 1024);
+  await input.evaluate((element, text) => {
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", text);
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: clipboard }));
+  }, pasted);
+  await expect(screen).toContainText("paste-done-42", { timeout: 20_000 });
+  // The container read exactly what was pasted. The digest is nowhere in the
+  // command, so only `md5sum` can have printed it.
+  await expect(screen).toContainText(createHash("md5").update(pasted).digest("hex"));
+  // A link a process prints must not open anything, or ask to.
+  let dialogs = 0;
+  const onDialog = (dialog: Dialog) => {
+    dialogs++;
+    void dialog.dismiss();
+  };
+  page.on("dialog", onDialog);
+  const pages = page.context().pages().length;
+  await run(
+    "printf '\\033]8;;https://example.invalid/\\033\\\\printed-%s\\033]8;;\\033\\\\\\n' link",
+    "printed-link",
+  );
+  const link = await screen.getByText("printed-link").last().boundingBox();
+  await page.mouse.click(link!.x + 20, link!.y + link!.height / 2);
+  await run("echo after-link-$((6*7))", "after-link-42");
+  expect(dialogs).toBe(0);
+  expect(page.context().pages()).toHaveLength(pages);
+  page.off("dialog", onDialog);
+  const sourceTab = page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .first();
+  for (let count = 1; count <= 8; count++) {
+    await sourceTab.click();
+    await page
+      .getByRole("tabpanel", { name: "e2e-exec", exact: true })
+      .getByRole("button", { name: "Open an Exec Session" })
+      .click();
+    if (count < 8) await expect(input).toBeVisible();
+  }
+  await expect(panel.getByText("Waiting for a free stream")).toBeVisible();
+  await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+  for (let count = 0; count < 7; count++) {
+    await page
+      .locator(".dv-tab")
+      .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })
+      .last()
+      .getByRole("button", { name: "Close app in e2e-exec", exact: true })
+      .click();
+    await page.getByRole("button", { name: "End session", exact: true }).click();
+  }
+  await page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })
+    .last()
+    .click();
+  await run("echo after-cap-$((6*7))", "after-cap-42");
+  await input.pressSequentially("vi");
+  await input.press("Enter");
+  await expect(screen).toContainText("No file");
+  await page.setViewportSize({ width: 900, height: 700 });
+  await input.pressSequentially(":q!");
+  await input.press("Enter");
+  await run("echo after-vi-$((6*7))", "after-vi-42");
+  await input.pressSequentially("top");
+  await input.press("Enter");
+  await expect(screen).toContainText("PID");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await input.press("q");
+  await run("echo after-top-$((6*7))", "after-top-42");
+  const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.userAgent));
+  await input.press(mac ? "Meta+K" : "Control+Shift+K");
+  const palette = page.getByRole("combobox", { name: "Go to Resource" });
+  await expect(palette).toBeVisible();
+  await palette.press("Escape");
+  await expect(palette).toBeHidden();
+  await input.focus();
+  await page.evaluate(() => {
+    const host = window as Window & { execKeyJ?: boolean };
+    const listener = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "j") {
+        host.execKeyJ = event.defaultPrevented;
+        window.removeEventListener("keydown", listener);
+      }
+    };
+    window.addEventListener("keydown", listener);
+  });
+  await input.press("ControlOrMeta+J");
+  expect(await page.evaluate(() => (window as Window & { execKeyJ?: boolean }).execKeyJ)).toBe(
+    false,
+  );
+  // The shell does not get the key either. Ctrl+J is a newline to a shell,
+  // which would run the first half of this command by itself.
+  await input.pressSequentially("echo j-");
+  await input.press("ControlOrMeta+J");
+  await input.pressSequentially("kept-$((6*7))");
+  await input.press("Enter");
+  await expect(screen).toContainText("j-kept-42");
+  const tab = page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close app in e2e-exec", exact: true }) })
+    .last();
+  await tab.getByRole("button", { name: "Close app in e2e-exec", exact: true }).click();
+  await expect(page.getByText("End the Exec Session in app of e2e-exec?")).toBeVisible();
+  await page.getByRole("button", { name: "Keep session" }).click();
+  await run("echo kept-$((6*7))", "kept-42");
+  await input.pressSequentially("exit 3");
+  await input.press("Enter");
+  await expect(panel.getByText("The process exited with code 3.")).toBeVisible();
+  await panel.getByRole("button", { name: "Start again" }).click();
+  await run("echo again-$((6*7))", "again-42");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.reload();
+  await expect(panel.getByText("No session is running here")).toBeVisible();
+  await expect(panel.locator(".xterm")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Start a new session" }).click();
+  await run("echo reloaded-$((6*7))", "reloaded-42");
+  await input.pressSequentially("exit");
+  await input.press("Enter");
+  await expect(panel.getByText("Ended", { exact: true })).toBeVisible();
+  await openPod("e2e-exec-no-shell");
+  const noShell = page
+    .getByRole("tabpanel", { name: "app in e2e-exec-no-shell", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  await expect(noShell.getByText("No shell in this container")).toBeVisible();
+  await expect(noShell.locator("pre")).toContainText("sh");
+});
+
+// Opens an Exec Session in a new Pod with one container, `app`.
+async function openSession(page: Page, pod: string) {
+  kubectlCreate({
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: { name: pod, namespace },
+    spec: {
+      containers: [{ name: "app", image: "busybox:1.36", command: ["sh", "-c", "sleep 3600"] }],
+    },
+  });
+  kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${pod}`, "--timeout=60s");
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${pod}`);
+  await page.getByRole("option", { name: new RegExp(`^Pod ${pod} ${namespace}$`) }).click();
+  await page
+    .getByRole("tabpanel", { name: pod, exact: true })
+    .getByRole("button", { name: "Open an Exec Session" })
+    .click();
+  const panel = page
+    .getByRole("tabpanel", { name: `app in ${pod}`, exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+  return { panel, input: panel.getByRole("textbox", { name: `Exec Session in app of ${pod}` }) };
+}
+
+const webglCanvas = ".xterm canvas:not(.xterm-link-layer)";
+
+test("draws an Exec Session with WebGL, frees it while hidden, and falls back when it is lost", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "only Chromium draws a terminal with WebGL");
+  await page.goto(`/#token=${engineToken}`);
+  test.skip(
+    !(await page.evaluate(() => !!document.createElement("canvas").getContext("webgl2"))),
+    "this browser has no WebGL 2, so every terminal uses the DOM renderer",
+  );
+  const { panel, input } = await openSession(page, "e2e-webgl");
+  const webgl = page.locator(webglCanvas);
+  const screen = panel.locator(".xterm-screen");
+  await expect(webgl.first()).toBeAttached();
+  // The screen is a canvas, so output is looked for with Find. The command
+  // itself does not contain what it prints.
+  const found = async (text: string) => {
+    await panel.getByRole("button", { name: "Find in scrollback" }).click();
+    const find = panel.getByRole("textbox", { name: "Find" });
+    await find.fill(text);
+    // The command is typed again when its output is not found in time, so
+    // the output may be there twice.
+    await expect(panel.getByRole("search")).toContainText(/\b1 of [12]\b/);
+    await find.press("Escape");
+  };
+  const before = await screen.screenshot();
+  await expect(async () => {
+    await input.focus();
+    await input.pressSequentially("echo webgl-$((6*7))");
+    await input.press("Enter");
+    await expect(async () => found("webgl-42")).toPass({ timeout: 3000 });
+  }).toPass();
+  // Find reads the terminal's buffer, which a canvas that draws nothing
+  // would not change.
+  expect(await screen.screenshot()).not.toEqual(before);
+  // A hidden terminal holds no WebGL context, and takes one again when shown.
+  const tabs = page.locator(".dv-tab");
+  await tabs
+    .filter({ has: page.getByRole("button", { name: "Close e2e-webgl", exact: true }) })
+    .click();
+  await expect(webgl).toHaveCount(0);
+  await tabs
+    .filter({ has: page.getByRole("button", { name: "Close app in e2e-webgl", exact: true }) })
+    .click();
+  await expect(webgl.first()).toBeAttached();
+  await found("webgl-42");
+  // The browser takes the context away. The terminal carries on with the DOM
+  // renderer, with what it had on screen, and is sized for it: a DOM cell is
+  // wider, so the grid WebGL sized would run past the panel's edge.
+  await page.evaluate(() => {
+    for (const canvas of document.querySelectorAll<HTMLCanvasElement>(".xterm canvas"))
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+  });
+  const rows = panel.locator(".xterm-rows");
+  await expect(rows).toContainText("webgl-42");
+  await expect(webgl).toHaveCount(0);
+  await expect
+    .poll(() =>
+      screen.evaluate((element) => {
+        const body = element.closest(".xterm")!.parentElement!;
+        return element.getBoundingClientRect().right - body.getBoundingClientRect().right;
+      }),
+    )
+    .toBeLessThanOrEqual(0);
+  await input.focus();
+  await input.pressSequentially("echo after-loss-$((6*7))");
+  await input.press("Enter");
+  await expect(rows).toContainText("after-loss-42");
+});
+
+test("keeps the DOM renderer for an Exec Session when WebGL cannot start", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "only Chromium draws a terminal with WebGL");
+  await page.addInitScript(() => {
+    const real = Reflect.get(HTMLCanvasElement.prototype, "getContext") as (
+      ...args: unknown[]
+    ) => unknown;
+    Reflect.set(
+      HTMLCanvasElement.prototype,
+      "getContext",
+      function (this: HTMLCanvasElement, ...args: unknown[]) {
+        return args[0] === "webgl2" ? null : Reflect.apply(real, this, args);
+      },
+    );
+  });
+  await page.goto(`/#token=${engineToken}`);
+  const { panel, input } = await openSession(page, "e2e-no-webgl");
+  const rows = panel.locator(".xterm-rows");
+  await expect(async () => {
+    await input.focus();
+    await input.pressSequentially("echo dom-$((6*7))");
+    await input.press("Enter");
+    await expect(rows).toContainText("dom-42", { timeout: 3000 });
+  }).toPass();
+  await expect(page.locator(webglCanvas)).toHaveCount(0);
 });
 
 test("browses a live ConfigMap from the cluster picker to its YAML", async ({ page }) => {

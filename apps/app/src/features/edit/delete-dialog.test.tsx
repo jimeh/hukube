@@ -14,6 +14,7 @@ const workspace = {
   cluster: "c",
   active: true,
   types: new Map(),
+  openExecSession: () => {},
   openList: () => {},
   openResource: () => {},
 };

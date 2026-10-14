@@ -85,11 +85,12 @@ export interface DeleteParams {
   immediate?: boolean;
 }
 /**
- * ResourceAccess reports whether editing and deleting are permitted.
+ * ResourceAccess reports whether editing, deleting, and Exec Sessions are permitted.
  */
 export interface ResourceAccess {
   edit: Access;
   delete: Access;
+  exec: Access;
 }
 /**
  * Access is denied only when the Engine knows the action would be refused.
@@ -106,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "3cbed61d3f0a5d92";
+export const Hash = "94c2e697a81023ac";
 
 //////////
 // source: protocol.go
@@ -716,7 +717,11 @@ export const StreamClientTypeOpen = "open";
  * StreamClientTypeAck reports how much data the client has consumed.
  */
 export const StreamClientTypeAck = "ack";
-export type StreamClientType = typeof StreamClientTypeOpen | typeof StreamClientTypeAck;
+/**
+ * StreamClientTypeResize gives an Exec Session's terminal size.
+ */
+export const StreamClientTypeResize = "resize";
+export type StreamClientType = typeof StreamClientTypeOpen | typeof StreamClientTypeAck | typeof StreamClientTypeResize;
 /**
  * StreamClientMessage is a text message from a client on a stream socket.
  */
@@ -729,6 +734,11 @@ export interface StreamClientMessage {
    * since the stream opened.
    */
   bytes?: number /* uint64 */;
+  /**
+   * Cols and Rows are the terminal size of a resize.
+   */
+  cols?: number /* uint16 */;
+  rows?: number /* uint16 */;
 }
 /**
  * StreamServerType identifies a text message the Engine sends on a stream socket.
@@ -749,7 +759,11 @@ export const StreamServerTypeGap = "gap";
  * StreamServerTypeEnd is the last message of a stream.
  */
 export const StreamServerTypeEnd = "end";
-export type StreamServerType = typeof StreamServerTypeHello | typeof StreamServerTypeEvent | typeof StreamServerTypeGap | typeof StreamServerTypeEnd;
+/**
+ * StreamServerTypeAck reports how much input the Engine has passed on.
+ */
+export const StreamServerTypeAck = "ack";
+export type StreamServerType = typeof StreamServerTypeHello | typeof StreamServerTypeEvent | typeof StreamServerTypeGap | typeof StreamServerTypeEnd | typeof StreamServerTypeAck;
 /**
  * StreamServerMessage is a text message from the Engine on a stream socket.
  */
@@ -759,6 +773,11 @@ export interface StreamServerMessage {
   event?: unknown;
   gap?: StreamGap;
   end?: StreamEnd;
+  /**
+   * Bytes is the total input the Engine has passed to the Cluster since the
+   * stream opened, in an ack.
+   */
+  bytes?: number /* uint64 */;
 }
 /**
  * StreamGap counts the data the Engine dropped because the client fell behind.
@@ -783,10 +802,14 @@ export const StreamEndReasonComplete = "complete";
  */
 export const StreamEndReasonDeleted = "deleted";
 /**
+ * StreamEndReasonStopped means the container the stream ran in stopped.
+ */
+export const StreamEndReasonStopped = "stopped";
+/**
  * StreamEndReasonError means the stream failed, with Error saying how.
  */
 export const StreamEndReasonError = "error";
-export type StreamEndReason = typeof StreamEndReasonComplete | typeof StreamEndReasonDeleted | typeof StreamEndReasonError;
+export type StreamEndReason = typeof StreamEndReasonComplete | typeof StreamEndReasonDeleted | typeof StreamEndReasonStopped | typeof StreamEndReasonError;
 /**
  * StreamEnd is the Engine's last message on a stream. A socket that closes
  * without one was lost.
@@ -794,6 +817,11 @@ export type StreamEndReason = typeof StreamEndReasonComplete | typeof StreamEndR
 export interface StreamEnd {
   reason: StreamEndReason;
   error?: ErrorDetail;
+  /**
+   * ExitCode is the exit status of an Exec Session's process, with the
+   * reason complete.
+   */
+  exitCode?: number /* int */;
 }
 /**
  * LogStreamMaxPods is the most Pods one Log Stream reads.
@@ -913,4 +941,58 @@ export interface LogSource {
    * Error is set while the container's logs cannot be read.
    */
   error?: string;
+}
+/**
+ * ExecInputFrame is the most input one binary frame holds.
+ */
+export const ExecInputFrame = 32 << 10;
+/**
+ * ExecInputWindow is the most input a client sends beyond what the Engine
+ * has acknowledged.
+ */
+export const ExecInputWindow = 256 << 10;
+/**
+ * An Exec Session's input has its own acknowledged window, independent of
+ * its output's.
+ */
+export type ExecInput = typeof ExecInputFrame | typeof ExecInputWindow;
+/**
+ * ExecReasonNoShell means the container has no shell to run.
+ */
+export const ExecReasonNoShell = "NoShell";
+/**
+ * ExecReasonConnectionLost means the session ran and then lost its
+ * connection to the Cluster.
+ */
+export const ExecReasonConnectionLost = "ConnectionLost";
+/**
+ * ExecReasonEngineStopped means the Engine shut down while the session ran.
+ */
+export const ExecReasonEngineStopped = "EngineStopped";
+/**
+ * Reasons in the ErrorDetail of an Exec Session that ended with an error.
+ */
+export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonConnectionLost | typeof ExecReasonEngineStopped;
+/**
+ * ExecParams opens an Exec Session: a process with a TTY in a container.
+ */
+export interface ExecParams {
+  cluster: string;
+  namespace: string;
+  pod: string;
+  /**
+   * UID is the Pod the session runs in. A Pod of the same name with another
+   * UID is a different Pod.
+   */
+  uid: string;
+  container: string;
+  /**
+   * Command replaces the default shell.
+   */
+  command?: string[];
+  /**
+   * Cols and Rows are the terminal's size when the session starts.
+   */
+  cols: number /* uint16 */;
+  rows: number /* uint16 */;
 }

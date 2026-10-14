@@ -30,7 +30,7 @@ import {
 /** The subset of WebSocket that EngineConnection uses. */
 export interface SocketLike {
   binaryType?: string;
-  send(data: string): void;
+  send(data: string | Uint8Array<ArrayBuffer>): void;
   close(): void;
   onopen: ((event: Event) => void) | null;
   onclose: ((event: CloseEvent) => void) | null;

@@ -23,18 +23,35 @@ export interface Subscription<P> {
   close: () => void;
 }
 
-export type StreamState = "waiting" | "connecting" | "open" | "reconnecting" | "paused" | "ended";
+export type StreamState =
+  | "waiting"
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "paused"
+  | "ended"
+  | "lost";
 export interface StreamData {
   "resource.logs": LogLine[];
+  "pod.exec": Uint8Array;
 }
 export interface StreamListener<M extends StreamMethod> {
   state?: (state: StreamState) => void;
   event: (event: Streams[M]["event"]) => void;
-  data: (data: StreamData[M]) => void;
+  data: (data: StreamData[M]) => void | Promise<void>;
   gap: (gap: StreamGap) => void;
+  /**
+   * Called when a write was not accepted, with its size, because too much
+   * input was already waiting for a process that is not reading.
+   */
+  inputDropped?: (bytes: number) => void;
   end: (end: StreamEnd) => void;
 }
 export interface EngineStream {
+  /** Sends stdin. A Worker client transfers ownership of the buffer. No effect on Log Streams. */
+  write(data: Uint8Array): void;
+  /** Replaces the terminal size. It has no effect on a Log Stream. */
+  resize(cols: number, rows: number): void;
   pause(): void;
   resume(): void;
   close(): void;

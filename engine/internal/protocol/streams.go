@@ -42,6 +42,8 @@ const (
 	StreamClientTypeOpen StreamClientType = "open"
 	// StreamClientTypeAck reports how much data the client has consumed.
 	StreamClientTypeAck StreamClientType = "ack"
+	// StreamClientTypeResize gives an Exec Session's terminal size.
+	StreamClientTypeResize StreamClientType = "resize"
 )
 
 // StreamClientMessage is a text message from a client on a stream socket.
@@ -52,6 +54,9 @@ type StreamClientMessage struct {
 	// Bytes is the total length of the binary frames the client has consumed
 	// since the stream opened.
 	Bytes uint64 `json:"bytes,omitempty"`
+	// Cols and Rows are the terminal size of a resize.
+	Cols uint16 `json:"cols,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
 }
 
 // StreamServerType identifies a text message the Engine sends on a stream socket.
@@ -66,6 +71,8 @@ const (
 	StreamServerTypeGap StreamServerType = "gap"
 	// StreamServerTypeEnd is the last message of a stream.
 	StreamServerTypeEnd StreamServerType = "end"
+	// StreamServerTypeAck reports how much input the Engine has passed on.
+	StreamServerTypeAck StreamServerType = "ack"
 )
 
 // StreamServerMessage is a text message from the Engine on a stream socket.
@@ -75,6 +82,9 @@ type StreamServerMessage struct {
 	Event any              `json:"event,omitempty" tstype:"unknown"`
 	Gap   *StreamGap       `json:"gap,omitempty"`
 	End   *StreamEnd       `json:"end,omitempty"`
+	// Bytes is the total input the Engine has passed to the Cluster since the
+	// stream opened, in an ack.
+	Bytes uint64 `json:"bytes,omitempty"`
 }
 
 // StreamGap counts the data the Engine dropped because the client fell behind.
@@ -93,6 +103,8 @@ const (
 	StreamEndReasonComplete StreamEndReason = "complete"
 	// StreamEndReasonDeleted means the Resource the stream was about is gone.
 	StreamEndReasonDeleted StreamEndReason = "deleted"
+	// StreamEndReasonStopped means the container the stream ran in stopped.
+	StreamEndReasonStopped StreamEndReason = "stopped"
 	// StreamEndReasonError means the stream failed, with Error saying how.
 	StreamEndReasonError StreamEndReason = "error"
 )
@@ -102,6 +114,9 @@ const (
 type StreamEnd struct {
 	Reason StreamEndReason `json:"reason"`
 	Error  *ErrorDetail    `json:"error,omitempty"`
+	// ExitCode is the exit status of an Exec Session's process, with the
+	// reason complete.
+	ExitCode *int `json:"exitCode,omitempty"`
 }
 
 // LogStreamMaxPods is the most Pods one Log Stream reads.
@@ -191,4 +206,41 @@ type LogSource struct {
 	Previous bool `json:"previous,omitempty"`
 	// Error is set while the container's logs cannot be read.
 	Error string `json:"error,omitempty"`
+}
+
+// An Exec Session's input has its own acknowledged window, independent of
+// its output's.
+const (
+	// ExecInputFrame is the most input one binary frame holds.
+	ExecInputFrame = 32 << 10
+	// ExecInputWindow is the most input a client sends beyond what the Engine
+	// has acknowledged.
+	ExecInputWindow = 256 << 10
+)
+
+// Reasons in the ErrorDetail of an Exec Session that ended with an error.
+const (
+	// ExecReasonNoShell means the container has no shell to run.
+	ExecReasonNoShell = "NoShell"
+	// ExecReasonConnectionLost means the session ran and then lost its
+	// connection to the Cluster.
+	ExecReasonConnectionLost = "ConnectionLost"
+	// ExecReasonEngineStopped means the Engine shut down while the session ran.
+	ExecReasonEngineStopped = "EngineStopped"
+)
+
+// ExecParams opens an Exec Session: a process with a TTY in a container.
+type ExecParams struct {
+	Cluster   string `json:"cluster"`
+	Namespace string `json:"namespace"`
+	Pod       string `json:"pod"`
+	// UID is the Pod the session runs in. A Pod of the same name with another
+	// UID is a different Pod.
+	UID       string `json:"uid"`
+	Container string `json:"container"`
+	// Command replaces the default shell.
+	Command []string `json:"command,omitempty"`
+	// Cols and Rows are the terminal's size when the session starts.
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
 }

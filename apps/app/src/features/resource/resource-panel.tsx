@@ -14,6 +14,7 @@ import { Button } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { ExecButton } from "../exec/exec-button.tsx";
 
 import type { ResourcePanelParams } from "@/features/workspace/dock.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
@@ -159,24 +160,37 @@ export function ResourcePanel({
             </TooltipContent>
           </Tooltip>
         )}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                className="ml-auto shrink-0 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Delete"
-                disabled={!!deleteReason}
-                focusableWhenDisabled
-                onClick={() => setDeleteOpen(true)}
-              />
-            }
-          >
-            <HugeiconsIcon icon={Delete02Icon} />
-          </TooltipTrigger>
-          <TooltipContent>{deleteReason ?? "Delete"}</TooltipContent>
-        </Tooltip>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {address.type === "pods" && (
+            <ExecButton
+              object={lastObject}
+              deleted={manifest.data?.deleted}
+              connection={connection}
+              access={access?.exec}
+              pod={address.name}
+              namespace={address.namespace}
+              panelId={api.id}
+            />
+          )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  className="shrink-0 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Delete"
+                  disabled={!!deleteReason}
+                  focusableWhenDisabled
+                  onClick={() => setDeleteOpen(true)}
+                />
+              }
+            >
+              <HugeiconsIcon icon={Delete02Icon} />
+            </TooltipTrigger>
+            <TooltipContent>{deleteReason ?? "Delete"}</TooltipContent>
+          </Tooltip>
+        </div>
       </header>
       <DeleteDialog
         open={deleteOpen}

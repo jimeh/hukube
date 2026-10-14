@@ -14,7 +14,11 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
+import { opensGoToResource } from "../exec/keys.ts";
+import { isRunning, useExecSessions } from "../exec/sessions.ts";
+import { isMac } from "@/lib/platform.ts";
 
+import { onOpenGoToResource } from "./open.ts";
 import {
   isPaletteShortcut,
   matchingTypes,
@@ -25,7 +29,6 @@ import {
 
 const resourceLimit = 50;
 const typeLimit = 8;
-const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
 /**
  * The Go to Resource palette of one Workspace. It finds Resource Types and
@@ -56,14 +59,37 @@ export function GoToResource({ active }: { active: boolean }) {
     // Capture phase, so the shortcut wins over editors such as Monaco that
     // use Ctrl+K themselves.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!isPaletteShortcut(e, isMac)) return;
+      const sessionId =
+        e.target instanceof Element
+          ? e.target.closest<HTMLElement>("[data-exec-session]")?.dataset["execSession"]
+          : undefined;
+      const session = sessionId ? useExecSessions.getState().entries.get(sessionId) : undefined;
+      if (
+        session
+          ? !opensGoToResource(
+              isMac,
+              e,
+              session.terminal?.hasSelection() ?? false,
+              isRunning(session),
+              isPaletteShortcut(e, isMac),
+            )
+          : !isPaletteShortcut(e, isMac)
+      )
+        return;
       e.preventDefault();
       e.stopPropagation();
       onShortcut();
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [active]);
+    const off = onOpenGoToResource(cluster, () => {
+      setInput("");
+      setOpen(true);
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      off();
+    };
+  }, [active, cluster]);
 
   const typeList = useMemo(() => [...types.values()], [types]);
   const namespaceList = useNamespaces(cluster, shown);
