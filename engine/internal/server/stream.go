@@ -348,7 +348,8 @@ func (q *streamQueue) next() (streamItem, bool, bool, time.Duration) {
 		if !item.held.IsZero() {
 			if last := len(q.flight) - 1; last >= flightRuns-1 {
 				// The list stays short. Output joins the newest run and takes
-				// its older time, so write gives up a little early at worst.
+				// its older time, so write can stop waiting early, never late.
+				// ADR-0016 records this as a known limit.
 				q.flight[last].end = q.sent
 			} else {
 				q.flight = append(q.flight, sentOutput{end: q.sent, held: item.held})

@@ -205,6 +205,17 @@ The cases, each of which has a test on a controllable clock:
 | An idle session                   | Nothing is unacknowledged, so nothing has an age. A burst after any pause gets the whole 3 seconds.                |
 | Output already sent               | It cannot be taken back. Only queued output is dropped, so up to 1 MiB stays in flight beside the 64 KiB kept.     |
 
+**Known limit: the fourth row does not always hold.** A client that keeps up
+can still lose output when more than 256 frames are in flight at once. The
+queue remembers when sent output was queued in a list of at most 256
+entries. A frame sent beyond that takes the time of the newest entry, which
+is older, so a young byte can be judged by an old one's age and a write
+stops waiting early. The rule errs only that way: no write waits longer than
+the invariant allows, so a session is not put at risk. Both reviewers of the
+final form found this independently, and it was seen against the test
+cluster ("Measurements"). It is not corrected here, by the coordinator's
+decision that this form was the last attempt, and is the first follow-up.
+
 The client acknowledges a frame when the terminal has parsed it, which is the
 `write` callback. A stream listener's `data` may return a promise, and the
 acknowledgement waits for it.
@@ -638,6 +649,10 @@ Cluster stopped mid-session, and a Tab restored after a reload.
   behind for 3 seconds and lose output, shown as a gap. The desktop Host
   throttles only a hidden window. A slow link has the same effect: a client
   that takes less than 341 KiB a second loses output during a long burst.
+- **A client somewhat faster than that can lose output too,** when the
+  output arrives in small pieces. See the known limit under "Both
+  directions are acknowledged". Measured, a client taking 400 KiB a second
+  lost most of a flood of short lines, and one taking 500 lost none.
 - **xterm.js 6.0.0's resize bug** (issue 6063). The terminal wrapper catches
   an error from `fit` and tries again on the next resize.
 - **Firefox's handling of `Ctrl+Shift+C` and `Ctrl+Shift+K`** was read from
@@ -813,6 +828,26 @@ Neither found a blocker. What changed because of them:
   The empty-index test waits for the session to ask the Cluster before it
   lets the process exit.
 
+- **A fresh review of the invariant found one material defect, which is
+  not corrected.** Both reviewers read the component again with the
+  invariant as its requirement and nothing of the earlier findings. Both
+  confirmed that no write waits longer than the invariant allows, for a
+  silent client, a trickle, and batches. Both found that a client that
+  keeps up can lose output once more than 256 frames are in flight, which
+  is the known limit under "Both directions are acknowledged". The
+  coordinator had decided that this form was the last attempt, so it stands
+  with the limit written down, here and in ADR-0016.
+
+  The reviewers' smaller findings also stand. Output in flight can exceed
+  the window by one frame, at most 32 KiB. When the socket's writer is
+  stalled before any output was sent, dropping queued output can start the
+  wait again, which the socket's 10-second write deadline bounds. After the
+  limit has passed, acknowledgements that make room let more than 64 KiB
+  queue again, up to the window. The queue's `waiting` counter is no longer
+  read. The six tests use windows of two to four frames, so none reaches
+  the 256-entry list, a write of more than a frame, the default limits, or
+  a waiting write that is cancelled.
+
 Not changed, and accepted: `Server.Shutdown` waits for a session's socket to
 close, so a client that does not answer the close costs a shutdown its 5
 seconds; a link a container prints still looks like one, and does nothing; a
@@ -839,10 +874,32 @@ On an Apple silicon laptop against the k3d cluster:
   85, 100, and 115 KiB a second client-go ended the session at 61 seconds
   with an i/o timeout; at 131 and 180 KiB a second it ran for the 150
   seconds of the probe.
+- A session's output reaches the client in small frames. A flood from
+  `yes` came in frames of 5 KiB on average, and a shell loop that prints
+  short lines in frames of 1.4 to 2.7 KiB, so a 1 MiB window held between
+  300 and 1,600 frames.
+- A client that acknowledges whole frames at a fixed rate, starting 100 ms
+  late, against 18 to 20 MB of output: with `yes`, clients at 370, 385,
+  and 420 KiB a second lost nothing, and one at 300 lost output from 3
+  seconds on, as the invariant says. With the loop of short lines, a client
+  at 400 KiB a second lost 15 of 18 MB from 4.5 seconds on, which is the
+  known limit, and one at 500 lost nothing.
+- Once output is being dropped, the process runs at its own speed, so
+  nearly all of a flood goes: the client at 300 KiB a second received 2 of
+  20 MB.
 
 ## Follow-ups
 
 - Jim's confirmation of the Windows and Linux keys.
+- The known limit of the output rule: a client that keeps up can lose
+  output when more than 256 frames are in flight. One reviewer tried a
+  correction in a copy: bound the list of queue times by time instead of
+  count, joining a sent frame to the newest entry only when their times are
+  within about 12 ms, and joining the two oldest entries when the list is
+  full. The six tests passed with it and its reproducer lost nothing from
+  360 KiB a second up. It needs a test that reaches the list's bound with
+  the default limits, and tests for the gaps listed under "Code-review
+  corrections".
 - Killing what a closed session left running, by tracking its process.
 - Choosing the command, and `powershell` for Windows containers.
 - Links in a session's output, once the app has a rule for external links.

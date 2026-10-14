@@ -97,6 +97,16 @@ built. `docs/plans/exec-sessions.md` has the measurements.
   window (1 MiB) in under 3 seconds, which is 341 KiB a second, 2.6 times
   the rate that was measured to be enough.
 
+  Known limit: the Engine keeps the times of sent output in a list of at
+  most 256 entries, and a frame sent beyond that takes an older frame's
+  time. So when more than 256 frames are unacknowledged at once, the Engine
+  can stop waiting before any byte is 3 seconds old, and a client that
+  takes more than 341 KiB a second can lose output. Measured against the
+  test cluster, where a window of output is 300 to 1,600 frames, a client
+  taking 400 KiB a second lost most of a flood of short lines, and one
+  taking 500 lost none. The error is only in that direction: a process is
+  never made to wait for longer than the invariant allows.
+
 - **Input is acknowledged too.** The sketch left input to TCP, with the
   Engine as the reader. But the client's acknowledgements of output arrive on
   the same socket, so the Engine can never stop reading it, or a container
