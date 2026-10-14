@@ -22,6 +22,7 @@ import {
 } from "electron";
 
 import type { EngineEndpoint } from "@hukube/host";
+import { unloadPrompt, type OpenWork } from "./unload.ts";
 
 const appScheme = "hukube";
 const appOrigin = `${appScheme}://app`;
@@ -56,6 +57,8 @@ protocol.registerSchemesAsPrivileged([
 let engine: ChildProcess | undefined;
 let endpoint: EngineEndpoint | undefined;
 let quitting = false;
+let quitRequested = false;
+const openWork = new Map<number, OpenWork>();
 
 /**
  * GUI apps on macOS, and some Linux launchers, do not inherit the login
@@ -166,20 +169,35 @@ function createWindow(url: URL = appUrl("/")!) {
       contextIsolation: true,
     },
   });
+  const contentsId = win.webContents.id;
+  let closing = false;
+  win.on("close", () => {
+    closing = true;
+  });
+  win.on("closed", () => openWork.delete(contentsId));
   win.webContents.on("will-prevent-unload", (event) => {
-    // The UI prevents an unload for unsaved edits and for running Exec
-    // Sessions, and this process cannot tell which, so the prompt names both.
+    const prompt = unloadPrompt(
+      openWork.get(win.webContents.id) ?? { edits: 0, sessions: 0 },
+      quitRequested,
+      closing && BrowserWindow.getAllWindows().length === 1,
+      process.platform === "darwin",
+    );
+    if (!prompt) {
+      event.preventDefault();
+      return;
+    }
     const response = dialog.showMessageBoxSync(win, {
       type: "warning",
-      buttons: ["Cancel", "Discard and end"],
+      ...prompt,
       defaultId: 0,
       cancelId: 0,
-      message: "Discard edits and end Exec Sessions?",
-      detail:
-        "This window has edits that have not been applied, or an Exec Session that is running. A command still running in a container may keep running.",
       noLink: true,
     });
     if (response === 1) event.preventDefault();
+    else {
+      quitRequested = false;
+      closing = false;
+    }
   });
   // Links to other sites open in the system browser, never inside the app.
   win.webContents.setWindowOpenHandler((details) => {
@@ -199,6 +217,24 @@ function openExternal(url: string) {
     void shell.openExternal(parsed.href);
   }
 }
+
+ipcMain.on("hukube:open-work", (event, work: unknown) => {
+  if (!fromUi(event) || !work || typeof work !== "object") return;
+  const { edits, sessions } = work as Partial<OpenWork>;
+  if (
+    typeof edits !== "number" ||
+    typeof sessions !== "number" ||
+    !Number.isSafeInteger(edits) ||
+    !Number.isSafeInteger(sessions) ||
+    edits < 0 ||
+    sessions < 0
+  )
+    return;
+  openWork.set(event.sender.id, { edits, sessions });
+});
+app.on("before-quit", () => {
+  quitRequested = true;
+});
 
 // Only the app's UI may learn the Engine's token or open windows.
 ipcMain.handle("hukube:engine", (event) => (fromUi(event) ? endpoint : undefined));

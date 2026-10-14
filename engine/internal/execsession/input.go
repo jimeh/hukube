@@ -60,10 +60,10 @@ func (i *Input) Read(data []byte) (int, error) {
 	}
 	n, _ := i.data.Read(data)
 	i.read += uint64(n)
-	total, hanging := i.read, i.hanging
+	total, hanging, ack := i.read, i.hanging, i.ack
 	i.mu.Unlock()
-	if !hanging && i.ack != nil {
-		i.ack(total)
+	if !hanging && ack != nil {
+		ack(total)
 	}
 	return n, nil
 }
@@ -92,6 +92,7 @@ func (i *Input) Close() {
 type Sizes struct {
 	mu              sync.Mutex
 	initial, latest *remotecommand.TerminalSize
+	nudge           []remotecommand.TerminalSize
 	ended           bool
 	changed         chan struct{}
 }
@@ -116,7 +117,7 @@ func (s *Sizes) Resize(cols, rows uint16) {
 func (s *Sizes) Next() *remotecommand.TerminalSize {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for !s.ended && s.initial == nil && s.latest == nil {
+	for !s.ended && s.initial == nil && s.latest == nil && len(s.nudge) == 0 {
 		changed := s.changed
 		s.mu.Unlock()
 		<-changed
@@ -130,6 +131,11 @@ func (s *Sizes) Next() *remotecommand.TerminalSize {
 		s.initial = nil
 		return size
 	}
+	if len(s.nudge) > 0 {
+		size := s.nudge[0]
+		s.nudge = s.nudge[1:]
+		return &size
+	}
 	size := s.latest
 	s.latest = nil
 	return size
@@ -138,5 +144,30 @@ func (s *Sizes) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ended = true
+	s.signal()
+}
+
+// Attach discards unread input and starts accounting for the new attachment.
+func (i *Input) Attach(ack func(uint64)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	// End-of-transmission belongs to the session, not its old attachment.
+	if i.hanging {
+		return
+	}
+	i.data.Reset()
+	i.read = 0
+	i.ack = ack
+}
+
+// Nudge keeps both sizes so a full-screen program sees an actual change.
+func (s *Sizes) Nudge(cols, rows uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended || rows <= 1 {
+		return
+	}
+	s.latest = nil
+	s.nudge = []remotecommand.TerminalSize{{Width: cols, Height: rows - 1}, {Width: cols, Height: rows}}
 	s.signal()
 }

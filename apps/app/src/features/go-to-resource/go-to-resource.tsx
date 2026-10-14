@@ -15,7 +15,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { opensGoToResource } from "../exec/keys.ts";
-import { isRunning, useExecSessions } from "../exec/sessions.ts";
+import { useExecSessions } from "../exec/sessions.ts";
 import { isMac } from "@/lib/platform.ts";
 
 import { onOpenGoToResource } from "./open.ts";
@@ -70,7 +70,7 @@ export function GoToResource({ active }: { active: boolean }) {
               isMac,
               e,
               session.terminal?.hasSelection() ?? false,
-              isRunning(session),
+              session.state.phase === "live" && !session.terminal?.inputHeld,
               isPaletteShortcut(e, isMac),
             )
           : !isPaletteShortcut(e, isMac)

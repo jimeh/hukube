@@ -8,6 +8,7 @@ import { frame, status, source } from "./log-test-fixtures.ts";
 class Socket implements SocketLike {
   sent: StreamClientMessage[] = [];
   binary: Uint8Array[] = [];
+  closeCodes: (number | undefined)[] = [];
   binaryType = "";
   onopen: SocketLike["onopen"] = null;
   onclose: SocketLike["onclose"] = null;
@@ -23,7 +24,8 @@ class Socket implements SocketLike {
     }
     this.sent.push(JSON.parse(value) as StreamClientMessage);
   }
-  close() {
+  close(code?: number) {
+    this.closeCodes.push(code);
     this.onclose?.(new CloseEvent("close"));
   }
   receive(data: unknown) {
@@ -33,9 +35,11 @@ class Socket implements SocketLike {
       }),
     );
   }
-  hello(hash = Hash) {
+  hello(hash = Hash, execSync = true) {
     this.onopen?.(new Event("open"));
     this.receive({ type: "hello", hello: { protocol: hash } });
+    if (execSync && hash === Hash && this.sent[0]?.method === "pod.exec")
+      this.receive({ type: "event", event: { offset: 0, cols: 80, rows: 24 } });
   }
 }
 let sockets: Socket[];
@@ -209,6 +213,9 @@ const execParams = {
   pod: "web",
   uid: "uid",
   container: "main",
+  session: "s",
+  window: "w",
+  start: true,
   cols: 80,
   rows: 24,
 };
@@ -268,14 +275,13 @@ it("sends a 1 MiB paste in order within the acknowledged input window", async ()
   const socket = sockets[1]!;
   const input = new Uint8Array(1 << 20);
   for (let index = 0; index < input.length; index++) input[index] = index % 251;
-  stream.write(input);
   stream.resize(132, 43);
   expect(socket.binary).toHaveLength(0);
   socket.hello();
   expect(socket.sent).toEqual([
-    { type: "open", method: "pod.exec", params: execParams },
-    { type: "resize", cols: 132, rows: 43 },
+    { type: "open", method: "pod.exec", params: { ...execParams, cols: 132, rows: 43 } },
   ]);
+  stream.write(input);
   let received = 0;
   let count = 0;
   while (received < input.length) {
@@ -304,23 +310,69 @@ it("sends a 1 MiB paste in order within the acknowledged input window", async ()
   conn.close();
 });
 
-it("loses an opened Exec Session without starting a second shell, but retries before open", async () => {
+it("reattaches after a lost socket without repeating start or takeover, and drops waiting input", async () => {
   const conn = connect();
-  const observe = execListener();
-  const stream = conn.openStream("pod.exec", execParams, observe);
+  const dropped = vi.fn<(bytes: number) => void>();
+  const stream = conn.openStream(
+    "pod.exec",
+    { ...execParams, takeover: true },
+    { ...execListener(), inputDropped: dropped },
+  );
   await Promise.resolve();
+  // Input before the stream is attached is dropped, without a report.
+  stream.write(new Uint8Array([42]));
+  expect(dropped).not.toHaveBeenCalled();
+  sockets[1]!.hello(Hash, false);
   sockets[1]!.close();
   await vi.advanceTimersByTimeAsync(100);
-  expect(sockets).toHaveLength(3);
   const socket = sockets[2]!;
   socket.hello();
+  expect(socket.sent[0]?.params).toMatchObject({ start: true, takeover: true });
+  socket.receive({ type: "event", event: { offset: 100, cols: 80, rows: 24 } });
+  socket.receive(new Uint8Array([1, 226, 128, 148]).buffer);
+  stream.write(new Uint8Array(ExecInputWindow + 10));
+  stream.resize(132, 43);
   socket.close();
-  expect(observe.state).toHaveBeenLastCalledWith("lost");
-  stream.resume();
-  stream.write(new Uint8Array([42]));
+  expect(dropped).toHaveBeenLastCalledWith(10);
+  // Input typed while disconnected is dropped too, without a report.
+  stream.write(new Uint8Array([9, 8]));
+  expect(dropped).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(100);
+  const next = sockets[3]!;
+  next.hello();
+  expect(next.sent[0]).toEqual({
+    type: "open",
+    method: "pod.exec",
+    params: { ...execParams, start: undefined, resume: 103, cols: 132, rows: 43 },
+  });
+  expect(next.sent.filter((m) => m.type === "resize")).toEqual([]);
+  stream.write(new Uint8Array(ExecInputWindow + 20));
+  next.receive({ type: "ack", bytes: 10 });
+  expect(next.binary.reduce((n, inputFrame) => n + inputFrame.length - 1, 0)).toBe(
+    ExecInputWindow + 10,
+  );
+  next.close();
+  expect(dropped).toHaveBeenLastCalledWith(10);
+  conn.close();
+});
+
+it.each([
+  { reason: "detached" as const },
+  {
+    reason: "error" as const,
+    error: { code: "not_found" as const, reason: "SessionGone", message: "gone" },
+  },
+])("does not reconnect an ordinary Exec end: %j", async (end) => {
+  const conn = connect();
+  const observe = { ...execListener(), end: vi.fn<StreamListener<"pod.exec">["end"]>() };
+  conn.openStream("pod.exec", execParams, observe);
+  await Promise.resolve();
+  sockets[1]!.hello();
+  sockets[1]!.receive({ type: "end", end });
   await vi.advanceTimersByTimeAsync(1000);
-  expect(sockets).toHaveLength(3);
-  expect(socket.binary).toHaveLength(0);
+  expect(sockets).toHaveLength(2);
+  expect(observe.end).toHaveBeenCalledExactlyOnceWith(end);
+  expect(sockets[1]!.closeCodes).toEqual([1000]);
   conn.close();
 });
 

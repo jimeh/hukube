@@ -31,7 +31,7 @@ import {
 export interface SocketLike {
   binaryType?: string;
   send(data: string | Uint8Array<ArrayBuffer>): void;
-  close(): void;
+  close(code?: number): void;
   onopen: ((event: Event) => void) | null;
   onclose: ((event: CloseEvent) => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;

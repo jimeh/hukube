@@ -1,8 +1,16 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { createServer } from "node:net";
+import { resolve as resolvePath } from "node:path";
+
 import { createHash } from "node:crypto";
 
 import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
-import { clusterId, engineToken, kubectl, kubectlCreate } from "./env.ts";
+import { openGoToResource, savedSessionLayout } from "./exec.ts";
+
+import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 
 const namespace = `e2e-${Date.now().toString(36)}`;
 
@@ -38,7 +46,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
   const openPod = async (name: string) => {
-    await page.keyboard.press("ControlOrMeta+K");
+    await openGoToResource(page);
     await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${name}`);
     await page.getByRole("option", { name: new RegExp(`^Pod ${name} ${namespace}$`) }).click();
     const pod = page
@@ -185,12 +193,14 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await expect(panel.getByText("The process exited with code 3.")).toBeVisible();
   await panel.getByRole("button", { name: "Start again" }).click();
   await run("echo again-$((6*7))", "again-42");
-  page.once("dialog", (dialog) => dialog.accept());
   await page.reload();
-  await expect(panel.getByText("No session is running here")).toBeVisible();
-  await expect(panel.locator(".xterm")).toHaveCount(0);
-  await panel.getByRole("button", { name: "Start a new session" }).click();
+  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
   await run("echo reloaded-$((6*7))", "reloaded-42");
+  await page.getByRole("button", { name: `Close ${clusterId}`, exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+  await run("echo reopened-$((6*7))", "reopened-42");
   await input.pressSequentially("exit");
   await input.press("Enter");
   await expect(panel.getByText("Ended", { exact: true })).toBeVisible();
@@ -215,7 +225,7 @@ async function openSession(page: Page, pod: string) {
   kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${pod}`, "--timeout=60s");
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+K");
+  await openGoToResource(page);
   await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${pod}`);
   await page.getByRole("option", { name: new RegExp(`^Pod ${pod} ${namespace}$`) }).click();
   await page
@@ -228,6 +238,129 @@ async function openSession(page: Page, pod: string) {
   await expect(panel.getByText("Live", { exact: true })).toBeVisible();
   return { panel, input: panel.getByRole("textbox", { name: `Exec Session in app of ${pod}` }) };
 }
+
+test("keeps the same vi screen and shell variable through a reload", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(domRenderer);
+  const saved = savedSessionLayout(page, "e2e-exec-reload");
+  await page.goto(`/#token=${engineToken}`);
+  const { panel, input } = await openSession(page, "e2e-exec-reload");
+  const screen = panel.locator(".xterm-rows");
+  await input.pressSequentially(
+    "HUKUBE_RELOAD=survived-$((6*7)); printf 'before-%s\\n' $((6*7)) > /tmp/hukube-reload; vi /tmp/hukube-reload",
+  );
+  await input.press("Enter");
+  await expect(screen).toContainText("before-42");
+  await saved();
+  const before = await screen.locator(":scope > div").allTextContents();
+  await page.reload();
+  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+  await expect.poll(() => screen.locator(":scope > div").allTextContents()).toEqual(before);
+  await input.focus();
+  await input.pressSequentially("iadded after reload ");
+  await expect(screen).toContainText("added after reload before-42");
+  await input.press("Escape");
+  await expect(screen.locator(":scope > div").last()).toContainText("- /tmp/hukube-reload");
+  await input.pressSequentially(":wq");
+  await input.press("Enter");
+  await expect(screen).toContainText("/ #");
+  await input.pressSequentially(
+    "printf 'variable=%s\\n' \"$HUKUBE_RELOAD\"; cat /tmp/hukube-reload",
+  );
+  await input.press("Enter");
+  await expect(screen).toContainText("variable=survived-42");
+  await expect(screen).toContainText("added after reload before-42");
+  await input.pressSequentially("exit 7");
+  await input.press("Enter");
+  await expect(panel.getByText("The process exited with code 7.")).toBeVisible();
+});
+
+test("shows a gone session after its own Engine restarts", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(domRenderer);
+  const portServer = createServer();
+  portServer.listen(0, "127.0.0.1");
+  await once(portServer, "listening");
+  const port = (portServer.address() as { port: number }).port;
+  await new Promise<void>((done, reject) =>
+    portServer.close((error) => (error ? reject(error) : done())),
+  );
+  const root = resolvePath(import.meta.dirname, "../..");
+  mkdirSync(resolvePath(root, ".data/e2e"), { recursive: true });
+  const dataDir = mkdtempSync(resolvePath(root, ".data/e2e/exec-restart-"));
+  const url = `http://127.0.0.1:${port}`;
+  let engine: ChildProcess | undefined;
+  let logs = "";
+  const start = async () => {
+    engine = spawn(
+      resolvePath(root, "engine/bin/hukube-engine"),
+      [
+        "--web",
+        `--ui-dir=${resolvePath(root, "apps/app/dist")}`,
+        `--listen=127.0.0.1:${port}`,
+        `--token=${engineToken}`,
+        `--kubeconfig=${kubeconfig}`,
+        `--data-dir=${dataDir}`,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    engine.stdout!.on("data", (bytes: Buffer) => {
+      logs += bytes.toString();
+    });
+    engine.stderr!.on("data", (bytes: Buffer) => {
+      logs += bytes.toString();
+    });
+    await expect
+      .poll(
+        async () => {
+          if (engine?.exitCode !== null) throw new Error(`Engine exited: ${logs}`);
+          return fetch(`${url}/healthz`).then(
+            (response) => response.ok,
+            () => false,
+          );
+        },
+        { message: "test Engine health", timeout: 20_000 },
+      )
+      .toBe(true);
+  };
+  const stop = async () => {
+    if (!engine || engine.exitCode !== null || engine.signalCode !== null) return;
+    const exited = once(engine, "exit");
+    engine.kill("SIGKILL");
+    await exited;
+  };
+  try {
+    await start();
+    const saved = savedSessionLayout(page, "e2e-exec-restart");
+    await page.goto(`${url}/#token=${engineToken}`);
+    const { panel, input } = await openSession(page, "e2e-exec-restart");
+    await input.pressSequentially("echo engine-$((6*7))");
+    await input.press("Enter");
+    await expect(panel.locator(".xterm-rows")).toContainText("engine-42");
+    await saved();
+    const height = await panel
+      .locator("[data-exec-session]")
+      .evaluate((element) => element.getBoundingClientRect().height);
+    await stop();
+    await expect(panel.getByText("Reconnecting…", { exact: true })).toBeVisible();
+    expect(
+      await panel
+        .locator("[data-exec-session]")
+        .evaluate((element) => element.getBoundingClientRect().height),
+    ).toBe(height);
+    await start();
+    await expect(panel.getByText("Gone", { exact: true })).toBeVisible();
+    await expect(
+      panel.getByText(
+        "This session is gone. It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached.",
+      ),
+    ).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Start a new session" })).toBeVisible();
+  } finally {
+    await page.close();
+    await stop();
+  }
+});
 
 const webglCanvas = ".xterm canvas:not(.xterm-link-layer)";
 
@@ -411,7 +544,7 @@ test("goes to a Resource and a Resource Type from the palette", async ({ page })
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
 
   // A Namespace and a type prefix scope a fuzzy match on the name.
-  await page.keyboard.press("ControlOrMeta+K");
+  await openGoToResource(page);
   const input = page.getByRole("combobox", { name: "Go to Resource" });
   // Type at a human pace, so results for earlier text arrive while typing.
   await input.pressSequentially(`${namespace}/cm/e2epal`, { delay: 100 });
@@ -1058,7 +1191,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
   const open = async (query: string) => {
-    await page.keyboard.press("ControlOrMeta+K");
+    await openGoToResource(page);
     await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/${query}`);
     await expect(
       page.getByRole("option", { name: new RegExp(query.split("/").at(-1)!) }),
@@ -1254,6 +1387,7 @@ test("reviews and applies ConfigMap edits, handles overlaps, and confirms deleti
   const row = list.getByRole("row", { name: new RegExp(`${name} ${namespace}`) });
   await row.click();
   const panel = page.getByRole("tabpanel", { name, exact: true });
+  await panel.getByRole("tab", { name: "YAML", exact: true }).click();
   const editor = panel.locator(".monaco-editor:visible");
   await expect(editor.locator(".view-lines")).toContainText("hello");
   await editor.click();
@@ -1404,6 +1538,7 @@ test("shows a readable unknown-field refusal and keeps the YAML editor usable", 
   await list.getByRole("textbox", { name: "Filter by name" }).fill(name);
   await list.getByRole("row", { name: new RegExp(`${name} ${namespace}`) }).click();
   const panel = page.getByRole("tabpanel", { name, exact: true });
+  await panel.getByRole("tab", { name: "YAML", exact: true }).click();
   const editor = panel.locator(".monaco-editor:visible");
   await expect(editor.locator(".view-lines")).toContainText("replicas");
   await editor.click();

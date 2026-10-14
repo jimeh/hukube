@@ -1,0 +1,352 @@
+{
+  "safe": "//n///////////////+f/P//////////////////////////////x////////8///////////////////////////////////////////////5P////////////////////////////////4////////+f////////////////////////////////////////////9/8v//////////////////////////////H////////z///////////////////////////////////////////////0/+///////////////////////////////j////////5///////////////////////////////////////////////yf//////////////////////////////f/z////////8/////////////////////////////////////////////z/5//////////////////////////////+P////////n///////////////////////////////////////////////J/////////////////////////////////H////////z///////////////////////////////////////////////k//////////////////////////////8//v//////f/7///////////////////////////////////////////////8B",
+  "samples": [
+    {
+      "at": 1,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 2,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 3,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 4,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 5,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 6,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 7,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 8,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 9,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 12,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 13,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 14,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 15,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 16,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 17,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 18,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 19,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 20,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 21,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 22,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 998,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 1995,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 2992,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 3989,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "at": 4457,
+      "restore": "\u001b[?25h"
+    }
+  ],
+  "attachments": [
+    {
+      "mark": "painted",
+      "at": 1740,
+      "ring": 512,
+      "cut": 1228,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 1740,
+      "ring": 2048,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 1740,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 1740,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 1740,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 1740,
+      "ring": 512,
+      "cut": 1228,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 1740,
+      "ring": 2048,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 1740,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 1740,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 1740,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 2281,
+      "ring": 512,
+      "cut": 1769,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 2281,
+      "ring": 2048,
+      "cut": 233,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 2281,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 2281,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 2281,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 2822,
+      "ring": 512,
+      "cut": 2310,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 2822,
+      "ring": 2048,
+      "cut": 774,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 2822,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 2822,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 2822,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 3904,
+      "ring": 512,
+      "cut": 3392,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 3904,
+      "ring": 2048,
+      "cut": 1856,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 3904,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 3904,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 3904,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 4445,
+      "ring": 512,
+      "cut": 3933,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 4445,
+      "ring": 2048,
+      "cut": 2397,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 4445,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 4445,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 4445,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 4451,
+      "ring": 512,
+      "cut": 3939,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 4451,
+      "ring": 2048,
+      "cut": 2403,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 4451,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 4451,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 4451,
+      "ring": 4457,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    }
+  ]
+}

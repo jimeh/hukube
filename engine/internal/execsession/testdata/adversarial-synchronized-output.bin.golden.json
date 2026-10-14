@@ -1,0 +1,34 @@
+{
+  "safe": "gB8Q",
+  "samples": [
+    {
+      "at": 8,
+      "restore": "\u001b[?25h\u001b[?2026h"
+    },
+    {
+      "at": 9,
+      "restore": "\u001b[?25h\u001b[?2026h"
+    },
+    {
+      "at": 10,
+      "restore": "\u001b[?25h\u001b[?2026h"
+    },
+    {
+      "at": 11,
+      "restore": "\u001b[?25h\u001b[?2026h"
+    },
+    {
+      "at": 12,
+      "restore": "\u001b[?25h\u001b[?2026h"
+    },
+    {
+      "at": 13,
+      "restore": "\u001b[?25h\u001b[?2026h"
+    },
+    {
+      "at": 21,
+      "restore": "\u001b[?25h"
+    }
+  ],
+  "attachments": []
+}

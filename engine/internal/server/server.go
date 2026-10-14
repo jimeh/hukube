@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/jimeh/hukube/engine/internal/cluster"
+	"github.com/jimeh/hukube/engine/internal/execsession"
 	"github.com/jimeh/hukube/engine/internal/kubeconfig"
 	"github.com/jimeh/hukube/engine/internal/protocol"
 	"github.com/jimeh/hukube/engine/internal/settings"
@@ -41,19 +42,20 @@ type Config struct {
 	// UIDir, when set, is a built UI bundle served at the root (web Host).
 	UIDir string
 
-	Source   kubeconfig.Source
-	Clusters *cluster.Manager
-	Settings *settings.Store
-	Log      *slog.Logger
+	ExecBuffer            int
+	ExecUnattachedTimeout time.Duration
+	Source                kubeconfig.Source
+	Clusters              *cluster.Manager
+	Settings              *settings.Store
+	Log                   *slog.Logger
 }
 
 // Server handles HTTP requests and control socket sessions.
 type Server struct {
-	cfg          Config
-	execMu       sync.Mutex
-	execs        map[*runningExec]struct{}
-	execSockets  map[chan struct{}]struct{}
-	shuttingDown bool
+	cfg         Config
+	execMu      sync.Mutex
+	execs       *execsession.Registry
+	execSockets map[chan struct{}]struct{}
 }
 
 // New returns a Server. It panics if cfg has no Token, because the Engine must
@@ -67,7 +69,13 @@ func New(cfg Config) *Server {
 		hosts[i] = strings.ToLower(host)
 	}
 	cfg.AllowedHosts = hosts
-	return &Server{cfg: cfg}
+	if cfg.ExecBuffer == 0 {
+		cfg.ExecBuffer = execsession.DefaultBuffer
+	}
+	if cfg.ExecUnattachedTimeout == 0 {
+		cfg.ExecUnattachedTimeout = execsession.DefaultUnattachedTimeout
+	}
+	return &Server{cfg: cfg, execs: execsession.NewRegistry(cfg.ExecBuffer, cfg.ExecUnattachedTimeout)}
 }
 
 // Handler returns the Server's HTTP handler.

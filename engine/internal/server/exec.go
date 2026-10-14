@@ -18,10 +18,6 @@ func (c execCluster) Exec(p protocol.ExecParams) (execsession.Executor, error) {
 	return newPodExecutor(c.Cluster, p)
 }
 
-type execOutput struct {
-	queue *streamQueue
-}
-
 // handleMutationStream registers a stream that changes a Cluster and takes
 // input. In read-only mode it ends with reason before decoding params.
 func handleMutationStream[P, E any](method protocol.Stream[P, E], reason string, handler func(context.Context, *Server, P, *streamQueue) protocol.StreamEnd) {
@@ -41,48 +37,57 @@ func handleMutationStream[P, E any](method protocol.Stream[P, E], reason string,
 	}
 }
 
-func (o execOutput) WriteContext(ctx context.Context, data []byte) (int, error) {
-	return o.queue.write(ctx, data)
+// execID reports whether a session or window ID has the shape the UI gives
+// it. The Engine keeps such IDs, including those of sessions it does not have
+// for a while, so their size must be bounded.
+func execID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func init() {
 	handleMutationStream(protocol.StreamPodExec, execReadOnlyReason, func(ctx context.Context, s *Server, p protocol.ExecParams, q *streamQueue) protocol.StreamEnd {
-		if p.Cluster == "" || p.Namespace == "" || p.Pod == "" || p.UID == "" || p.Container == "" || p.Cols == 0 || p.Rows == 0 {
-			return streamError(badRequest(fmt.Errorf("cluster, namespace, pod, uid, container, cols, and rows are required")))
+		if p.Cluster == "" || p.Namespace == "" || p.Pod == "" || p.UID == "" || p.Container == "" || p.Session == "" || p.Window == "" || (p.Cols == 0) != (p.Rows == 0) {
+			return streamError(badRequest(fmt.Errorf("cluster, namespace, pod, uid, container, session, window, and a complete size are required")))
+		}
+		if !execID(p.Session) || !execID(p.Window) {
+			return streamError(badRequest(fmt.Errorf("session and window must be at most 64 letters, digits, hyphens, or underscores")))
 		}
 		c, err := s.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
 			return streamError(err)
 		}
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		running := &runningExec{cancel: cancel, done: make(chan struct{})}
-		s.execMu.Lock()
-		if s.shuttingDown {
-			s.execMu.Unlock()
-			return streamError(fmt.Errorf("the Engine is shutting down"))
+		if ctx.Err() != nil {
+			return protocol.StreamEnd{Reason: protocol.StreamEndReasonDetached}
 		}
-		if s.execs == nil {
-			s.execs = make(map[*runningExec]struct{})
+		a, err := s.execs.Open(p, execCluster{c}, c.Index, q.signal, q.acknowledgeInput)
+		if err != nil {
+			return streamError(err)
 		}
-		s.execs[running] = struct{}{}
-		s.execMu.Unlock()
-		defer func() { s.execMu.Lock(); delete(s.execs, running); close(running.done); s.execMu.Unlock() }()
-		end := execsession.Run(ctx, execCluster{c}, c.Index, p, q.input, q.sizes, execOutput{q}, execsession.DefaultTiming)
-		s.execMu.Lock()
-		stopping := s.shuttingDown
-		s.execMu.Unlock()
-		if stopping {
-			// The hang-up made the shell exit, which is not why the session ended.
-			return streamError(&protocol.ErrorDetail{Code: protocol.ErrorCodeUnavailable, Reason: protocol.ExecReasonEngineStopped, Message: "The Engine shut down."})
-		}
-		return end
+		q.mu.Lock()
+		q.attachment = a
+		close(q.attached)
+		q.mu.Unlock()
+		q.signal()
+		<-ctx.Done()
+		a.Detach()
+		return protocol.StreamEnd{Reason: protocol.StreamEndReasonDetached}
 	})
-}
-
-type runningExec struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	handleMutation(protocol.RequestExecEnd, func(_ context.Context, s *Server, p protocol.ExecEndParams) (protocol.None, error) {
+		if p.Cluster == "" || !execID(p.Session) {
+			return protocol.None{}, badRequest(fmt.Errorf("cluster and a session of at most 64 letters, digits, hyphens, or underscores are required"))
+		}
+		return protocol.None{}, s.execs.End(p)
+	})
 }
 
 // Shutdown hangs up every Exec Session and waits within ctx's deadline. It
@@ -90,23 +95,13 @@ type runningExec struct {
 // so a client is told the Engine shut down instead of finding its socket gone.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.execMu.Lock()
-	s.shuttingDown = true
-	running := make([]*runningExec, 0, len(s.execs))
-	for session := range s.execs {
-		running = append(running, session)
-		session.cancel()
-	}
 	sockets := make([]chan struct{}, 0, len(s.execSockets))
 	for socket := range s.execSockets {
 		sockets = append(sockets, socket)
 	}
 	s.execMu.Unlock()
-	for _, session := range running {
-		select {
-		case <-session.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := s.execs.Shutdown(ctx); err != nil {
+		return err
 	}
 	for _, socket := range sockets {
 		select {

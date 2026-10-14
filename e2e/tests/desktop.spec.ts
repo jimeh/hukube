@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 
 import { _electron as electron, expect, test } from "@playwright/test";
 
+import { openGoToResource, savedSessionLayout } from "./exec.ts";
+
 import { clusterId, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 
 const desktopDir = resolve(import.meta.dirname, "../../apps/desktop");
@@ -65,11 +67,25 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
       },
     });
     const window = await app.firstWindow();
+    window.on("dialog", (dialog) => {
+      void dialog.accept().catch(() => {});
+    });
+    await app.evaluate(({ dialog }) => {
+      const prompts: { message?: string; detail?: string; buttons?: string[] }[] = [];
+      (globalThis as typeof globalThis & { unloadPrompts: typeof prompts }).unloadPrompts = prompts;
+      dialog.showMessageBoxSync = (...args: unknown[]) => {
+        const options = args.at(-1) as Parameters<typeof dialog.showMessageBoxSync>[0];
+        prompts.push(options);
+        return 0;
+      };
+    });
+    const saved = savedSessionLayout(window, "e2e-exec-desktop");
+    await window.reload();
     // A terminal drawn with WebGL is a canvas, which a test cannot read.
     await window.evaluate(() => localStorage.setItem("hukube.terminal.renderer", "dom"));
     await window.getByRole("button", { name: new RegExp(clusterId) }).click();
     await expect(window.getByText(/Kubernetes v\d/)).toBeVisible();
-    await window.keyboard.press("ControlOrMeta+K");
+    await openGoToResource(window);
     await window
       .getByRole("combobox", { name: "Go to Resource" })
       .fill(`${namespace}/pods/e2e-exec-desktop`);
@@ -93,6 +109,55 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
       await input.press("Enter");
       await expect(screen).toContainText("desktop-42", { timeout: 3000 });
     }).toPass();
+    await input.pressSequentially("HUKUBE_DESKTOP=kept-$((6*7)); echo ready-$HUKUBE_DESKTOP");
+    await input.press("Enter");
+    await expect(screen).toContainText("ready-kept-42");
+    await saved();
+    await window.reload();
+    await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+    await input.focus();
+    await input.pressSequentially("echo reload-$HUKUBE_DESKTOP");
+    await input.press("Enter");
+    await expect(screen).toContainText("reload-kept-42");
+    expect(
+      await app.evaluate(
+        () => (globalThis as typeof globalThis & { unloadPrompts: unknown[] }).unloadPrompts,
+      ),
+    ).toEqual([]);
+    await app.evaluate(({ app: desktopApp }) => {
+      desktopApp.quit();
+    });
+    await expect
+      .poll(() =>
+        app!.evaluate(
+          () =>
+            (globalThis as typeof globalThis & { unloadPrompts: unknown[] }).unloadPrompts.length,
+        ),
+      )
+      .toBe(1);
+    expect(
+      await app.evaluate(
+        () => (globalThis as typeof globalThis & { unloadPrompts: unknown[] }).unloadPrompts[0],
+      ),
+    ).toMatchObject({
+      message: "Quit and end the Exec Sessions?",
+      detail:
+        "Quitting stops the Engine, which ends 1 Exec Session in this window. A command still running in a container may keep running.",
+      buttons: ["Cancel", "Quit"],
+    });
+    await input.focus();
+    await input.pressSequentially("echo cancel-$HUKUBE_DESKTOP");
+    await input.press("Enter");
+    await expect(screen).toContainText("cancel-kept-42");
+    // Cancelling Quit clears its flag, so another reload still passes without asking.
+    await window.reload();
+    await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+    expect(
+      await app.evaluate(
+        () => (globalThis as typeof globalThis & { unloadPrompts: unknown[] }).unloadPrompts.length,
+      ),
+    ).toBe(1);
+    await input.focus();
     await input.pressSequentially("sleep 100");
     await input.press("Enter");
     await expect(screen).toContainText("sleep 100");

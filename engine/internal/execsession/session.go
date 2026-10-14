@@ -93,9 +93,7 @@ func Run(ctx context.Context, c Cluster, idx Index, p protocol.ExecParams, input
 	ectx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	started := time.Now()
-	wctx, stopWrites := context.WithCancel(ectx)
-	defer stopWrites()
-	output := &outputWriter{writer: out, ctx: wctx, stop: stopWrites}
+	output := &outputWriter{writer: out, ctx: ectx}
 	result := make(chan error, 1)
 	go func() {
 		result <- executor.StreamWithContext(ectx, remotecommand.StreamOptions{Stdin: input, Stdout: output, Tty: true, TerminalSizeQueue: sizes})
@@ -103,9 +101,6 @@ func Run(ctx context.Context, c Cluster, idx Index, p protocol.ExecParams, input
 	for {
 		select {
 		case <-ctx.Done():
-			// Nobody reads the output any more, and a process that cannot
-			// write never reads the end-of-transmission.
-			output.discard()
 			input.Hangup()
 			timer := time.NewTimer(timing.Hangup)
 			var err error
@@ -134,32 +129,18 @@ func Run(ctx context.Context, c Cluster, idx Index, p protocol.ExecParams, input
 }
 
 type outputWriter struct {
-	ctx       context.Context
-	stop      context.CancelFunc
-	writer    Consumer
-	seen      atomic.Bool
-	discarded atomic.Bool
+	ctx    context.Context
+	writer Consumer
+	seen   atomic.Bool
 }
 
 func (w *outputWriter) Write(data []byte) (int, error) {
 	if len(data) > 0 {
 		w.seen.Store(true)
 	}
-	if w.discarded.Load() {
-		return len(data), nil
-	}
-	n, err := w.writer.WriteContext(w.ctx, data)
-	if err != nil && w.discarded.Load() {
-		return len(data), nil
-	}
-	return n, err
+	return w.writer.WriteContext(w.ctx, data)
 }
 
-// discard drops output from now on, releasing a write that is waiting.
-func (w *outputWriter) discard() {
-	w.discarded.Store(true)
-	w.stop()
-}
 func classify(ctx context.Context, c Cluster, p protocol.ExecParams, started time.Time, err error, output bool, timing Timing) protocol.StreamEnd {
 	code := 0
 	var exit utilexec.ExitError

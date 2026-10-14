@@ -107,9 +107,10 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   Chromium's sandbox uses. Pass `--no-sandbox` only to development and test
   launches, never in shipped code. agent-browser takes it as
   `--args --no-sandbox`.
-- **Stream sockets:** a Log Stream runs on its own socket at `/ws/stream`
-  (ADR-0016). The Engine sends data only while the client acknowledges it,
-  so a client that reads frames without sending `ack` stalls after 1 MiB.
+- **Stream sockets:** a Log Stream or an Exec Session runs on its own
+  socket at `/ws/stream` (ADR-0016). The Engine sends data only while the
+  client acknowledges it, so a client that reads frames without sending
+  `ack` stalls after 1 MiB.
 - **Pod logs:** envtest has no kubelet, so a log request cannot succeed
   there. Tests replace the log opener (`openPodLogs` in `server`) or use the
   fakes in `logstream`. A `rest.Config` with a `Timeout` ends a follow at
@@ -119,15 +120,29 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   fakes in `execsession`. The fallback from WebSocket to SPDY must test for
   the upgrade error with `k8s.io/streaming/pkg/httpstream`; the helper of
   the same name in `k8s.io/apimachinery` returns false for the error
-  client-go returns. A session's process outlives a dropped connection, so
-  the Engine hangs up (ADR-0022) under the executor's own context, not the
-  socket's. The index is empty while a type is listed, so only the Cluster
+  client-go returns. The Engine owns a session (ADR-0025): a socket that
+  closes only detaches, and the Engine hangs the session up (ADR-0022) under
+  its own context when its Tab closes (`exec.end`), when no window has been
+  attached for 10 minutes, or when the Engine stops. Nothing may make the
+  executor's output writer wait, or client-go ends the session after 61
+  seconds. The index is empty while a type is listed, so only the Cluster
   can say a Pod is gone.
+- **The mode tracker follows xterm.js:** `execsession/tracker.go` is a port
+  of xterm.js 6.0.0's parser table, UTF-8 decoder, and mode handlers, and
+  decides where a session's output may be cut. It must read bytes exactly as
+  the installed xterm.js does. `features/exec/tracker-golden.test.ts` checks
+  the Engine's golden files against xterm.js, so run it after upgrading
+  xterm.js. After changing the tracker or the recordings, regenerate the
+  golden files from `engine/` with
+  `mise exec -- go test ./internal/execsession -run TestTrackerGolden -update`.
 - **Session keys:** every key decision for a focused Exec Session is in
   `features/exec/keys.ts` (ADR-0023). `Mod+J` must stay unhandled there too.
 - **Sessions outlive their panel:** the window's store in
   `features/exec/sessions.ts` owns each session's stream and terminal. A
-  panel that mounts again must not start, end, or reset a session. A resize
+  panel that mounts again must not start, end, or reset a session. Only a
+  closed Tab ends one (`endSession`); a closed Workspace detaches its
+  sessions first (`detachClusterSessions`). The Workspace, not the panel,
+  attaches a restored session Tab, because a hidden panel may never mount. A resize
   sent just after a session starts makes a shell print its prompt again and
   drop what was typed, so a session starts at its terminal's real size, and
   a change to the session Tab's header must not change its height while a
@@ -164,8 +179,12 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
 - **End-to-end lists:** tests share one Engine and one Workspace within a run,
   so a test finds lists earlier tests opened. Scope each list's locators to its
-  tab panel. A run's Namespace is deleted without waiting, so a second run
-  started within a minute can find the first run's Resources by name.
+  tab panel, and select the Facet a test needs, because a Resource tab opens
+  on the Facet an earlier test left. A test that reloads must first wait for
+  the Engine to acknowledge the layout it depends on (`savedSessionLayout` in
+  `e2e/tests/exec.ts`), or the reload restores an older one. A run's
+  Namespace is deleted without waiting, so a second run started within a
+  minute can find the first run's Resources by name.
 - **envtest:** without `KUBEBUILDER_ASSETS`, `go test` reports `ok` for the
   `cluster` and `server` packages without running any of their tests, unit
   tests included; use `mise run test:engine`.

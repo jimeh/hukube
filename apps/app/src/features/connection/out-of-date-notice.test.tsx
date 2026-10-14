@@ -54,6 +54,7 @@ function renderNotice(kind: Host["kind"], state: ConnectionState = "open") {
     engine: () => Promise.resolve({ url: "http://localhost", token: "t" }),
     openWindow: () => {},
     openExternal: () => {},
+    reportOpenWork: () => {},
   };
   const view = render(
     <EngineProvider client={client}>

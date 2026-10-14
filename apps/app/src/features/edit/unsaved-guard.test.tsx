@@ -2,15 +2,34 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useUnsavedEdits, guardWorkspace, guardPanel } from "./unsaved-edits.ts";
-import { UnsavedGuard } from "./unsaved-guard.tsx";
+import { UnsavedGuard as Guard } from "./unsaved-guard.tsx";
+import { HostProvider } from "@/lib/host.tsx";
+import type { Host } from "@hukube/host";
+const reportOpenWork = vi.fn<(work: { edits: number; sessions: number }) => void>();
+const host: Host = {
+  kind: "web",
+  engine: async () => ({ url: "", token: "" }),
+  openWindow: () => {},
+  openExternal: () => {},
+  reportOpenWork,
+};
+function UnsavedGuard() {
+  return (
+    <HostProvider host={host}>
+      <Guard />
+    </HostProvider>
+  );
+}
 import { copyText } from "./clipboard.ts";
-import { useExecSessions, disposeSession, type ExecState } from "../exec/sessions.ts";
+import { useExecSessions, endSession, type ExecState } from "../exec/sessions.ts";
 // Imported here, not inside a test: loading the icon set takes seconds on a
 // slow machine, which would count against the first test's time limit.
 import { PanelTab } from "../workspace/panel-tab.tsx";
+vi.mock("../workspace/workspace-context.tsx", () => ({ useWorkspace: () => ({ cluster: "c" }) }));
+
 afterEach(() => {
   cleanup();
-  for (const id of useExecSessions.getState().entries.keys()) disposeSession(id);
+  for (const id of useExecSessions.getState().entries.keys()) endSession(id);
   useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
   vi.unstubAllGlobals();
 });
@@ -66,61 +85,80 @@ it.each(["button", "middle click"])(
     expect(close).toHaveBeenCalledOnce();
   },
 );
-it.each([1, 2])("counts %s Exec Sessions with the Cluster's exact close copy", async (count) => {
-  for (let i = 0; i < count; i++) session(String(i));
-  render(<UnsavedGuard />);
-  const close = vi.fn<() => void>();
-  act(() => guardWorkspace("c", close));
-  expect(
-    await screen.findByText(
-      count === 1 ? "End the Exec Session in c?" : "End the Exec Sessions in c?",
-    ),
-  ).toBeDefined();
-  expect(
-    screen.getByText(
-      `${count === 1 ? "1 Exec Session is" : "2 Exec Sessions are"} running. A command still running in the container may keep running.`,
-    ),
-  ).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(close).not.toHaveBeenCalled();
-  act(() => guardWorkspace("c", close));
-  fireEvent.click(
-    screen.getByRole("button", {
-      name: count === 1 ? "End session and close" : "End sessions and close",
-    }),
-  );
-  expect(close).toHaveBeenCalledOnce();
-});
-it("uses one dialog to name edits and sessions together", async () => {
+it("closes and moves a Workspace with sessions without prompting and asks only about edits", () => {
   session("id");
-  useUnsavedEdits
-    .getState()
-    .set("edit", { cluster: "c", label: "ConfigMap web", read: () => "mine" });
   render(<UnsavedGuard />);
   const close = vi.fn<() => void>();
   act(() => guardWorkspace("c", close));
-  expect(await screen.findByText("Close c?")).toBeDefined();
-  expect(
-    screen.getByText(
-      "1 Resource has unsaved edits. 1 Exec Session is running. A command still running in the container may keep running.",
-    ),
-  ).toBeDefined();
-  expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Discard and close" }));
   expect(close).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  act(() =>
+    useUnsavedEdits
+      .getState()
+      .set("edit", { cluster: "c", label: "ConfigMap web", read: () => "mine" }),
+  );
+  act(() => guardWorkspace("c", close));
+  expect(screen.getByText("Discard unsaved edits in c?")).toBeDefined();
+  expect(screen.getByText("1 Resource has unsaved edits.")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Discard and close" }));
+  expect(close).toHaveBeenCalledTimes(2);
 });
-it.each<[ExecState, boolean]>([
-  [{ phase: "starting" }, true],
-  [{ phase: "live" }, true],
-  [{ phase: "waiting" }, false],
-  [{ phase: "ended", reason: "lost" }, false],
-])("prompts at unload only for starting or live sessions: %j", (state, guarded) => {
-  session("id", state);
+
+it("guards held Tabs only and reports changed counts to the Host", () => {
   render(<UnsavedGuard />);
-  const event = new Event("beforeunload", { cancelable: true });
-  window.dispatchEvent(event);
-  expect(event.defaultPrevented).toBe(guarded);
+  const close = vi.fn<() => void>();
+  for (const [state, held] of [
+    [{ phase: "starting" }, true],
+    [{ phase: "attaching" }, true],
+    [{ phase: "live" }, true],
+    [{ phase: "reconnecting" }, true],
+    [{ phase: "waiting", attaching: true }, true],
+    [{ phase: "waiting" }, false],
+    [{ phase: "elsewhere" }, false],
+    [{ phase: "gone" }, false],
+    [{ phase: "ended", reason: "complete" }, false],
+    [{ phase: "failed", reason: "error" }, false],
+  ] as [ExecState, boolean][]) {
+    act(() => {
+      session("id", state);
+      useUnsavedEdits.getState().dismiss();
+      guardPanel("exec:id", close);
+    });
+    expect(!!useUnsavedEdits.getState().guard).toBe(held);
+    expect(reportOpenWork).toHaveBeenLastCalledWith({ edits: 0, sessions: Number(held) });
+  }
+  act(() => useUnsavedEdits.getState().set("edit", { cluster: "c", label: "Pod", read: () => "" }));
+  expect(reportOpenWork).toHaveBeenLastCalledWith({ edits: 1, sessions: 0 });
 });
+
+it.each(["web", "desktop"] as const)(
+  "refuses an unload on the %s Host according to open work",
+  (kind) => {
+    const desktop: Host = { ...host, kind };
+    render(
+      <HostProvider host={desktop}>
+        <Guard />
+      </HostProvider>,
+    );
+    for (const [state, held] of [
+      [{ phase: "live" }, true],
+      [{ phase: "reconnecting" }, true],
+      [{ phase: "elsewhere" }, false],
+      [{ phase: "waiting" }, false],
+    ] as [ExecState, boolean][]) {
+      act(() => session("id", state));
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(kind === "desktop" && held);
+    }
+    act(() =>
+      useUnsavedEdits.getState().set("edit", { cluster: "c", label: "Pod", read: () => "" }),
+    );
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  },
+);
 it("guards resource and Cluster actions and the Host unload until edits are discarded", async () => {
   useUnsavedEdits.getState().set("constructor", {
     cluster: "__proto__",
@@ -192,4 +230,42 @@ it.each(["button", "middle click"])("guards the Tab's %s close path", async (act
   fireEvent.click(screen.getByRole("button", { name: "Close web" }));
   fireEvent.click(screen.getByRole("button", { name: "Discard edits" }));
   expect(close).toHaveBeenCalledOnce();
+});
+
+it("mutes unattached session icons without striking their titles, and strikes sessions that are over", () => {
+  const api = {
+    id: "exec:id",
+    title: "web",
+    close: () => {},
+    onDidTitleChange: () => ({ dispose: () => {} }),
+    onDidActiveChange: () => ({ dispose: () => {} }),
+  } as unknown as Parameters<typeof PanelTab>[0]["api"];
+  const props = { api, params: {} } as Parameters<typeof PanelTab>[0];
+  const view = render(<PanelTab {...props} />);
+  for (const phase of [
+    "starting",
+    "attaching",
+    "live",
+    "reconnecting",
+    "elsewhere",
+    "waiting",
+    "ended",
+    "failed",
+    "gone",
+  ] as const) {
+    act(() =>
+      session(
+        "id",
+        phase === "ended" || phase === "failed" ? { phase, reason: "complete" } : { phase },
+      ),
+    );
+    const over = ["ended", "failed", "gone"].includes(phase);
+    expect(screen.getByText("web").classList.contains("line-through")).toBe(over);
+    expect(view.container.querySelector("svg")!.classList.contains("text-cluster")).toBe(
+      phase === "live" || phase === "starting",
+    );
+    expect(view.container.firstElementChild!.getAttribute("title")).toBe(
+      `Exec Session, ${phase === "elsewhere" ? "open in another window" : phase}: web`,
+    );
+  }
 });
