@@ -897,19 +897,61 @@ Added at Jim's direction after the reviews, as its own commit.
     texture of its own.
 - **The two renderers measure a cell differently** (issue 6015). A terminal
   takes its context before it is first sized, so a session starts at the
-  size WebGL gives it. A terminal whose context is lost keeps the DOM
-  renderer until it is next shown, and its grid may change size once, which
-  a shell sees as a resize.
+  size WebGL gives it. A terminal whose context is lost is sized again for
+  the DOM renderer, which it keeps until it is next shown. Its grid can
+  change size at the loss and again at that next showing, and a shell sees
+  each as a resize.
 - **Playwright's device-scale emulation misleads the add-on:** the canvas is
-  drawn at twice its size. With a real scale factor of 2
-  (`--force-device-scale-factor`) the text is sharp and in place, so the
-  hand check used that.
+  drawn at the wrong scale. With a real scale factor of 2
+  (`--force-device-scale-factor` and a `null` viewport) the text is sharp
+  and in place, so the hand check used that.
 - **Checked by hand** in Chromium at a scale factor of 2, in both themes:
   `top` through a resize, a flood of output, 40 switches between two
   sessions with no context warning, two terminals showing at once after a
   Tab was dragged to another Pane, and a context taken away with
   `WEBGL_lose_context`, after which both terminals carried on with the DOM
   renderer and their sessions answered. WebKit kept the DOM renderer.
+
+Two reviewers, one Codex and one Claude, then read this commit. What
+changed because of them:
+
+- **A lost context left the right-hand columns hidden.** The terminal went
+  back to the DOM renderer without being sized again, and a DOM cell is
+  wider, so the grid ran past the Pane's edge: 19 px in the end-to-end
+  test's Pane. The terminal is now sized again at the loss.
+- **A lost context left the terminal blank for 3 seconds,** which is how
+  long the add-on waits for the browser to give the context back, while
+  keys still reached the process. The terminal now returns to the DOM
+  renderer as soon as the context is lost.
+- **A start that failed was tried again at every resize,** and one that
+  failed after it had made a context left its canvases and the context
+  behind. A failed start now removes what it made, and no terminal in the
+  window tries again. A window without WebGL 2 makes one attempt.
+- **Text drawn before its part of the font arrived stayed in the fallback
+  font.** JetBrains Mono loads in parts by range of characters, and the
+  add-on keeps a glyph as it first drew it. The terminal now redraws its
+  glyphs when a font finishes loading. Checked with Cyrillic, Greek, and
+  Vietnamese text.
+- **The color that gives a terminal its own texture repeated after 343
+  terminals.** Each terminal now takes the lowest number no other terminal
+  has, and gives it back when it is disposed. Only Chromium gets the color.
+- **A detach function called after a later attachment** released that
+  attachment's context and its sizing. It now does nothing.
+- **Tests:** the WebGL test also checks that the canvas changes when a
+  command is typed, because Find reads the buffer and not the canvas, and
+  that the screen is no wider than its panel after the loss. A second test
+  makes WebGL 2 unavailable and reads the DOM renderer.
+
+Not changed, and accepted: no test fills the cap of 8 or checks that a
+context was freed, the desktop test keeps the DOM renderer, and the other
+session tests now run the renderer that Chromium users do not get. A start
+that fails after making a context leaves listeners inside the add-on that
+nothing can remove, which is why no terminal tries again. Whether the limit
+of 16 contexts counts one document or every window sharing a process was
+not checked; a context taken away falls back to the DOM renderer either
+way. A program can change color 16 with OSC 4, which would let two
+terminals share a texture again. The add-on is in the terminal's chunk in
+every browser, 126 KB minified, and runs only in Chromium.
 
 ## Measurements
 
