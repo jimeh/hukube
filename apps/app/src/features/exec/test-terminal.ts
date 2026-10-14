@@ -6,6 +6,7 @@ const noop = () => {};
 export function fakeTerminal() {
   let held = false;
   let data: (text: string) => void = noop;
+  let userInput: () => void = noop;
   let binary: (text: string) => void = noop;
   let resize: (size: { cols: number; rows: number }) => void = noop;
   let find: () => void = noop;
@@ -45,6 +46,12 @@ export function fakeTerminal() {
         data = noop;
       };
     },
+    onUserInput: (fn: () => void) => {
+      userInput = fn;
+      return () => {
+        userInput = noop;
+      };
+    },
     onBinary: (fn: typeof binary) => {
       binary = fn;
       return () => {
@@ -80,6 +87,7 @@ export function fakeTerminal() {
   return {
     terminal,
     data: (text: string) => data(text),
+    type: () => userInput(),
     binary: (text: string) => binary(text),
     resize: (cols: number, rows: number) => resize({ cols, rows }),
     find: () => find(),

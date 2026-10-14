@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   attachSession,
   detachClusterSessions,
+  dismissSkippedNotice,
   endSession,
   holdsSession,
   startSession,
@@ -325,6 +326,11 @@ it("takes an elsewhere session without resetting the terminal or starting a proc
   expect(s.terminal.reset).not.toHaveBeenCalled();
   s.streams[0]!.listener.event({ ...sync, offset: 30 });
   expect(s.state()?.phase).toBe("attaching");
+  expect(s.terminal.focus).not.toHaveBeenCalled();
+  await s.listener().event({ ...sync, offset: 10, replay: 4 });
+  expect(s.terminal.focus).not.toHaveBeenCalled();
+  await s.output("tail");
+  expect(s.terminal.focus).toHaveBeenCalledTimes(1);
 });
 
 it("detaches a Workspace without ending sessions and ends a held Tab once", async () => {
@@ -391,3 +397,37 @@ it("disposes a terminal loaded after its Tab closes without opening a stream", a
   expect(s.terminal.dispose).toHaveBeenCalledOnce();
   expect(s.openStream).not.toHaveBeenCalled();
 });
+
+it.each([
+  [
+    "first attachment",
+    "2.0 KiB of earlier output is not shown. The Engine keeps only a session's most recent output.",
+  ],
+  ["disconnected", "2.0 KiB of output was skipped while this window was disconnected"],
+  ["slow window", "2.0 KiB of output was skipped because this window was not keeping up"],
+])(
+  "keeps a visible skipped notice for %s, dismisses it on typing, and shows later skips",
+  async (kind, message) => {
+    const s = setup();
+    await s.attach();
+    if (kind !== "first attachment") {
+      await s.listener().event(sync);
+      await s.output("prompt");
+    }
+    if (kind === "disconnected") await s.listener().state("reconnecting");
+    await s.listener().event({ ...sync, offset: 4096, reset: true, skipped: 2048 });
+    const notice = () => useExecSessions.getState().entries.get(params.sessionId)?.skippedNotice;
+    expect(notice()).toBe(message);
+    dismissSkippedNotice(params.sessionId);
+    await s.output("more");
+    expect(notice()).toBeUndefined();
+    await s.listener().event({ ...sync, offset: 8192, reset: true, skipped: 4096 });
+    expect(notice()).toBe("4.0 KiB of output was skipped because this window was not keeping up");
+    s.type();
+    expect(notice()).toBeUndefined();
+    await s.listener().event({ ...sync, offset: 16384, reset: true, skipped: 8192 });
+    expect(notice()).toContain("8.0 KiB");
+    await s.listener().state("reconnecting");
+    expect(notice()).toBeUndefined();
+  },
+);

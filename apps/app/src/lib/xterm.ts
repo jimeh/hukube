@@ -379,6 +379,10 @@ export function createExecTerminal(): ExecTerminal {
       const d = terminal.onData(fn);
       return () => d.dispose();
     },
+    onUserInput: (fn) => {
+      const d = terminal.onKey(fn);
+      return () => d.dispose();
+    },
     onBinary: (fn) => {
       const d = terminal.onBinary(fn);
       return () => d.dispose();

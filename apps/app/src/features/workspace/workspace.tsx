@@ -26,6 +26,8 @@ import {
   type ExecSessionParams,
 } from "../exec/sessions.ts";
 
+import { rememberSessionTab, forgetSessionTab, restoreSessionTabs } from "../exec/window-tabs.ts";
+
 import { openPanel, pinPanel, type ListPanelParams, type ResourcePanelParams } from "./dock.ts";
 import { PanelTab } from "./panel-tab.tsx";
 import { StatusBar } from "./status-bar.tsx";
@@ -67,22 +69,33 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
     [colorScheme],
   );
 
-  useLayoutPersistence(api, cluster);
-  useEffect(() => () => detachClusterSessions(cluster), [cluster]);
+  useLayoutPersistence(api, cluster, () => {
+    if (api) restoreSessionTabs(api, cluster);
+  });
   useEffect(() => {
     if (!api) return;
     const attach = (panel: (typeof api.panels)[number]) => {
-      if (panel.id.startsWith("exec:"))
-        void attachSession(engine, cluster, panel.params as ExecSessionParams);
+      if (panel.id.startsWith("exec:")) {
+        const params = panel.params as ExecSessionParams;
+        rememberSessionTab(cluster, {
+          params,
+          title: panel.api.title ?? `${params.container} in ${params.pod}`,
+        });
+        void attachSession(engine, cluster, params);
+      }
     };
     for (const panel of api.panels) attach(panel);
     const added = api.onDidAddPanel(attach);
     const d = api.onDidRemovePanel((event) => {
-      if (event.id.startsWith("exec:")) endSession(event.id.slice(5));
+      if (event.id.startsWith("exec:")) {
+        forgetSessionTab(cluster, event.id.slice(5));
+        endSession(event.id.slice(5));
+      }
     });
     return () => {
       added.dispose();
       d.dispose();
+      detachClusterSessions(cluster);
     };
   }, [api, engine, cluster]);
 

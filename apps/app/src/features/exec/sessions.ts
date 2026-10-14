@@ -50,6 +50,7 @@ export interface ExecTerminal {
   refit(): Promise<void>;
   theme(): void;
   onData(fn: (data: string) => void): () => void;
+  onUserInput(fn: () => void): () => void;
   onBinary(fn: (data: string) => void): () => void;
   onResize(fn: (size: { cols: number; rows: number }) => void): () => void;
   hasSelection(): boolean;
@@ -72,6 +73,7 @@ export interface ExecSession {
   stream?: EngineStream;
   engine?: EngineClient;
   hasOutput?: boolean;
+  skippedNotice?: string;
   synced?: boolean;
   offset?: number;
 }
@@ -80,6 +82,7 @@ interface Sessions {
 }
 export const useExecSessions = create<Sessions>(() => ({ entries: new Map() }));
 const cleanups = new Map<string, () => void>();
+const dismissals = new Map<string, () => void>();
 const runs = new Map<string, object>();
 let terminalModule: Promise<typeof TerminalModule> | undefined;
 const terminalFactory = async () => {
@@ -179,6 +182,11 @@ async function openSession(
     offset: intent === "take" ? previous?.offset : undefined,
   };
   put(id, session);
+  dismissals.set(id, () => {
+    if (!session.skippedNotice) return;
+    session.skippedNotice = undefined;
+    put(id, { ...session });
+  });
   const run = {};
   runs.set(id, run);
   const current = () => runs.get(id) === run;
@@ -188,6 +196,7 @@ async function openSession(
   const publish = (state: ExecState) => {
     if (!current()) return;
     session.state = state;
+    if (state.phase !== "live") session.skippedNotice = undefined;
     const over = ["ended", "failed", "gone"].includes(state.phase);
     session.terminal?.setEnded(over);
     session.terminal?.setAttached(attached && !over && state.phase !== "elsewhere");
@@ -195,6 +204,14 @@ async function openSession(
       pendingControls > 0 || replaying || !attached || state.phase !== "live",
     );
     put(id, { ...session });
+    if (intent === "take" && state.phase === "live" && !replaying && pendingControls === 0)
+      focusTakenSession();
+  };
+  let focusPending = intent === "take";
+  const focusTakenSession = () => {
+    if (!focusPending) return;
+    focusPending = false;
+    session.terminal?.focus();
   };
   let terminal: ExecTerminal;
   try {
@@ -253,6 +270,8 @@ async function openSession(
     terminal.holdInput(
       pendingControls > 0 || replaying || !attached || session.state.phase !== "live",
     );
+    if (session.state.phase === "live" && !replaying && pendingControls === 0 && attached)
+      focusTakenSession();
   };
   const stream = engine.openStream(
     "pod.exec",
@@ -287,7 +306,10 @@ async function openSession(
           if (sync.reset) {
             await write("\x18\x1bc");
             terminal.restoreOptions();
-            if (sync.skipped) await write(`\x1b[2m[hukube: ${skipped}]\x1b[0m\r\n`);
+            if (sync.skipped) {
+              await write(`\x1b[2m[hukube: ${skipped}]\x1b[0m\r\n`);
+              session.skippedNotice = skipped;
+            }
             if (sync.restore) await write(sync.restore);
           }
           position = sync.offset;
@@ -381,6 +403,11 @@ async function openSession(
   };
   cleanups.set(id, () => offs.forEach((off) => off()));
   const offs = [
+    terminal.onUserInput(() => {
+      if (!current() || !session.skippedNotice) return;
+      session.skippedNotice = undefined;
+      put(id, { ...session });
+    }),
     terminal.onData((text) => input(new TextEncoder().encode(text))),
     terminal.onBinary((text) => input(Uint8Array.from(text, (char) => char.charCodeAt(0)))),
     terminal.onResize(({ cols, rows }) => {
@@ -394,6 +421,7 @@ async function openSession(
 function removeSession(id: string): ExecSession | undefined {
   const session = useExecSessions.getState().entries.get(id);
   runs.delete(id);
+  dismissals.delete(id);
   chains.delete(id);
   cleanups.get(id)?.();
   cleanups.delete(id);
@@ -449,4 +477,8 @@ export function endSession(id: string): void {
 export function detachClusterSessions(cluster: string): void {
   for (const [id, session] of useExecSessions.getState().entries)
     if (session.cluster === cluster) removeSession(id);
+}
+
+export function dismissSkippedNotice(id: string): void {
+  dismissals.get(id)?.();
 }

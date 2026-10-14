@@ -5,13 +5,19 @@ import { useEffect, useEffectEvent } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { Workspace } from "./workspace.tsx";
 import { detachClusterSessions, startSession, useExecSessions } from "../exec/sessions.ts";
+import { readSessionTabs, rememberSessionTab } from "../exec/window-tabs.ts";
 import { fakeTerminal } from "../exec/test-terminal.ts";
 
 const mocks = vi.hoisted(() => ({
+  addOptions: [] as {
+    inactive: boolean;
+    params: { preview: boolean };
+    position: { referenceGroup: { id: string } };
+  }[],
   watch: undefined as SubscriptionListener<Setting> | undefined,
-  added: new Set<(panel: { id: string; params: unknown }) => void>(),
+  added: new Set<(panel: { id: string; params: unknown; api: { title: string } }) => void>(),
   removed: new Set<(panel: { id: string }) => void>(),
-  panels: [] as { id: string; params: unknown }[],
+  panels: [] as { id: string; params: unknown; api: { title: string } }[],
   streams: [] as { params: Record<string, unknown>; listener: StreamListener<"pod.exec"> }[],
   request: vi.fn<(...args: unknown[]) => Promise<undefined>>(() => Promise.resolve(undefined)),
   terminals: [] as ReturnType<typeof fakeTerminal>[],
@@ -72,10 +78,19 @@ vi.mock("dockview-react", () => ({
         },
         fromJSON: () => {
           for (const id of ["visible", "hidden"]) {
-            const panel = { id: `exec:${id}`, params: params(id) };
+            const panel = { id: `exec:${id}`, params: params(id), api: { title: id } };
             mocks.panels.push(panel);
             for (const fn of mocks.added) fn(panel);
           }
+        },
+        activeGroup: { id: "active-pane" },
+        groups: [{ id: "first-pane" }],
+        getPanel: (id: string) => mocks.panels.find((panel) => panel.id === id),
+        addPanel: (options: (typeof mocks.addOptions)[number] & { id: string; title: string }) => {
+          mocks.addOptions.push(options);
+          const panel = { ...options, api: { title: options.title } };
+          mocks.panels.push(panel);
+          for (const fn of mocks.added) fn(panel);
         },
         toJSON: () => ({}),
         clear: () => {},
@@ -98,11 +113,13 @@ afterEach(() => {
   cleanup();
   detachClusterSessions("c");
   mocks.panels = [];
+  mocks.addOptions = [];
   mocks.streams = [];
   mocks.terminals = [];
   mocks.added.clear();
   mocks.removed.clear();
   mocks.request.mockClear();
+  sessionStorage.clear();
 });
 
 it("attaches every restored Tab including a hidden panel, without starting or attaching twice", async () => {
@@ -135,4 +152,74 @@ it("ends a removed session Tab but detaches before dockview removes panels on Wo
   view.unmount();
   expect(mocks.request).toHaveBeenCalledTimes(1);
   expect(useExecSessions.getState().entries.size).toBe(0);
+});
+
+it("recovers this window's missing session Tab after the shared layout restores, without start", async () => {
+  rememberSessionTab("c", { params: params("local"), title: "My session" });
+  const view = render(<Workspace cluster="c" active />);
+  expect(mocks.panels).toHaveLength(0);
+  act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+  await vi.waitFor(() => expect(mocks.streams).toHaveLength(3));
+  expect(mocks.panels.find((panel) => panel.id === "exec:local")?.api.title).toBe("My session");
+  expect(mocks.addOptions).toMatchObject([
+    {
+      inactive: true,
+      params: { preview: false },
+      position: { referenceGroup: { id: "active-pane" } },
+    },
+  ]);
+  expect(mocks.streams.every((stream) => !("start" in stream.params))).toBe(true);
+  act(() => {
+    for (const fn of mocks.removed) fn({ id: "exec:local" });
+  });
+  expect(readSessionTabs("c").map((tab) => tab.params.sessionId)).not.toContain("local");
+  view.unmount();
+  expect(readSessionTabs("c").map((tab) => tab.params.sessionId)).toEqual(["visible", "hidden"]);
+  mocks.panels = [];
+  mocks.addOptions = [];
+  mocks.streams = [];
+  render(<Workspace cluster="c" active />);
+  act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+  await vi.waitFor(() => expect(mocks.streams).toHaveLength(2));
+  expect(mocks.panels.some((panel) => panel.id === "exec:local")).toBe(false);
+});
+
+it.each(["broken JSON", "null", "{}", '[null, {"title": "bad", "params": {"sessionId": "bad"}}]'])(
+  "ignores malformed window-local storage: %s",
+  async (stored) => {
+    sessionStorage.setItem("hukube.exec.tabs/c", stored);
+    expect(readSessionTabs("c")).toEqual([]);
+    render(<Workspace cluster="c" active />);
+    act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+    await vi.waitFor(() => expect(mocks.streams).toHaveLength(2));
+    expect(mocks.panels).toHaveLength(2);
+  },
+);
+
+it("normalizes untrusted params and keeps hostile names safe and Clusters separate", () => {
+  const entry = {
+    params: {
+      ...params("constructor"),
+      pod: "__proto__",
+      container: "constructor",
+      start: true,
+      takeover: true,
+      command: ["unsafe"],
+      preview: true,
+    },
+    title: "Local",
+  };
+  sessionStorage.setItem("hukube.exec.tabs/c", JSON.stringify([entry, entry]));
+  expect(readSessionTabs("c")).toEqual([
+    {
+      title: "Local",
+      params: {
+        ...params("constructor"),
+        pod: "__proto__",
+        container: "constructor",
+        preview: false,
+      },
+    },
+  ]);
+  expect(readSessionTabs("other")).toEqual([]);
 });

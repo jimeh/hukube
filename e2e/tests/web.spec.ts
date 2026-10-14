@@ -352,7 +352,7 @@ test("shows a gone session after its own Engine restarts", async ({ page }) => {
     await expect(panel.getByText("Gone", { exact: true })).toBeVisible();
     await expect(
       panel.getByText(
-        "This session is gone. The Engine restarted, or the session was told to exit after 10 minutes with no window attached.",
+        "This session is gone. It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached.",
       ),
     ).toBeVisible();
     await expect(panel.getByRole("button", { name: "Start a new session" })).toBeVisible();

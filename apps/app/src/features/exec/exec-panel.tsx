@@ -35,6 +35,7 @@ import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { execContainers, execDisabledReason } from "./containers.ts";
 import { execKeyLabels } from "./keys.ts";
 import {
+  dismissSkippedNotice,
   startSession,
   takeSession,
   useExecSessions,
@@ -285,31 +286,47 @@ export function ExecPanel({
           <ContextMenuTrigger
             render={<div className="relative min-h-0 flex-1 overflow-hidden px-3 py-2" />}
           >
-            <div ref={body} className="h-full min-h-0" />
+            <div ref={body} className="isolate h-full min-h-0" />
             {state?.phase === "reconnecting" && (
-              <output className="absolute inset-x-0 bottom-0 bg-background/90 px-3 py-2 text-muted-foreground">
+              <output className="absolute inset-x-0 bottom-0 border-t bg-background px-3 py-2 text-muted-foreground">
                 Reconnecting to the Engine. The session keeps running, and the Engine keeps its
                 recent output.
               </output>
             )}
+            {state?.phase === "live" && session?.skippedNotice && (
+              <output className="absolute inset-x-0 bottom-0 flex items-start gap-2 border-t bg-background px-3 py-2 text-muted-foreground">
+                <span className="min-w-0 flex-1">{session.skippedNotice}</span>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label="Dismiss"
+                  onClick={() => dismissSkippedNotice(params.sessionId)}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} />
+                </Button>
+              </output>
+            )}
             {state?.phase === "elsewhere" && (
               <div className="absolute inset-0 flex items-center justify-center overflow-auto bg-background/80 p-3">
-                <Notice
-                  title="This session is open in another window"
-                  description="An Exec Session shows in one window at a time. Using it here detaches the other window."
-                  action={
-                    <Button
-                      ref={restartButton}
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        void takeSession(engine, cluster, params);
-                      }}
-                    >
-                      Use it here
-                    </Button>
-                  }
-                />
+                <div className="w-full min-w-0 max-w-sm rounded-md border bg-popover p-1 shadow-md">
+                  <Notice
+                    title="This session is open in another window"
+                    description="An Exec Session shows in one window at a time. Using it here detaches the other window."
+                    action={
+                      <Button
+                        ref={restartButton}
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          void takeSession(engine, cluster, params);
+                        }}
+                      >
+                        Use it here
+                      </Button>
+                    }
+                  />
+                </div>
               </div>
             )}
             {finding && terminal && (
@@ -377,7 +394,7 @@ export function ExecPanel({
 }
 
 const goneReason =
-  "The Engine restarted, or the session was told to exit after 10 minutes with no window attached.";
+  "It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached.";
 const goneDescription = `The Engine no longer has it. ${goneReason}`;
 
 function Shortcut({ children }: { children?: string }) {
