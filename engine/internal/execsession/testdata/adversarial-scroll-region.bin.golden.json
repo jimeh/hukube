@@ -1,0 +1,14 @@
+{
+  "safe": "QAAC",
+  "samples": [
+    {
+      "at": 7,
+      "restore": "\u001b[2;10r\u001b[?25h"
+    },
+    {
+      "at": 18,
+      "restore": "\u001b[2;10r\u001b[?25h"
+    }
+  ],
+  "attachments": []
+}

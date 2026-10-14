@@ -46,6 +46,9 @@ func init() {
 		if err != nil {
 			return streamError(err)
 		}
+		if ctx.Err() != nil {
+			return protocol.StreamEnd{Reason: protocol.StreamEndReasonDetached}
+		}
 		a, err := s.execs.Open(p, execCluster{c}, c.Index, q.signal, q.acknowledgeInput)
 		if err != nil {
 			return streamError(err)

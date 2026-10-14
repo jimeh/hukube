@@ -25,6 +25,8 @@ import { useExecSessions, endSession, type ExecState } from "../exec/sessions.ts
 // Imported here, not inside a test: loading the icon set takes seconds on a
 // slow machine, which would count against the first test's time limit.
 import { PanelTab } from "../workspace/panel-tab.tsx";
+vi.mock("../workspace/workspace-context.tsx", () => ({ useWorkspace: () => ({ cluster: "c" }) }));
+
 afterEach(() => {
   cleanup();
   for (const id of useExecSessions.getState().entries.keys()) endSession(id);

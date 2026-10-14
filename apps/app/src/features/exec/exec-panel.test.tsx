@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest";
 import { ExecPanel } from "./exec-panel.tsx";
 import { endSession, useExecSessions, type ExecState } from "./sessions.ts";
+import { readSessionTabs, rememberSessionTab } from "./window-tabs.ts";
 import { fakeTerminal } from "./test-terminal.ts";
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
 
@@ -70,6 +71,7 @@ function view(state?: ExecState) {
 }
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   endSession("id");
   close.mockClear();
   openResource.mockClear();
@@ -461,4 +463,14 @@ it("shows skipped output over the terminal and Dismiss hides it through later ou
   act(() => mocked.terminal!.type());
   expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   expect(mocked.terminal!.terminal.element.parentElement).toBe(area);
+});
+
+it("forgets and disposes a waiting start when Cancel closes its Tab", () => {
+  rememberSessionTab("c", { params, title: "waiting" });
+  view({ phase: "waiting" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(close).toHaveBeenCalledOnce();
+  expect(useExecSessions.getState().entries.has("id")).toBe(false);
+  expect(mocked.terminal!.terminal.dispose).toHaveBeenCalledOnce();
+  expect(readSessionTabs("c")).toEqual([]);
 });

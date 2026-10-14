@@ -224,3 +224,22 @@ func TestExecRingWindowAndDrain(t *testing.T) {
 		})
 	}
 }
+
+func TestPodExecCancelledBeforeOpen(t *testing.T) {
+	p := execPod(t)
+	srv, _ := execServer(t, p)
+	pending := execParams(p)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	q := newStreamQueue(defaultStreamLimits)
+	q.attached = make(chan struct{})
+	streams[protocol.StreamPodExec.Name](ctx, srv, params(pending), q)
+	if q.attachment != nil {
+		t.Fatal("cancelled handler opened a session")
+	}
+	pending.Start = false
+	if a, err := srv.execs.Open(pending, nil, nil, func() {}, nil); err == nil {
+		a.Detach()
+		t.Fatal("cancelled handler retained a session")
+	}
+}

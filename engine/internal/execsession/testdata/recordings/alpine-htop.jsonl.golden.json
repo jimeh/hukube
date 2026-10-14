@@ -79,23 +79,23 @@
     },
     {
       "at": 55,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?25h"
+      "restore": "\u001b[?1049h\u001b[?25h"
     },
     {
       "at": 998,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "at": 4986,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "at": 5983,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "at": 8974,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "at": 15268,
@@ -108,14 +108,14 @@
       "at": 3396,
       "ring": 512,
       "cut": 2885,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "painted",
       "at": 3396,
       "ring": 2048,
       "cut": 1349,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "painted",
@@ -143,14 +143,14 @@
       "at": 3396,
       "ring": 512,
       "cut": 2885,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "before-same",
       "at": 3396,
       "ring": 2048,
       "cut": 1349,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "before-same",
@@ -178,14 +178,14 @@
       "at": 3766,
       "ring": 512,
       "cut": 3256,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-same",
       "at": 3766,
       "ring": 2048,
       "cut": 1718,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-same",
@@ -213,14 +213,14 @@
       "at": 6757,
       "ring": 512,
       "cut": 6245,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-shrink",
       "at": 6757,
       "ring": 2048,
       "cut": 4709,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-shrink",
@@ -248,21 +248,21 @@
       "at": 9670,
       "ring": 512,
       "cut": 9158,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-restore",
       "at": 9670,
       "ring": 2048,
       "cut": 7622,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-restore",
       "at": 9670,
       "ring": 8192,
       "cut": 1481,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-restore",
@@ -283,21 +283,21 @@
       "at": 12583,
       "ring": 512,
       "cut": 12071,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-nudge",
       "at": 12583,
       "ring": 2048,
       "cut": 10535,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-nudge",
       "at": 12583,
       "ring": 8192,
       "cut": 4391,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "after-nudge",
@@ -318,21 +318,21 @@
       "at": 15247,
       "ring": 512,
       "cut": 14735,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "left",
       "at": 15247,
       "ring": 2048,
       "cut": 13203,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "left",
       "at": 15247,
       "ring": 8192,
       "cut": 7059,
-      "restore": "\u001b[?1049h\u001b[1;24r\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
+      "restore": "\u001b[?1049h\u001b[?1h\u001b[?25l\u001b[?66h\u001b[?1000h\u001b[?1006h"
     },
     {
       "mark": "left",

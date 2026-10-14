@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 
 import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
-import { savedSessionLayout } from "./exec.ts";
+import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 
@@ -46,7 +46,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
   const openPod = async (name: string) => {
-    await page.keyboard.press("ControlOrMeta+K");
+    await openGoToResource(page);
     await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${name}`);
     await page.getByRole("option", { name: new RegExp(`^Pod ${name} ${namespace}$`) }).click();
     const pod = page
@@ -225,7 +225,7 @@ async function openSession(page: Page, pod: string) {
   kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${pod}`, "--timeout=60s");
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+K");
+  await openGoToResource(page);
   await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/${pod}`);
   await page.getByRole("option", { name: new RegExp(`^Pod ${pod} ${namespace}$`) }).click();
   await page
@@ -544,7 +544,7 @@ test("goes to a Resource and a Resource Type from the palette", async ({ page })
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
 
   // A Namespace and a type prefix scope a fuzzy match on the name.
-  await page.keyboard.press("ControlOrMeta+K");
+  await openGoToResource(page);
   const input = page.getByRole("combobox", { name: "Go to Resource" });
   // Type at a human pace, so results for earlier text arrive while typing.
   await input.pressSequentially(`${namespace}/cm/e2epal`, { delay: 100 });
@@ -1191,7 +1191,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
   const open = async (query: string) => {
-    await page.keyboard.press("ControlOrMeta+K");
+    await openGoToResource(page);
     await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/${query}`);
     await expect(
       page.getByRole("option", { name: new RegExp(query.split("/").at(-1)!) }),

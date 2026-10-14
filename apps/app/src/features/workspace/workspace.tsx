@@ -20,13 +20,13 @@ import { ExecPanel } from "../exec/exec-panel.tsx";
 import {
   attachSession,
   detachClusterSessions,
-  endSession,
+  detachSession,
   sessionId,
   startSession,
   type ExecSessionParams,
 } from "../exec/sessions.ts";
 
-import { rememberSessionTab, forgetSessionTab, restoreSessionTabs } from "../exec/window-tabs.ts";
+import { rememberSessionTab, restoreSessionTabs } from "../exec/window-tabs.ts";
 
 import { openPanel, pinPanel, type ListPanelParams, type ResourcePanelParams } from "./dock.ts";
 import { PanelTab } from "./panel-tab.tsx";
@@ -88,8 +88,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
     const added = api.onDidAddPanel(attach);
     const d = api.onDidRemovePanel((event) => {
       if (event.id.startsWith("exec:")) {
-        forgetSessionTab(cluster, event.id.slice(5));
-        endSession(event.id.slice(5));
+        detachSession(event.id.slice(5));
       }
     });
     return () => {

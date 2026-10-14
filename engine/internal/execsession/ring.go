@@ -9,7 +9,7 @@ type ring struct {
 	tracker      *tracker
 }
 
-func newRing(limit int) *ring { return &ring{limit: limit, tracker: newTracker()} }
+func newRing(limit int) *ring { return &ring{limit: limit, tracker: newTracker(24)} }
 
 func (r *ring) append(data []byte) {
 	if len(data) == 0 {
@@ -67,7 +67,7 @@ func (r *ring) bytes(at uint64, n int) []byte {
 func (r *ring) cut() (at uint64, t *tracker, safe bool) {
 	defer func() {
 		if recover() != nil {
-			at, t, safe = r.start, newTracker(), true
+			at, t, safe = r.start, newTracker(r.tracker.rows), true
 		}
 	}()
 	t = r.tracker.clone()

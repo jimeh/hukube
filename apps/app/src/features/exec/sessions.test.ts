@@ -313,6 +313,7 @@ it("takes an elsewhere session without resetting the terminal or starting a proc
   const s = setup();
   await s.attach();
   await s.listener().event({ ...sync, offset: 10 });
+  await s.output("parsed");
   await s.listener().end({ reason: "detached" });
   expect(s.state()?.phase).toBe("elsewhere");
   expect(s.terminal.setEnded).toHaveBeenLastCalledWith(false);
@@ -320,6 +321,7 @@ it("takes an elsewhere session without resetting the terminal or starting a proc
   await takeSession(s.engine, "c", params);
   expect(s.openStream.mock.calls[1]![1]).toMatchObject({
     takeover: true,
+    resume: 16,
     session: params.sessionId,
   });
   expect(s.openStream.mock.calls[1]![1]).not.toHaveProperty("start");

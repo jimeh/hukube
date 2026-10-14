@@ -10,7 +10,7 @@ interface Core {
   _inputHandler: { _parser: { currentState: number }; _utf8Decoder: { interim: number[] } };
   coreService: {
     isCursorHidden: boolean;
-    decPrivateModes: { cursorStyle: unknown; cursorBlink: unknown };
+    decPrivateModes: { cursorStyle: unknown; cursorBlink: unknown; synchronizedOutput: boolean };
   };
   coreMouseService: { activeEncoding: unknown };
   buffer: { scrollTop: number; scrollBottom: number };
@@ -36,6 +36,7 @@ function modes(term: Terminal) {
     }),
     cursorStyle: c.coreService.decPrivateModes.cursorStyle,
     cursorBlink: c.coreService.decPrivateModes.cursorBlink,
+    synchronizedOutput: c.coreService.decPrivateModes.synchronizedOutput,
     blinkOption: term.options.cursorBlink,
     convertEol: term.options.convertEol,
   };

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -494,4 +495,200 @@ func errorDetail(t *testing.T, err error) *protocol.ErrorDetail {
 		t.Fatalf("expected protocol error, got %v", err)
 	}
 	return detail
+}
+
+// An invalid cut-short sequence must not prevent replay from finishing.
+func TestProbeReplayStallsAfterInvalidSequence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := live(t)
+		syncOf(t, f.a)
+		// "ok", a 4-byte lead with one continuation (invalid: cut short by
+		// the next lead), then the first byte of an em dash still being written.
+		f.write([]byte{'o', 'k', 0xf0, 0x9f, 0xe2})
+		f.a.Detach()
+		p := f.p
+		p.Start = false
+		a := f.attach(t, p)
+		s := syncOf(t, a)
+		t.Logf("sync=%+v total=%d", s, a.session.ring.total)
+		got := outputOf(t, a)
+		if !bytes.Equal(got, []byte{'o', 'k', 0xf0, 0x9f}) {
+			t.Errorf("replayed=%x", got)
+		}
+		t.Logf("replayed=%x position=%d replayEnd=%d", got, a.position, a.replayEnd)
+		// The rest of the em dash, and then a prompt, arrive.
+		f.write([]byte{0x80, 0x94, '$', ' '})
+		more := outputOf(t, a)
+		if !bytes.Equal(more, []byte{0xe2, 0x80, 0x94, '$', ' '}) {
+			t.Errorf("live output=%x", more)
+		}
+		t.Logf("after more output=%x position=%d replayEnd=%d total=%d", more, a.position, a.replayEnd, a.session.ring.total)
+		if a.position < a.replayEnd {
+			t.Errorf("replay stalled at %d of %d; live output after it is never sent", a.position, a.replayEnd)
+		}
+	})
+}
+
+func TestReviewRepaintAfterReturningToShell(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := live(t)
+		f.do(func(o remotecommand.StreamOptions) { o.TerminalSizeQueue.Next() })
+		f.write([]byte("\x1b[?1049h"))
+		f.write(bytes.Repeat([]byte{'x'}, DefaultBuffer+32))
+		f.write([]byte("\x1b[?1049l/ # echo half-typed"))
+		current := f.a.session.ring.tracker.clone()
+		current.write(f.a.session.ring.bytes(f.a.session.ring.start, DefaultBuffer))
+		if current.alt {
+			t.Fatal("setup did not return to the normal screen")
+		}
+		s := syncOf(t, f.a)
+		if !s.Reset {
+			t.Fatal("setup did not require catch-up")
+		}
+		if len(f.a.session.sizes.nudge) != 0 {
+			t.Fatalf("normal-screen shell was nudged from historical cut modes: restore=%q sizes=%v", s.Restore, f.a.session.sizes.nudge)
+		}
+	})
+}
+
+func TestReviewInvalidScrollRegionPreservesPreviousRegion(t *testing.T) {
+	tr := newTracker(24)
+	tr.write([]byte("\x1b[2;10r\x1b[999;1000r"))
+	if tr.restore() != "\x1b[2;10r\x1b[?25h" {
+		t.Fatalf("restore=%q, want previously valid region 2;10 at a 24-row terminal", tr.restore())
+	}
+}
+
+func TestTrackerScrollRegionRows(t *testing.T) {
+	for _, tc := range []struct {
+		sequence string
+		want     [2]int
+	}{
+		{"\x1b[2;10r\x1b[999;1000r", [2]int{2, 10}},
+		{"\x1b[2;10r\x1b[24r", [2]int{2, 10}},
+		{"\x1b[2;10r\x1b[10;10r", [2]int{2, 10}},
+		{"\x1b[2;0r", [2]int{2, 24}},
+		{"\x1b[2;1000r", [2]int{2, 24}},
+		{"\x1b[0;0r", [2]int{}},
+	} {
+		tr := newTracker(24)
+		tr.write([]byte(tc.sequence))
+		if tr.region[0] != tc.want {
+			t.Errorf("%q: region=%v want %v", tc.sequence, tr.region[0], tc.want)
+		}
+	}
+}
+
+func TestTrackerSynchronizedOutput(t *testing.T) {
+	tr := newTracker(24)
+	tr.write([]byte("\x1b[?2026h"))
+	if !strings.Contains(tr.restore(), "\x1b[?2026h") {
+		t.Fatalf("synchronized output not restored: %q", tr.restore())
+	}
+	tr.write([]byte("\x1b[?2026l"))
+	if strings.Contains(tr.restore(), "2026") {
+		t.Fatalf("synchronized output not cleared: %q", tr.restore())
+	}
+}
+
+func TestRegistryEndBeforeStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := live(t)
+		p := f.p
+		p.Session = "pending"
+		end := protocol.ExecEndParams{Cluster: p.Cluster, Session: p.Session}
+		if err := f.r.End(end); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.r.Open(p, f.c, f.idx, func() {}, nil); err == nil || errorDetail(t, err).Reason != protocol.ExecReasonSessionGone || errorDetail(t, err).Code != protocol.ErrorCodeNotFound {
+			t.Fatalf("ended pending start=%v", err)
+		}
+		if registryCount(f.r) != 1 {
+			t.Fatal("pending start created a session")
+		}
+		a := f.attach(t, p)
+		if err := f.r.End(end); err != nil {
+			t.Fatal(err)
+		}
+		<-a.session.done
+		if err := f.r.End(end); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Minute) // Fake clock advances past the remembered end's lifetime.
+		f.attach(t, p)
+	})
+}
+
+func TestRegistryHangingUpCountsTowardLimit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := live(t)
+		sessions := []*Session{f.a.session}
+		p := f.p
+		for i := 1; i < MaxSessions; i++ {
+			p.Session = fmt.Sprint(i)
+			sessions = append(sessions, f.attach(t, p).session)
+		}
+		synctest.Wait()
+		for _, s := range sessions {
+			if err := f.r.End(protocol.ExecEndParams{Cluster: p.Cluster, Session: s.params.Session}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		synctest.Wait() // Every executor is now hanging up, before its fake deadline.
+		p.Session = "extra"
+		if _, err := f.r.Open(p, f.c, f.idx, func() {}, nil); err == nil || errorDetail(t, err).Reason != protocol.ExecReasonTooManySessions {
+			t.Fatalf("start during hang-up=%v", err)
+		}
+		for _, s := range sessions {
+			<-s.done
+		}
+		f.attach(t, p)
+	})
+}
+
+func TestTrackerUsesResizedRows(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := live(t)
+		f.a.Resize(80, 40)
+		f.write([]byte("\x1b[35;1000r"))
+		f.write(bytes.Repeat([]byte{'x'}, DefaultBuffer+1))
+		if s := syncOf(t, f.a); !strings.Contains(s.Restore, "\x1b[35;40r") {
+			t.Fatalf("resized scroll region=%q", s.Restore)
+		}
+	})
+}
+
+func TestRegistryEndedBoundAndRefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := live(t)
+		p := f.p
+		for i := range 256 {
+			if err := f.r.End(protocol.ExecEndParams{Cluster: p.Cluster, Session: fmt.Sprint(i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(30 * time.Second) // Fake clock separates the refreshed entry's age.
+		if err := f.r.End(protocol.ExecEndParams{Cluster: p.Cluster, Session: "0"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.r.End(protocol.ExecEndParams{Cluster: p.Cluster, Session: "new"}); err != nil {
+			t.Fatal(err)
+		}
+		p.Session = "1"
+		f.attach(t, p) // The oldest entry, rather than the refreshed one, was dropped.
+		p.Session = "0"
+		if _, err := f.r.Open(p, f.c, f.idx, func() {}, nil); err == nil || errorDetail(t, err).Reason != protocol.ExecReasonSessionGone {
+			t.Fatalf("refreshed end=%v", err)
+		}
+		if len(f.r.ended) > 256 {
+			t.Fatalf("unbounded remembered ends: %d", len(f.r.ended))
+		}
+		time.Sleep(30 * time.Second) // The initial entries expire at exactly one minute.
+		p.Session = "2"
+		f.attach(t, p)
+		p.Session = "new"
+		if _, err := f.r.Open(p, f.c, f.idx, func() {}, nil); err == nil || errorDetail(t, err).Reason != protocol.ExecReasonSessionGone {
+			t.Fatalf("newer entry expired too early: %v", err)
+		}
+	})
 }

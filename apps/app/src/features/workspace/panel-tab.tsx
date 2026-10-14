@@ -8,6 +8,9 @@ import { useEffect, useRef, useState } from "react";
 import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { useExecSessions } from "../exec/sessions.ts";
 
+import { closeSessionTab } from "../exec/window-tabs.ts";
+import { useWorkspace } from "./workspace-context.tsx";
+
 import { pinPanel } from "./dock.ts";
 
 /**
@@ -15,6 +18,7 @@ import { pinPanel } from "./dock.ts";
  * middle-clicking closes the tab.
  */
 export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: boolean }>) {
+  const { cluster } = useWorkspace();
   const dirty = useUnsavedEdits((state) => state.entries.has(api.id));
   const exec = api.id.startsWith("exec:");
   const phase = useExecSessions((state) =>
@@ -33,7 +37,11 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
     });
     return () => d.dispose();
   }, [api]);
-  const close = () => guardPanel(api.id, () => api.close());
+  const close = () =>
+    guardPanel(api.id, () => {
+      if (exec) closeSessionTab(cluster, api.id.slice(5));
+      api.close();
+    });
   const [title, setTitle] = useState(api.title ?? "");
   useEffect(() => {
     const d = api.onDidTitleChange((e) => setTitle(e.title));

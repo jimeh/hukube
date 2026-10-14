@@ -473,10 +473,15 @@ export function endSession(id: string): void {
   if (held && session?.engine) sendEnd(session.engine, session.cluster, id);
 }
 
+/** Removing a panel without a user close detaches its session. */
+export function detachSession(id: string): void {
+  removeSession(id);
+}
+
 /** Closing a Workspace detaches before dockview removes its session panels. */
 export function detachClusterSessions(cluster: string): void {
   for (const [id, session] of useExecSessions.getState().entries)
-    if (session.cluster === cluster) removeSession(id);
+    if (session.cluster === cluster) detachSession(id);
 }
 
 export function dismissSkippedNotice(id: string): void {

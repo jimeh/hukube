@@ -71,7 +71,7 @@ func recording(t *testing.T, file string) ([]byte, []restoreSample) {
 }
 func golden(data []byte, marks []restoreSample) []byte {
 	g := trackerGolden{Safe: make([]byte, (len(data)+7)/8), Samples: []restoreSample{}, Attachments: []attachCase{}}
-	t := newTracker()
+	t := newTracker(24)
 	for i, b := range data {
 		t.step(b)
 		if t.ground() {
@@ -129,9 +129,19 @@ func TestTrackerGolden(t *testing.T) {
 			checkGolden(t, file+".golden.json", golden(data, nil))
 		})
 	}
+	t.Run("scroll-region", func(t *testing.T) {
+		data := []byte("\x1b[2;10r\x1b[999;1000r")
+		checkGolden(t, "testdata/adversarial-scroll-region.bin", data)
+		checkGolden(t, "testdata/adversarial-scroll-region.bin.golden.json", golden(data, nil))
+	})
+	t.Run("synchronized-output", func(t *testing.T) {
+		data := []byte("\x1b[?2026hhello\x1b[?2026l")
+		checkGolden(t, "testdata/adversarial-synchronized-output.bin", data)
+		checkGolden(t, "testdata/adversarial-synchronized-output.bin.golden.json", golden(data, nil))
+	})
 	t.Run("collector", func(t *testing.T) {
 		data := []byte("\x1b[" + strings.Repeat(" ", 4096) + "q\x1b[?2004hhello\x1b[?2004l")
-		tracker := newTracker()
+		tracker := newTracker(24)
 		tracker.write(data[:4098])
 		if len(tracker.collect) > 3 {
 			t.Fatalf("unbounded collect: %d", len(tracker.collect))
@@ -148,7 +158,7 @@ func adversarial(seed int64, size int) []byte {
 	pieces := []string{
 		"\x1b[", "\x1b]", "\x1bP", "\x1b^", "\x1b_", "\x1bX", "\x1b\\", "\x07", "\x18", "\x1a", "\x1b", "\x0e", "\x0f",
 		"\xc2\x9b", "\xc2\x9d", "\xc2\x90", "\xc2\x9c", "\xc2\x98", "\xc2\x9e", "\xc2\x9f", "\xc2\x85", "\xc2", "\xc2\xa0",
-		"?1049h", "?1049l", "?47h", "?1047l", "?1h", "?1l", "?25l", "?25h", "?2004h", "?2004l", "?1000h", "?1002h", "?1003h", "?1000l", "?1006h", "?1006l", "?1015h", "?1016h", "?9h",
+		"?1049h", "?1049l", "?47h", "?1047l", "?1h", "?1l", "?25l", "?25h", "?2004h", "?2004l", "?2026h", "?2026l", "?1000h", "?1002h", "?1003h", "?1000l", "?1006h", "?1006l", "?1015h", "?1016h", "?9h",
 		"?7l", "?7h", "?6h", "?6l", "?45h", "?66h", "?66l", "?1004h", "?1004l", "?12h", "?1;25;2004h", "?1;1000;1006l",
 		"4h", "4l", "20h", "20l", "1;10r", "r", "5;20r", "2 q", "0 q", "!p", "m", "1;31m", "38:2::1:2:3m", "H", "2J", "6n", "c", ">c", "?u", "0;0H",
 		"(0", "(B", ")0", ")B", "*A", "+0", "=", ">", "c", "7", "8", "#8", " F", "M", "D",

@@ -37,8 +37,11 @@ func (s *Session) run(ctx context.Context, c Cluster, idx Index) {
 	if s.attachment != nil {
 		s.attachment.wake()
 	}
-	close(s.done)
 	s.mu.Unlock()
+	s.registry.mu.Lock()
+	delete(s.registry.hangingUp, s)
+	close(s.done)
+	s.registry.mu.Unlock()
 }
 func (s *Session) WriteContext(_ context.Context, data []byte) (int, error) {
 	s.mu.Lock()
@@ -116,6 +119,7 @@ func (s *Session) resize(cols, rows uint16) {
 		return
 	}
 	s.cols, s.rows = cols, rows
+	s.ring.tracker.rows = int(rows)
 	s.sizes.Resize(cols, rows)
 }
 func (a *Attachment) Resize(cols, rows uint16) {
@@ -164,7 +168,11 @@ func (a *Attachment) Next(room, drained bool) (*protocol.ExecSync, []byte, *prot
 				sync.Skipped -= r
 			}
 			if tracker.alt && s.rows > 1 {
-				s.sizes.Nudge(s.cols, s.rows)
+				current := tracker.clone()
+				current.write(s.ring.bytes(cut, int(s.ring.total-cut)))
+				if current.alt {
+					s.sizes.Nudge(s.cols, s.rows)
+				}
 			}
 		}
 		a.position, a.replayEnd, a.sync = sync.Offset, max(sync.Offset, replayEnd), false
@@ -176,7 +184,8 @@ func (a *Attachment) Next(room, drained bool) (*protocol.ExecSync, []byte, *prot
 		end = min(end, a.replayEnd)
 	}
 	data := s.ring.bytes(a.position, min(OutputFrame-1, int(end-a.position)))
-	if !over || a.position+uint64(len(data)) < end {
+	frameEnd := a.position + uint64(len(data))
+	if frameEnd < end || (!over && frameEnd == s.ring.total && frameEnd != a.replayEnd) {
 		data = data[:characterEnd(data)]
 	}
 	if len(data) == 0 {

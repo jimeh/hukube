@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 import { _electron as electron, expect, test } from "@playwright/test";
 
-import { savedSessionLayout } from "./exec.ts";
+import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 
@@ -85,7 +85,7 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
     await window.evaluate(() => localStorage.setItem("hukube.terminal.renderer", "dom"));
     await window.getByRole("button", { name: new RegExp(clusterId) }).click();
     await expect(window.getByText(/Kubernetes v\d/)).toBeVisible();
-    await window.keyboard.press("ControlOrMeta+K");
+    await openGoToResource(window);
     await window
       .getByRole("combobox", { name: "Go to Resource" })
       .fill(`${namespace}/pods/e2e-exec-desktop`);

@@ -1,5 +1,5 @@
 import type { DockviewApi } from "dockview-react";
-import type { ExecSessionParams } from "./sessions.ts";
+import { endSession, type ExecSessionParams } from "./sessions.ts";
 
 interface SessionTab {
   params: ExecSessionParams;
@@ -52,6 +52,11 @@ export function forgetSessionTab(cluster: string, id: string): void {
     cluster,
     readSessionTabs(cluster).filter((entry) => entry.params.sessionId !== id),
   );
+}
+/** A user closing a Tab ends its session and removes this window's record. */
+export function closeSessionTab(cluster: string, id: string): void {
+  forgetSessionTab(cluster, id);
+  endSession(id);
 }
 export function restoreSessionTabs(api: DockviewApi, cluster: string): void {
   const group = api.activeGroup ?? api.groups[0];

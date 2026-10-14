@@ -13,6 +13,9 @@ import (
 // and transitions (parser/EscapeSequenceParser.ts), and the same effect of
 // each sequence on a mode (InputHandler.ts).
 type tracker struct {
+	// Bytes reach the tracker after they were written. The current session size
+	// is the best approximation of the rows when a scroll region was set.
+	rows int
 	// The UTF-8 character being read: its lead byte, the code point so far,
 	// and the continuation bytes it still needs.
 	lead byte
@@ -31,7 +34,7 @@ type tracker struct {
 // modes is what a terminal that reads the rest of the stream must already have.
 type modes struct {
 	cursorKeys, keypad, bracketedPaste, origin, reverseWrap, sendFocus bool
-	noWrap, cursorHidden, insert, alt                                  bool
+	noWrap, cursorHidden, insert, alt, synchronizedOutput              bool
 	// mouse is the tracking mode's number, and mouseEncoding its encoding's.
 	mouse, mouseEncoding int
 	// cursorStyle is "", "block", "underline", or "bar". cursorBlink and the two
@@ -41,8 +44,7 @@ type modes struct {
 	// blink (mode 12) and newline (mode 20) set options of xterm.js, which a
 	// reset of the terminal leaves alone.
 	blink, newline uint8
-	// region is each buffer's scroll region as the stream gave it, with 0 for
-	// a bound it left out.
+	// region is each buffer's scroll region, with zero bounds for the full screen.
 	region   [2][2]int
 	charsets [4]byte
 	glevel   int
@@ -200,7 +202,7 @@ var transitions = func() (table [stateCount][nonASCII + 1]transition) {
 	return table
 }()
 
-func newTracker() *tracker { return &tracker{} }
+func newTracker(rows int) *tracker { return &tracker{rows: rows} }
 
 func (t *tracker) clone() *tracker {
 	c := *t
@@ -225,7 +227,7 @@ func (t *tracker) write(data []byte) {
 func (t *tracker) step(b byte) {
 	defer func() {
 		if recover() != nil {
-			*t = tracker{}
+			*t = tracker{rows: t.rows}
 		}
 	}()
 	if t.need > 0 {
@@ -383,17 +385,15 @@ func (t *tracker) csi(final byte) {
 			}
 		}
 	case "r":
-		top, bottom := max(t.params[0], 1), 0
-		if len(t.params) > 1 {
+		top, bottom := max(t.params[0], 1), t.rows
+		if len(t.params) > 1 && t.params[1] != 0 && t.params[1] <= t.rows {
 			bottom = t.params[1]
 		}
-		// xterm.js takes a region whose bottom is below its top. A bottom
-		// left out is the last row, which only the terminal knows.
-		switch {
-		case top == 1 && bottom == 0:
-			t.region[buffer] = [2]int{}
-		case bottom == 0 || bottom > top:
+		if bottom > top {
 			t.region[buffer] = [2]int{top, bottom}
+			if top == 1 && bottom == t.rows {
+				t.region[buffer] = [2]int{}
+			}
 		}
 	case " q":
 		param := t.params[0]
@@ -465,6 +465,8 @@ func (t *tracker) private(mode int, set bool) {
 		t.alt = set
 	case 2004:
 		t.bracketedPaste = set
+	case 2026:
+		t.synchronizedOutput = set
 	}
 }
 
@@ -472,11 +474,7 @@ func (t *tracker) private(mode int, set bool) {
 func (t *tracker) restore() string {
 	var out strings.Builder
 	region := func(r [2]int) {
-		switch {
-		case r == [2]int{}:
-		case r[1] == 0:
-			fmt.Fprintf(&out, "\x1b[%dr", r[0])
-		default:
+		if r != [2]int{} {
 			fmt.Fprintf(&out, "\x1b[%d;%dr", r[0], r[1])
 		}
 	}
@@ -509,6 +507,7 @@ func (t *tracker) restore() string {
 	private(66, true, t.keypad)
 	private(1004, true, t.sendFocus)
 	private(2004, true, t.bracketedPaste)
+	private(2026, true, t.synchronizedOutput)
 	private(t.mouse, true, t.mouse != 0)
 	private(t.mouseEncoding, true, t.mouseEncoding != 0)
 	if t.insert {

@@ -33,6 +33,7 @@ import { Notice } from "../resource/notice.tsx";
 import { openGoToResource } from "../go-to-resource/open.ts";
 import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { execContainers, execDisabledReason } from "./containers.ts";
+import { closeSessionTab } from "./window-tabs.ts";
 import { execKeyLabels } from "./keys.ts";
 import {
   dismissSkippedNotice,
@@ -265,7 +266,14 @@ export function ExecPanel({
           title="Waiting for a free stream"
           description="hukube runs 8 Log Streams and Exec Sessions at a time in a window. This session starts when one of them closes."
           action={
-            <Button variant="outline" size="sm" onClick={() => api.close()}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                closeSessionTab(cluster, params.sessionId);
+                api.close();
+              }}
+            >
               Cancel
             </Button>
           }

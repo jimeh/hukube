@@ -27,3 +27,11 @@ export function savedSessionLayout(page: Page, pod: string): () => Promise<void>
   });
   return () => expect.poll(() => saved, { message: "session Tab layout acknowledged" }).toBe(true);
 }
+
+/** A restored live terminal owns Ctrl+K on Windows and Linux. */
+export async function openGoToResource(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await page.keyboard.press("ControlOrMeta+K");
+}
