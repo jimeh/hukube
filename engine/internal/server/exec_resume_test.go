@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -118,9 +119,34 @@ func TestExecEndRequest(t *testing.T) {
 	if _, err := requests[protocol.RequestExecEnd.Name](context.Background(), srv, params(p)); err != nil {
 		t.Fatalf("idempotent end=%v", err)
 	}
+	// The Engine remembers an ended ID it does not have, so an ID's size is bounded.
+	for _, session := range []string{strings.Repeat("a", 65), "a b", "a\x00"} {
+		bad := protocol.ExecEndParams{Cluster: testenv.ClusterID, Session: session}
+		if _, err := requests[protocol.RequestExecEnd.Name](context.Background(), srv, params(bad)); err == nil || toProtocolError(err).Code != protocol.ErrorCodeBadRequest {
+			t.Fatalf("end of %q=%v", session, err)
+		}
+	}
 	srv.cfg.ReadOnly = true
 	if _, err := requests[protocol.RequestExecEnd.Name](context.Background(), srv, params(p)); err == nil || toProtocolError(err).Code != protocol.ErrorCodeForbidden {
 		t.Fatalf("read-only end=%v", err)
+	}
+}
+
+func TestExecID(t *testing.T) {
+	for id, want := range map[string]bool{
+		"0123456789abcdef0123456789abcdef": true,
+		"session":                          true,
+		"a-b_C":                            true,
+		strings.Repeat("a", 64):            true,
+		"":                                 false,
+		strings.Repeat("a", 65):            false,
+		"a b":                              false,
+		"a/b":                              false,
+		"é":                                false,
+	} {
+		if got := execID(id); got != want {
+			t.Errorf("execID(%q)=%v, want %v", id, got, want)
+		}
 	}
 }
 

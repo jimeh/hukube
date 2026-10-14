@@ -37,10 +37,30 @@ func handleMutationStream[P, E any](method protocol.Stream[P, E], reason string,
 	}
 }
 
+// execID reports whether a session or window ID has the shape the UI gives
+// it. The Engine keeps such IDs, including those of sessions it does not have
+// for a while, so their size must be bounded.
+func execID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func init() {
 	handleMutationStream(protocol.StreamPodExec, execReadOnlyReason, func(ctx context.Context, s *Server, p protocol.ExecParams, q *streamQueue) protocol.StreamEnd {
 		if p.Cluster == "" || p.Namespace == "" || p.Pod == "" || p.UID == "" || p.Container == "" || p.Session == "" || p.Window == "" || (p.Cols == 0) != (p.Rows == 0) {
 			return streamError(badRequest(fmt.Errorf("cluster, namespace, pod, uid, container, session, window, and a complete size are required")))
+		}
+		if !execID(p.Session) || !execID(p.Window) {
+			return streamError(badRequest(fmt.Errorf("session and window must be at most 64 letters, digits, hyphens, or underscores")))
 		}
 		c, err := s.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
@@ -63,8 +83,8 @@ func init() {
 		return protocol.StreamEnd{Reason: protocol.StreamEndReasonDetached}
 	})
 	handleMutation(protocol.RequestExecEnd, func(_ context.Context, s *Server, p protocol.ExecEndParams) (protocol.None, error) {
-		if p.Cluster == "" || p.Session == "" {
-			return protocol.None{}, badRequest(fmt.Errorf("cluster and session are required"))
+		if p.Cluster == "" || !execID(p.Session) {
+			return protocol.None{}, badRequest(fmt.Errorf("cluster and a session of at most 64 letters, digits, hyphens, or underscores are required"))
 		}
 		return protocol.None{}, s.execs.End(p)
 	})

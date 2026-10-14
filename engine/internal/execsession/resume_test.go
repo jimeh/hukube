@@ -498,7 +498,7 @@ func errorDetail(t *testing.T, err error) *protocol.ErrorDetail {
 }
 
 // An invalid cut-short sequence must not prevent replay from finishing.
-func TestProbeReplayStallsAfterInvalidSequence(t *testing.T) {
+func TestAttachmentReplayEndsAfterInvalidSequence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := live(t)
 		syncOf(t, f.a)
@@ -529,7 +529,7 @@ func TestProbeReplayStallsAfterInvalidSequence(t *testing.T) {
 	})
 }
 
-func TestReviewRepaintAfterReturningToShell(t *testing.T) {
+func TestAttachmentNoRepaintAfterReturningToShell(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := live(t)
 		f.do(func(o remotecommand.StreamOptions) { o.TerminalSizeQueue.Next() })
@@ -551,7 +551,7 @@ func TestReviewRepaintAfterReturningToShell(t *testing.T) {
 	})
 }
 
-func TestReviewInvalidScrollRegionPreservesPreviousRegion(t *testing.T) {
+func TestTrackerRejectedScrollRegionKeepsPrevious(t *testing.T) {
 	tr := newTracker(24)
 	tr.write([]byte("\x1b[2;10r\x1b[999;1000r"))
 	if tr.restore() != "\x1b[2;10r\x1b[?25h" {
