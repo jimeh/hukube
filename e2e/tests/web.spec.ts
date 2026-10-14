@@ -13,10 +13,15 @@ test.afterAll(() => {
   kubectl("delete", "namespace", namespace, "--wait=false");
 });
 
+// A terminal drawn with WebGL is a canvas, which a test cannot read. This
+// setting keeps the DOM renderer, whose rows are text.
+const domRenderer = () => localStorage.setItem("hukube.terminal.renderer", "dom");
+
 test("runs, guards, restarts, and restores Exec Sessions without reopening a process", async ({
   page,
 }) => {
   test.setTimeout(90_000);
+  await page.addInitScript(domRenderer);
   for (const [name, image, command] of [
     ["e2e-exec", "busybox:1.36", ["sh", "-c", "sleep 3600"]],
     ["e2e-exec-no-shell", "rancher/mirrored-pause:3.6", undefined],
@@ -195,6 +200,82 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
     .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
   await expect(noShell.getByText("No shell in this container")).toBeVisible();
   await expect(noShell.locator("pre")).toContainText("sh");
+});
+
+test("draws an Exec Session with WebGL, frees it while hidden, and falls back when it is lost", async ({
+  page,
+}) => {
+  kubectlCreate({
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: { name: "e2e-webgl", namespace },
+    spec: {
+      containers: [{ name: "app", image: "busybox:1.36", command: ["sh", "-c", "sleep 3600"] }],
+    },
+  });
+  kubectl("-n", namespace, "wait", "--for=condition=Ready", "pod/e2e-webgl", "--timeout=60s");
+  await page.goto(`/#token=${engineToken}`);
+  test.skip(
+    !(await page.evaluate(() => !!document.createElement("canvas").getContext("webgl2"))),
+    "this browser has no WebGL 2, so every terminal uses the DOM renderer",
+  );
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/pods/e2e-webgl`);
+  await page.getByRole("option", { name: new RegExp(`^Pod e2e-webgl ${namespace}$`) }).click();
+  await page
+    .getByRole("tabpanel", { name: "e2e-webgl", exact: true })
+    .getByRole("button", { name: "Open an Exec Session" })
+    .click();
+  const panel = page
+    .getByRole("tabpanel", { name: "app in e2e-webgl", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  const input = panel.getByRole("textbox", { name: "Exec Session in app of e2e-webgl" });
+  const webgl = page.locator(".xterm canvas:not(.xterm-link-layer)");
+  await expect(panel.getByText("Live", { exact: true })).toBeVisible();
+  await expect(webgl.first()).toBeAttached();
+  // The screen is a canvas, so output is looked for with Find. The command
+  // itself does not contain what it prints.
+  const found = async (text: string) => {
+    await panel.getByRole("button", { name: "Find in scrollback" }).click();
+    const find = panel.getByRole("textbox", { name: "Find" });
+    await find.fill(text);
+    // The command is typed again when its output is not found in time, so
+    // the output may be there twice.
+    await expect(panel.getByRole("search")).toContainText(/\b1 of [12]\b/);
+    await find.press("Escape");
+  };
+  await expect(async () => {
+    await input.focus();
+    await input.pressSequentially("echo webgl-$((6*7))");
+    await input.press("Enter");
+    await expect(async () => found("webgl-42")).toPass({ timeout: 3000 });
+  }).toPass();
+  // A hidden terminal holds no WebGL context, and takes one again when shown.
+  const tabs = page.locator(".dv-tab");
+  await tabs
+    .filter({ has: page.getByRole("button", { name: "Close e2e-webgl", exact: true }) })
+    .click();
+  await expect(webgl).toHaveCount(0);
+  await tabs
+    .filter({ has: page.getByRole("button", { name: "Close app in e2e-webgl", exact: true }) })
+    .click();
+  await expect(webgl.first()).toBeAttached();
+  await found("webgl-42");
+  // The browser takes the context away. The terminal carries on with the DOM
+  // renderer, with what it had on screen.
+  await page.evaluate(() => {
+    for (const canvas of document.querySelectorAll<HTMLCanvasElement>(".xterm canvas"))
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+  });
+  const rows = panel.locator(".xterm-rows");
+  await expect(rows).toContainText("webgl-42", { timeout: 15_000 });
+  await expect(webgl).toHaveCount(0);
+  await input.focus();
+  await input.pressSequentially("echo after-loss-$((6*7))");
+  await input.press("Enter");
+  await expect(rows).toContainText("after-loss-42");
 });
 
 test("browses a live ConfigMap from the cluster picker to its YAML", async ({ page }) => {
