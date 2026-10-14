@@ -187,12 +187,23 @@ and input to rely on TCP. Both change. The ADR is amended.
 
 **Output.** The executor's stdout writer waits while 1 MiB is queued for the
 client or in flight, which holds the container's process back as a slow
-terminal does. It waits only while the client keeps up: output has waited
-for less than `stall` (30 seconds), or the client acknowledged at least the
-floor (4 MiB) in the last 30. Otherwise the write does not wait, and the
-oldest output is dropped, leaving a `gap`. The bound is half of client-go's
-heartbeat deadline. Without it a browser tab that stops for a minute would
-end the session with a timeout.
+terminal does. It holds one invariant: it waits only while every byte it has
+queued, and the client has not acknowledged, was queued less than `hold`
+(3 seconds) ago. Once the oldest such byte is older, it does not wait. It
+queues its output and drops the oldest queued output, keeping the newest
+64 KiB, and leaves a `gap`. "What changed while building" has how the rule
+got here and why the limit is 3 seconds.
+
+The cases, each of which has a test on a controllable clock:
+
+| Case                              | What the rule does                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| The client is silent              | A write waits until the oldest unacknowledged byte is 3 seconds old, then stops waiting. Later writes do not wait. |
+| A trickle of acknowledgements     | Each one lets a write in. None renews the wait: the oldest byte keeps ageing until it is itself acknowledged.      |
+| Batches of small acknowledgements | A write that finds room at once changes nothing. The oldest byte's age decides.                                    |
+| The client keeps up               | Every byte is acknowledged within 3 seconds, so writes wait for the client and nothing is dropped.                 |
+| An idle session                   | Nothing is unacknowledged, so nothing has an age. A burst after any pause gets the whole 3 seconds.                |
+| Output already sent               | It cannot be taken back. Only queued output is dropped, so up to 1 MiB stays in flight beside the 64 KiB kept.     |
 
 The client acknowledges a frame when the terminal has parsed it, which is the
 `write` callback. A stream listener's `data` may return a promise, and the
@@ -623,9 +634,10 @@ Cluster stopped mid-session, and a Tab restored after a reload.
   missing shell differently. The message is always shown, so the cost is a
   generic title.
 - **A background browser tab throttles timers,** which slows xterm.js's
-  parsing to a crawl. A noisy command in a hidden browser tab can then stall
-  for 30 seconds and lose output, shown as a gap. The desktop Host throttles
-  only a hidden window.
+  parsing to a crawl. A noisy command in a hidden browser tab can then fall
+  behind for 3 seconds and lose output, shown as a gap. The desktop Host
+  throttles only a hidden window. A slow link has the same effect: a client
+  that takes less than 341 KiB a second loses output during a long burst.
 - **xterm.js 6.0.0's resize bug** (issue 6063). The terminal wrapper catches
   an error from `fit` and tries again on the next resize.
 - **Firefox's handling of `Ctrl+Shift+C` and `Ctrl+Shift+K`** was read from
@@ -766,16 +778,27 @@ Neither found a blocker. What changed because of them:
   refuses a write that would add to waiting input beyond 8 MiB, and the
   terminal prints that the input was not sent. A write is always taken when
   nothing is waiting, so one paste of any size goes through.
-- **The stall rule was replaced, after two attempts at it.** The first rule
-  restarted its 30 seconds on any acknowledgement, so a trickle held output
-  back for as long as it lasted. Its correction counted in fixed periods, so
-  a client that met the floor and then went silent was waited for during
-  almost two. The rule is now one statement with no mode: a write waits for
-  room only while the client keeps up, which means output has waited for
-  less than 30 seconds, or the client acknowledged at least 4 MiB in the
-  last 30. Otherwise the write does not wait, and the oldest output is
-  dropped. A client that drains the queue gets a fresh 30 seconds the next
-  time.
+- **The rule that bounds held-back output was replaced by an invariant,**
+  after three forms of it failed review. The first restarted its 30 seconds
+  on any acknowledgement, so a trickle held output back for as long as it
+  lasted. The second counted in fixed periods, so a client that met its floor
+  and then went silent was waited for during almost two. The third used a
+  sliding window with a grace period, which a client far below the floor
+  could renew by acknowledging two frames at a time. Each had a mechanism
+  that something could reset. The rule now has none: a write waits only
+  while the oldest unacknowledged byte is younger than 3 seconds. The plan's
+  "Both directions are acknowledged" lists its cases.
+- **The limit is 3 seconds because of a measurement, not 30 because of
+  half a deadline.** The plan reasoned from client-go's 61-second deadline
+  alone. A probe then read a real session's output at fixed rates: at
+  115 KiB a second client-go ended the session at 61 seconds, and at 131 it
+  did not, because a heartbeat arrives behind about 7 MiB the Cluster has
+  already sent. What keeps a session alive is how fast its output is taken,
+  not how long one write waits. With a 1 MiB window, 3 seconds means a
+  process waits only for a client taking 341 KiB a second.
+- **While it sheds, the queue keeps the newest 64 KiB,** not a whole window.
+  With a window kept, the line that marks a gap was always pushed out of the
+  terminal's 5,000 lines of scrollback by the megabyte after it.
 - **A session ended by an Engine shutdown could be told its socket was
   lost,** because the Engine could exit before the `end` was written.
   `Server.Shutdown` now waits for each session's socket to send it.
@@ -793,8 +816,8 @@ Neither found a blocker. What changed because of them:
 Not changed, and accepted: `Server.Shutdown` waits for a session's socket to
 close, so a client that does not answer the close costs a shutdown its 5
 seconds; a link a container prints still looks like one, and does nothing; a
-client that takes less than about 137 KiB a second during a long burst
-loses output where a slower rule would have delivered it late.
+client that takes less than 341 KiB a second during a long burst loses
+output where a slower rule would have delivered it late.
 
 Running the checks past midnight found a test from the Log Streams layer
 that passed only on 2026-10-13, the date in its fixture. Its clock is now
@@ -812,6 +835,10 @@ On an Apple silicon laptop against the k3d cluster:
   takes 0.6 seconds, with no gap.
 - A session whose Cluster connection is cut ends in 2.3 seconds, which is
   the wait for the Pod's status.
+- Reading a flooding session's output at a fixed rate: at 10, 20, 35, 70,
+  85, 100, and 115 KiB a second client-go ended the session at 61 seconds
+  with an i/o timeout; at 131 and 180 KiB a second it ran for the 150
+  seconds of the probe.
 
 ## Follow-ups
 

@@ -133,7 +133,7 @@ it("acknowledges only after the terminal write callback, encodes input, resizes,
   expect(s.streams[0]!.resize).toHaveBeenCalledWith(100, 40);
   listener.gap({ bytes: 1_258_291, records: 0 });
   expect(s.terminal.write).toHaveBeenLastCalledWith(
-    "\r\n\x1b[2m[hukube: 1.2 MiB of output was dropped while this window was not reading]\x1b[0m\r\n",
+    "\x1b[0m\r\n\x1b[2m[hukube: 1.2 MiB of output was dropped because this window was not keeping up]\x1b[0m\r\n",
   );
   listener.inputDropped?.(1 << 20);
   expect(s.terminal.write).toHaveBeenLastCalledWith(
