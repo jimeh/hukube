@@ -1,6 +1,7 @@
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import type { ExecTerminal } from "@/features/exec/sessions.ts";
 import { execKey } from "@/features/exec/keys.ts";
@@ -21,7 +22,26 @@ function mix(a: string, b: string, share: number): string {
     .join("")}`;
 }
 
-/** The DOM renderer and add-ons of an Exec Session, loaded only when one starts. */
+/** The setting that makes every terminal use the DOM renderer when it holds "dom". */
+export const rendererSetting = "hukube.terminal.renderer";
+
+// The WebGL renderer is used where it is known to be sound: Chromium, which
+// is the desktop Host and Chrome. Its add-on has rendering bugs open against
+// Safari and WKWebView, and it was not tried in Firefox.
+const chromium =
+  (
+    navigator as Navigator & { userAgentData?: { brands?: { brand: string }[] } }
+  ).userAgentData?.brands?.some(({ brand }) => brand === "Chromium") ??
+  /\bChrom(e|ium)\//.test(navigator.userAgent);
+
+// A document can hold about 16 WebGL contexts, and the browser takes the
+// oldest when one more is made. Only a terminal that is showing holds one,
+// and at most this many do.
+const maxWebglTerminals = 8;
+let webglTerminals = 0;
+let terminals = 0;
+
+/** The renderers and add-ons of an Exec Session, loaded only when one starts. */
 export function createExecTerminal(): ExecTerminal {
   const element = document.createElement("div");
   element.className = "h-full w-full min-h-0 overflow-hidden";
@@ -52,6 +72,57 @@ export function createExecTerminal(): ExecTerminal {
   let wantedFocus = false;
   let findColor = "#000000";
   let detach: (() => void) | undefined;
+  let webgl: WebglAddon | undefined;
+  // Set when the browser took this terminal's context. It then keeps the DOM
+  // renderer until it is next shown, because each change of renderer can
+  // change the grid's size.
+  let lostWebgl = false;
+  // Terminals with the same colors share one glyph texture in the add-on, and
+  // in this version a change one of them causes can leave another showing the
+  // wrong glyphs. A color no program is likely to use, different for each
+  // terminal by an amount nobody can see, gives each its own texture: at
+  // most 6 of 255 in each channel of color 16, which is black.
+  const ownTexture = `#${[1, 7, 49].map((place) => `0${Math.floor(terminals / place) % 7}`).join("")}`;
+  terminals = (terminals + 1) % 343;
+  // Takes a WebGL context for this terminal if it may have one. The DOM
+  // renderer stays when it may not, or when the add-on cannot start.
+  const takeWebgl = () => {
+    if (webgl || lostWebgl || !chromium || webglTerminals >= maxWebglTerminals) return;
+    if (localStorage.getItem(rendererSetting) === "dom") return;
+    try {
+      const addon = new WebglAddon();
+      // A browser can take a context back at any time. The terminal then
+      // carries on with the DOM renderer, with its buffer as it was.
+      addon.onContextLoss(() => {
+        lostWebgl = true;
+        releaseWebgl();
+      });
+      terminal.loadAddon(addon);
+      webgl = addon;
+      webglTerminals++;
+    } catch {
+      // The DOM renderer is already drawing.
+    }
+  };
+  // Gives the context back, which returns the terminal to the DOM renderer.
+  const releaseWebgl = () => {
+    if (!webgl) return;
+    const addon = webgl;
+    webgl = undefined;
+    webglTerminals--;
+    // Disposing the add-on removes its canvas and leaves the context to the
+    // garbage collector, so contexts that nothing shows count against the
+    // document's limit (xterm.js issue 6068). Losing them here frees them.
+    const contexts = [...element.querySelectorAll("canvas")].map((canvas) =>
+      canvas.getContext("webgl2"),
+    );
+    try {
+      addon.dispose();
+    } catch {
+      // A context that is already lost can make the add-on's cleanup throw.
+    }
+    for (const context of contexts) context?.getExtension("WEBGL_lose_context")?.loseContext();
+  };
   let fitted: (() => void) | undefined;
   let refit: (() => void) | undefined;
   const ready = new Promise<void>((resolve) => {
@@ -76,6 +147,7 @@ export function createExecTerminal(): ExecTerminal {
         `bright${name[0]!.toUpperCase()}${name.slice(1)}` as Exclude<keyof ITheme, "extendedAnsi">
       ] = color(`--ansi-bright-${name}`);
     }
+    colors.extendedAnsi = [ownTexture];
     terminal.options.theme = colors;
     findColor = color("--warning");
   };
@@ -130,6 +202,7 @@ export function createExecTerminal(): ExecTerminal {
       }),
     dispose: () => {
       detach?.();
+      releaseWebgl();
       terminal.dispose();
       element.remove();
     },
@@ -161,6 +234,9 @@ export function createExecTerminal(): ExecTerminal {
           terminal.textarea?.setAttribute("aria-label", element.getAttribute("aria-label")!);
           opened = true;
         }
+        // Before the terminal is sized: the two renderers measure a cell
+        // differently, so the one that will draw must do the measuring.
+        takeWebgl();
         try {
           const screen = element.querySelector<HTMLElement>(".xterm-screen");
           if (!screen?.clientWidth || !screen.clientHeight) {
@@ -198,6 +274,9 @@ export function createExecTerminal(): ExecTerminal {
       };
       const off = () => {
         refit = undefined;
+        // A terminal that is not showing gives its context to one that is.
+        releaseWebgl();
+        lostWebgl = false;
         clearTimeout(settle);
         cancelAnimationFrame(frame);
         observer.disconnect();

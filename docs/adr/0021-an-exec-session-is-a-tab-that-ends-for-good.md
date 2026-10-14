@@ -63,5 +63,5 @@ opened beyond the cap waits and says so.
   waits. The message at the limit names both.
 - A dock or bottom area for sessions remains possible. Nothing assumes where
   a session's Tab sits.
-- The terminal is xterm.js (ADR-0018 assigns terminals to it), with its DOM
-  renderer, so a test can read the screen and Safari needs no fallback.
+- The terminal is xterm.js (ADR-0018 assigns terminals to it). ADR-0024
+  says which renderer draws it.

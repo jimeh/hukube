@@ -366,15 +366,29 @@ empty after a reload, so the Tab finds no session for its ID. It shows a
 notice and a button that starts a new session there. It never starts one by
 itself: a reload must not open shells.
 
-### The terminal is xterm.js with the DOM renderer
+### The terminal is xterm.js, drawn with WebGL in Chromium
 
-`@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, and `@xterm/addon-search`
-0.16.0, loaded on demand as Monaco is. ADR-0018 already assigns terminals to
-xterm.js.
+`@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-search`
+0.16.0, and `@xterm/addon-webgl` 0.19.0, loaded on demand as Monaco is.
+ADR-0018 already assigns terminals to xterm.js.
 
-- The DOM renderer needs no fallback, has no Safari bugs open against it, and
-  lets a test read the screen as text. A session's output is small next to
-  what the WebGL renderer exists for.
+The plan first chose the DOM renderer everywhere. Jim asked for the WebGL
+renderer where it is well supported, and ADR-0024 records the rule:
+
+- **Chromium draws with WebGL,** which is the desktop Host and Chrome.
+  Safari and other WebKit keep the DOM renderer, because the add-on has
+  rendering bugs open against them. Firefox keeps it too, because it could
+  not be tried: Playwright's Firefox does not start on the machine used.
+- **The DOM renderer is always underneath.** The add-on's constructor can
+  throw, and a browser can take a context back at any time. Either leaves
+  the terminal drawing with the DOM renderer, with its buffer as it was.
+- **Only a terminal that is showing holds a context,** and at most 8 do. A
+  document can hold about 16. A hidden terminal gives its context up and
+  takes one again when it is shown.
+- **A test reads the screen with the DOM renderer.** The setting
+  `hukube.terminal.renderer`, when it holds `dom`, keeps the DOM renderer in
+  any browser. The end-to-end tests set it. One test leaves it unset, and
+  reads a WebGL terminal's output through Find.
 - Not used: the clipboard add-on (a process in a container could read the
   user's clipboard), the web-links add-on (opening an address a container
   printed needs a decision about external links first), and the Unicode
@@ -566,12 +580,13 @@ paste in bracketed-paste markers when the shell asked for them.
 
 ### Packages
 
-| Need              | Package                                                           | Considered                                                                 |
-| ----------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Terminal emulator | `@xterm/xterm` 6.0.0                                              | Monaco, which is not a terminal. Nothing else is maintained at this level. |
-| Sizing            | `@xterm/addon-fit` 0.11.0                                         | Computing columns by hand, which the add-on exists to do.                  |
-| Search            | `@xterm/addon-search` 0.16.0                                      | None. The find bar around it is ours because the add-on has no UI.         |
-| Exec              | client-go's `remotecommand`, already a dependency of a dependency | None.                                                                      |
+| Need              | Package                                                           | Considered                                                                  |
+| ----------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Terminal emulator | `@xterm/xterm` 6.0.0                                              | Monaco, which is not a terminal. Nothing else is maintained at this level.  |
+| Sizing            | `@xterm/addon-fit` 0.11.0                                         | Computing columns by hand, which the add-on exists to do.                   |
+| Search            | `@xterm/addon-search` 0.16.0                                      | None. The find bar around it is ours because the add-on has no UI.          |
+| Drawing           | `@xterm/addon-webgl` 0.19.0, in Chromium                          | The DOM renderer alone, which stays as the fallback and for other browsers. |
+| Exec              | client-go's `remotecommand`, already a dependency of a dependency | None.                                                                       |
 
 ## Steps
 
@@ -859,6 +874,42 @@ that passed only on 2026-10-13, the date in its fixture. Its clock is now
 set. CI also showed that the client's 1 MiB paste test, which took a second
 on a laptop, took more than its 5-second limit there. It now compares bytes
 directly and takes milliseconds.
+
+### The WebGL renderer
+
+Added at Jim's direction after the reviews, as its own commit.
+
+- **`@xterm/addon-webgl` 0.19.0** is the version published with
+  `@xterm/xterm` 6.0.0, on 2025-12-22. It is the latest stable one.
+- **Two faults reported against it are worked around,** both in
+  `apps/app/src/lib/xterm.ts`. Neither was reproduced here, and both can go
+  when a release carries the fixes.
+  - Disposing the add-on leaves its context to the garbage collector
+    (xterm.js issue 6068, open), and the issue reports a showing terminal
+    losing its context once 16 have been made. So a terminal loses the
+    context itself when it gives it up. Here, 44 switches between two
+    sessions reached no limit with the workaround or without it. It stays
+    because when the collector runs is not ours to rely on.
+  - Terminals with the same colors share a glyph texture, and in this
+    version one of them can leave another showing the wrong glyphs (issues
+    6014 and 6038, fixed after 0.19.0). So each terminal has one color of
+    the 256 that differs by an amount nobody can see, which gives it a
+    texture of its own.
+- **The two renderers measure a cell differently** (issue 6015). A terminal
+  takes its context before it is first sized, so a session starts at the
+  size WebGL gives it. A terminal whose context is lost keeps the DOM
+  renderer until it is next shown, and its grid may change size once, which
+  a shell sees as a resize.
+- **Playwright's device-scale emulation misleads the add-on:** the canvas is
+  drawn at twice its size. With a real scale factor of 2
+  (`--force-device-scale-factor`) the text is sharp and in place, so the
+  hand check used that.
+- **Checked by hand** in Chromium at a scale factor of 2, in both themes:
+  `top` through a resize, a flood of output, 40 switches between two
+  sessions with no context warning, two terminals showing at once after a
+  Tab was dragged to another Pane, and a context taken away with
+  `WEBGL_lose_context`, after which both terminals carried on with the DOM
+  renderer and their sessions answered. WebKit kept the DOM renderer.
 
 ## Measurements
 
