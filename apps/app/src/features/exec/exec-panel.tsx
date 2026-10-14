@@ -1,4 +1,9 @@
-import { ExecReasonEngineStopped, ExecReasonNoShell, type StreamEnd } from "@hukube/engine-client";
+import {
+  ExecReasonEngineStopped,
+  ExecReasonNoShell,
+  ExecReasonTooManySessions,
+  type StreamEnd,
+} from "@hukube/engine-client";
 import { useConnectionState, useEngine, useSubscription } from "@hukube/engine-client/react";
 import { Badge } from "@hukube/ui/components/badge";
 import { Button } from "@hukube/ui/components/button";
@@ -31,6 +36,7 @@ import { execContainers, execDisabledReason } from "./containers.ts";
 import { execKeyLabels } from "./keys.ts";
 import {
   startSession,
+  takeSession,
   useExecSessions,
   type ExecSessionParams,
   type ExecState,
@@ -78,6 +84,7 @@ export function ExecPanel({
     };
   }, [api]);
   const body = useRef<HTMLDivElement>(null);
+  const wasFocused = useRef(false);
   const [finding, setFinding] = useState(false);
   const findInput = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -93,10 +100,19 @@ export function ExecPanel({
   const findFromTerminal = useEffectEvent(find);
   const theme = useTheme();
   const showing = visible && active;
-  const renderingTerminal = !!session && state?.phase !== "waiting" && state?.phase !== "failed";
+  const gone = state?.phase === "gone";
+  const renderingTerminal =
+    !!session &&
+    state?.phase !== "waiting" &&
+    state?.phase !== "failed" &&
+    (!gone || !!session.hasOutput);
   useEffect(() => {
     if (!renderingTerminal || !terminal || !body.current) return;
-    return terminal.attach(body.current, showing);
+    const off = terminal.attach(body.current, showing);
+    return () => {
+      wasFocused.current ||= terminal.element.contains(document.activeElement);
+      off();
+    };
   }, [terminal, showing, renderingTerminal]);
   useEffect(() => {
     if (showing && (theme === "dark" || theme === "light")) terminal?.theme();
@@ -108,8 +124,12 @@ export function ExecPanel({
   const phase = state?.phase;
   useEffect(() => {
     // An ended terminal takes no keys, so the keyboard needs somewhere to go.
-    if (phase === "ended" && terminal?.element.contains(document.activeElement))
+    if (
+      ["ended", "gone", "elsewhere"].includes(phase ?? "") &&
+      (wasFocused.current || terminal?.element.contains(document.activeElement))
+    )
       restartButton.current?.focus();
+    wasFocused.current = false;
   }, [phase, terminal]);
   const restart = (label: string) => (
     <Tooltip>
@@ -137,22 +157,37 @@ export function ExecPanel({
   const ended = state?.phase === "ended";
   // The header always has a badge, in a slot of one width. One that came
   // and went would rewrap the header and resize the terminal under a shell.
-  const badge = !session
-    ? "Not running"
-    : state?.phase === "waiting"
+  const badge =
+    state?.phase === "waiting"
       ? "Waiting"
       : state?.phase === "starting"
         ? "Starting…"
-        : state?.phase === "failed"
-          ? "Not started"
-          : ended
-            ? "Ended"
-            : metadata(pod.data?.object)["deletionTimestamp"]
-              ? "Terminating"
-              : "Live";
+        : state?.phase === "attaching" || !session
+          ? "Attaching…"
+          : state?.phase === "reconnecting"
+            ? "Reconnecting…"
+            : state?.phase === "elsewhere"
+              ? "Not attached"
+              : gone
+                ? "Gone"
+                : state?.phase === "failed"
+                  ? "Not started"
+                  : ended
+                    ? "Ended"
+                    : metadata(pod.data?.object)["deletionTimestamp"]
+                      ? "Terminating"
+                      : "Live";
   const pasteReason = "This Host cannot read the clipboard; use the keyboard.";
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      onFocusCapture={(event) => {
+        wasFocused.current = !!terminal?.element.contains(event.target);
+      }}
+      onBlurCapture={(event) => {
+        wasFocused.current = !!terminal?.element.contains(event.relatedTarget);
+      }}
+    >
       <header className="flex shrink-0 items-start gap-2 border-t-2 border-t-cluster border-b px-3 py-2">
         <div className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="flex min-w-0 max-w-full items-center gap-1.5 text-cluster">
@@ -194,7 +229,7 @@ export function ExecPanel({
         <Badge
           variant={badge === "Live" ? "outline" : "secondary"}
           className={
-            "mt-1 min-w-[5.75rem] shrink-0 justify-center" +
+            "mt-1 w-[7.5rem] shrink-0 justify-center" +
             (badge === "Live" ? " border-cluster text-cluster" : "")
           }
         >
@@ -218,10 +253,10 @@ export function ExecPanel({
           <TooltipContent>Find in scrollback ({keys.find})</TooltipContent>
         </Tooltip>
       </header>
-      {!session ? (
+      {gone && !session?.hasOutput ? (
         <Notice
-          title="No session is running here"
-          description="An Exec Session belongs to the window that started it, and does not survive a reload."
+          title="This session is gone"
+          description={goneDescription}
           action={restart("Start a new session")}
         />
       ) : state?.phase === "waiting" ? (
@@ -251,6 +286,32 @@ export function ExecPanel({
             render={<div className="relative min-h-0 flex-1 overflow-hidden px-3 py-2" />}
           >
             <div ref={body} className="h-full min-h-0" />
+            {state?.phase === "reconnecting" && (
+              <output className="absolute inset-x-0 bottom-0 bg-background/90 px-3 py-2 text-muted-foreground">
+                Reconnecting to the Engine. The session keeps running, and the Engine keeps its
+                recent output.
+              </output>
+            )}
+            {state?.phase === "elsewhere" && (
+              <div className="absolute inset-0 flex items-center justify-center overflow-auto bg-background/80 p-3">
+                <Notice
+                  title="This session is open in another window"
+                  description="An Exec Session shows in one window at a time. Using it here detaches the other window."
+                  action={
+                    <Button
+                      ref={restartButton}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void takeSession(engine, cluster, params);
+                      }}
+                    >
+                      Use it here
+                    </Button>
+                  }
+                />
+              </div>
+            )}
             {finding && terminal && (
               <FindBar
                 terminal={terminal}
@@ -272,7 +333,7 @@ export function ExecPanel({
                 <Shortcut>{keys.copy}</Shortcut>
               </ContextMenuItem>
               <ContextMenuItem
-                disabled={!navigator.clipboard?.readText || ended}
+                disabled={!navigator.clipboard?.readText || state?.phase !== "live"}
                 title={!navigator.clipboard?.readText ? pasteReason : undefined}
                 onClick={() => {
                   void navigator.clipboard
@@ -301,15 +362,23 @@ export function ExecPanel({
           </ContextMenuContent>
         </ContextMenu>
       )}
-      {ended && (
+      {(ended || (gone && session?.hasOutput)) && (
         <output className="flex shrink-0 flex-wrap items-center gap-2 border-t px-3 py-2">
-          <p className="min-w-0 flex-1 text-muted-foreground">{endMessage(state)}</p>
-          {state.reason !== "deleted" && available && restart("Start again")}
+          <p className="min-w-0 flex-1 text-muted-foreground">
+            {gone ? `This session is gone. ${goneReason}` : ended ? endMessage(state) : ""}
+          </p>
+          {gone
+            ? restart("Start a new session")
+            : ended && state.reason !== "deleted" && available && restart("Start again")}
         </output>
       )}
     </div>
   );
 }
+
+const goneReason =
+  "The Engine restarted, or the session was told to exit after 10 minutes with no window attached.";
+const goneDescription = `The Engine no longer has it. ${goneReason}`;
 
 function Shortcut({ children }: { children?: string }) {
   return children ? (
@@ -328,6 +397,14 @@ function FailedNotice({
   retryGone?: React.ReactNode;
 }) {
   const error = state.error;
+  if (error?.reason === ExecReasonTooManySessions)
+    return (
+      <Notice
+        title="Too many Exec Sessions"
+        description="The Engine runs at most 64 at a time. End one and try again."
+        action={retry}
+      />
+    );
   if (error?.reason === ExecReasonNoShell)
     return (
       <Notice
@@ -371,7 +448,7 @@ function FailedNotice({
 }
 
 export function endMessage(state: {
-  reason: StreamEnd["reason"] | "lost";
+  reason: StreamEnd["reason"];
   exitCode?: number;
   error?: StreamEnd["error"];
 }): string {
@@ -384,8 +461,6 @@ export function endMessage(state: {
       return "The Pod was deleted, which ended the session.";
     case "detached":
       return "This session is open in another window.";
-    case "lost":
-      return "The session lost its connection to the Engine. A command that was running may still be running in the container.";
     case "error":
       return state.error?.reason === ExecReasonEngineStopped
         ? "The Engine shut down, which ended the session. Its shell was told to exit."

@@ -4,6 +4,7 @@ import type { ExecTerminal } from "./sessions.ts";
 const noop = () => {};
 
 export function fakeTerminal() {
+  let held = false;
   let data: (text: string) => void = noop;
   let binary: (text: string) => void = noop;
   let resize: (size: { cols: number; rows: number }) => void = noop;
@@ -13,9 +14,21 @@ export function fakeTerminal() {
   const terminal = {
     element,
     ready: Promise.resolve(),
+    sized: true as boolean,
+    get inputHeld() {
+      return held;
+    },
+    size: vi.fn<(cols: number, rows: number) => void>(),
+    holdInput: vi.fn<(held: boolean) => void>((value) => {
+      held = value;
+    }),
+    setAttached: vi.fn<(attached: boolean) => void>(),
+    restoreOptions: vi.fn<() => void>(),
     cols: 80,
     rows: 24,
-    write: vi.fn<(bytes: Uint8Array | string, done?: () => void) => void>(),
+    write: vi.fn<(bytes: Uint8Array | string, done?: () => void) => void>((_bytes, done) =>
+      done?.(),
+    ),
     reset: vi.fn<() => void | Promise<void>>(),
     dispose: vi.fn<() => void>(),
     setEnded: vi.fn<(ended: boolean) => void>(),

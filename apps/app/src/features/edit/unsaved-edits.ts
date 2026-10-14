@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { isRunning, useExecSessions } from "../exec/sessions.ts";
+import { holdsSession, useExecSessions } from "../exec/sessions.ts";
 export interface UnsavedEdit {
   cluster: string;
   label: string;
@@ -36,14 +36,13 @@ export const pendingApplyDescription =
   "An apply of these edits may already have reached the Cluster. Discarding stops hukube from checking the result.";
 const sessionCloseDescription =
   "Its shell is told to exit. A command still running in the container may keep running.";
-const commandCloseDescription = "A command still running in the container may keep running.";
 
 export function guardPanel(id: string, proceed: () => void): void {
   const store = useUnsavedEdits.getState();
   const session = id.startsWith("exec:")
     ? useExecSessions.getState().entries.get(id.slice(5))
     : undefined;
-  if (session && isRunning(session)) {
+  if (session && holdsSession(session)) {
     store.confirm({
       title: `End the Exec Session in ${session.params.container} of ${session.params.pod}?`,
       description: sessionCloseDescription,
@@ -70,44 +69,20 @@ export function guardWorkspace(cluster: string, proceed: () => void): void {
   const store = useUnsavedEdits.getState();
   const edits = [...store.entries.values()].filter((edit) => edit.cluster === cluster);
   const count = edits.length;
-  const sessions = [...useExecSessions.getState().entries.values()].filter(
-    (session) => session.cluster === cluster && isRunning(session),
-  ).length;
-  if (!count && !sessions) {
+  if (!count) {
     proceed();
     return;
   }
   store.confirm({
-    title: sessions
-      ? count
-        ? `Close ${cluster}?`
-        : sessions === 1
-          ? `End the Exec Session in ${cluster}?`
-          : `End the Exec Sessions in ${cluster}?`
-      : `Discard unsaved edits in ${cluster}?`,
+    title: `Discard unsaved edits in ${cluster}?`,
     description: [
-      count
-        ? count === 1
-          ? "1 Resource has unsaved edits."
-          : `${count} Resources have unsaved edits.`
-        : "",
-      sessions
-        ? sessions === 1
-          ? "1 Exec Session is running."
-          : `${sessions} Exec Sessions are running.`
-        : "",
-      sessions ? commandCloseDescription : "",
+      count === 1 ? "1 Resource has unsaved edits." : `${count} Resources have unsaved edits.`,
       edits.some((edit) => edit.pendingApply) ? pendingApplyDescription : "",
     ]
       .filter(Boolean)
       .join(" "),
     cancel: "Cancel",
-    discard:
-      sessions && !count
-        ? sessions === 1
-          ? "End session and close"
-          : "End sessions and close"
-        : "Discard and close",
+    discard: "Discard and close",
     proceed,
   });
 }

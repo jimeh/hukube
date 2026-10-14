@@ -14,6 +14,7 @@ export interface Host {
   /** Opens an app path, such as a Cluster's Workspace, in a new window. */
   openWindow(path: string): void;
   openExternal(url: string): void;
+  reportOpenWork(work: { edits: number; sessions: number }): void;
 }
 
 /** The API the desktop Host's preload script exposes as `window.hukubeDesktop`. */
@@ -21,6 +22,7 @@ export interface DesktopBridge {
   engine(): Promise<EngineEndpoint>;
   openWindow(path: string): void;
   openExternal(url: string): void;
+  reportOpenWork(work: { edits: number; sessions: number }): void;
 }
 
 declare global {
@@ -35,6 +37,7 @@ export function createDesktopHost(bridge: DesktopBridge): Host {
     engine: () => bridge.engine(),
     openWindow: (path) => bridge.openWindow(path),
     openExternal: (url) => bridge.openExternal(url),
+    reportOpenWork: (work) => bridge.reportOpenWork(work),
   };
 }
 
@@ -64,6 +67,7 @@ export function createBrowserHost(): Host {
 
   return {
     kind: "web",
+    reportOpenWork: () => {},
     engine: () =>
       token
         ? Promise.resolve({ url, token })

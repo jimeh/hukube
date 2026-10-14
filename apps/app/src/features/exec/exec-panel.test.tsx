@@ -3,7 +3,7 @@ import type { StreamListener } from "@hukube/engine-client";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ExecPanel } from "./exec-panel.tsx";
-import { disposeSession, useExecSessions, type ExecState } from "./sessions.ts";
+import { endSession, useExecSessions, type ExecState } from "./sessions.ts";
 import { fakeTerminal } from "./test-terminal.ts";
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
 
@@ -21,6 +21,8 @@ const mocked = vi.hoisted(() => ({
 }));
 vi.mock("@hukube/engine-client/react", () => {
   const engine = {
+    onStateChange: () => () => {},
+    getState: () => "open",
     request: () => Promise.resolve({ exec: mocked.exec }),
     openStream: (_method: string, _params: unknown, listener: StreamListener<"pod.exec">) => {
       mocked.streams.push(listener);
@@ -68,7 +70,7 @@ function view(state?: ExecState) {
 }
 afterEach(() => {
   cleanup();
-  disposeSession("id");
+  endSession("id");
   close.mockClear();
   openResource.mockClear();
   mocked.deleted = false;
@@ -79,19 +81,19 @@ afterEach(() => {
   mocked.object["metadata"] = { uid: "uid" };
 });
 
-it("restores a Tab without starting anything until Start a new session is pressed", async () => {
-  view();
-  expect(screen.getByText("No session is running here")).toBeDefined();
+it("shows gone with no stream until Start a new session is pressed", async () => {
+  view({ phase: "gone" });
+  expect(screen.getByText("This session is gone")).toBeDefined();
   expect(
     screen.getByText(
-      "An Exec Session belongs to the window that started it, and does not survive a reload.",
+      "The Engine no longer has it. The Engine restarted, or the session was told to exit after 10 minutes with no window attached.",
     ),
   ).toBeDefined();
-  expect(screen.getByText("Not running")).toBeDefined();
+  expect(screen.getByText("Gone")).toBeDefined();
   expect(mocked.streams).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Start a new session" }));
   expect(await screen.findByText("Starting…")).toBeDefined();
-  expect(mocked.streams).toHaveLength(1);
+  await vi.waitFor(() => expect(mocked.streams).toHaveLength(1));
 });
 it("shows the waiting notice and cancels by closing the Tab", () => {
   view({ phase: "waiting" });
@@ -313,3 +315,107 @@ it("moves focus to Start again when a focused session ends", () => {
   );
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start again" }));
 });
+
+const change = (state: ExecState) =>
+  act(() =>
+    useExecSessions.setState((store) => ({
+      entries: new Map(store.entries).set("id", { ...store.entries.get("id")!, state }),
+    })),
+  );
+
+it("shows attaching, reconnecting, and elsewhere without replacing the terminal area", () => {
+  const rendered = view({ phase: "attaching" });
+  expect(screen.getByText("Attaching…")).toBeDefined();
+  const area = mocked.terminal!.terminal.element.parentElement!;
+  const body = area.parentElement!;
+  change({ phase: "live" });
+  const badge = screen.getByText("Live");
+  const slot = [...badge.classList].find((name) => name.startsWith("w-["));
+  change({ phase: "reconnecting" });
+  expect(
+    [...screen.getByText("Reconnecting…").classList].find((name) => name.startsWith("w-[")),
+  ).toBe(slot);
+  expect(
+    screen
+      .getByText(
+        "Reconnecting to the Engine. The session keeps running, and the Engine keeps its recent output.",
+      )
+      .classList.contains("absolute"),
+  ).toBe(true);
+  expect(mocked.terminal!.terminal.element.parentElement).toBe(area);
+  change({ phase: "elsewhere" });
+  expect(screen.getByText("Not attached")).toBeDefined();
+  expect(
+    screen.getByText(
+      "An Exec Session shows in one window at a time. Using it here detaches the other window.",
+    ),
+  ).toBeDefined();
+  expect(
+    screen.getByRole("button", { name: "Use it here" }).closest(".absolute")?.parentElement,
+  ).toBe(body);
+  expect(mocked.terminal!.terminal.element.parentElement).toBe(area);
+  fireEvent.click(screen.getByRole("button", { name: "Use it here" }));
+  expect(screen.getByText("Attaching…")).toBeDefined();
+  rendered.unmount();
+});
+
+it("keeps output for gone sessions and offers a new session with its disabled reason", async () => {
+  mocked.connection = "reconnecting";
+  view({ phase: "live" });
+  act(() =>
+    useExecSessions.setState((store) => ({
+      entries: new Map(store.entries).set("id", {
+        ...store.entries.get("id")!,
+        hasOutput: true,
+        state: { phase: "gone" },
+      }),
+    })),
+  );
+  expect(
+    screen.getByText(
+      "This session is gone. The Engine restarted, or the session was told to exit after 10 minutes with no window attached.",
+    ),
+  ).toBeDefined();
+  expect(mocked.terminal!.terminal.element.isConnected).toBe(true);
+  const button = screen.getByRole("button", { name: "Start a new session" });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.focus(button);
+  expect(await screen.findByText("Reconnecting to the Engine")).toBeDefined();
+});
+
+it("shows the too-many-sessions notice and retry button", () => {
+  view({
+    phase: "failed",
+    reason: "error",
+    error: { code: "unavailable", reason: "TooManySessions", message: "full" },
+  });
+  expect(screen.getByText("Not started")).toBeDefined();
+  expect(screen.getByText("Too many Exec Sessions")).toBeDefined();
+  expect(
+    screen.getByText("The Engine runs at most 64 at a time. End one and try again."),
+  ).toBeDefined();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+});
+
+it.each(["gone", "elsewhere"] as const)(
+  "moves focus from a focused terminal when it becomes %s",
+  (phase) => {
+    view({ phase: "live" });
+    const field = document.createElement("textarea");
+    mocked.terminal!.terminal.element.append(field);
+    field.focus();
+    act(() =>
+      useExecSessions.setState((store) => ({
+        entries: new Map(store.entries).set("id", {
+          ...store.entries.get("id")!,
+          state: { phase },
+        }),
+      })),
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: phase === "gone" ? "Start a new session" : "Use it here",
+      }),
+    );
+  },
+);

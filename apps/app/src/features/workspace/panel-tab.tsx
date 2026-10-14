@@ -6,7 +6,7 @@ import type { IDockviewPanelHeaderProps } from "dockview-react";
 import { useEffect, useRef, useState } from "react";
 
 import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
-import { isRunning, useExecSessions } from "../exec/sessions.ts";
+import { useExecSessions } from "../exec/sessions.ts";
 
 import { pinPanel } from "./dock.ts";
 
@@ -17,9 +17,12 @@ import { pinPanel } from "./dock.ts";
 export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: boolean }>) {
   const dirty = useUnsavedEdits((state) => state.entries.has(api.id));
   const exec = api.id.startsWith("exec:");
-  const running = useExecSessions((state) =>
-    isRunning(exec ? state.entries.get(api.id.slice(5)) : undefined),
+  const phase = useExecSessions((state) =>
+    exec ? state.entries.get(api.id.slice(5))?.state.phase : undefined,
   );
+  const running = phase === "live" || phase === "starting";
+  const over = phase === "ended" || phase === "failed" || phase === "gone";
+  const status = phase === "elsewhere" ? "open in another window" : (phase ?? "attaching");
   const tab = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // A Tab opened or chosen beyond the strip's edge would otherwise stay out of sight.
@@ -41,7 +44,7 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
     <div
       ref={tab}
       className="flex h-full items-center gap-1 pr-1 pl-3"
-      title={exec ? `Exec Session, ${running ? "running" : "not running"}: ${title}` : undefined}
+      title={exec ? `Exec Session, ${status}: ${title}` : undefined}
       onDoubleClick={() => pinPanel(api, params)}
       onAuxClick={(e) => {
         if (e.button === 1) close();
@@ -59,7 +62,7 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
         className={cn(
           "max-w-56 truncate font-mono text-xs",
           params.preview && "italic",
-          exec && !running && "text-muted-foreground line-through decoration-1",
+          exec && over && "text-muted-foreground line-through decoration-1",
         )}
       >
         {title}

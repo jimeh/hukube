@@ -13,8 +13,8 @@ type KeyFields = Pick<
 >;
 
 /**
- * What a key does while an Exec Session's terminal has focus (ADR-0023). An
- * ended session's process takes no keys, so they go back to the window and
+ * What a key does while an Exec Session's terminal has focus (ADR-0023). A
+ * terminal that takes no input gives its keys back to the window and
  * Tab moves focus again.
  */
 export function execKey(
@@ -29,8 +29,8 @@ export function execKey(
 
 /**
  * Whether a key pressed in a session's terminal opens Go to Resource.
- * windowRule is what the key means outside a terminal, which an ended
- * session's terminal goes back to.
+ * windowRule is what the key means outside a terminal, which a terminal
+ * taking no input goes back to.
  */
 export function opensGoToResource(
   mac: boolean,

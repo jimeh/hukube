@@ -12,6 +12,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { YamlFacet } from "./yaml-facet.tsx";
 import type { FacetProps } from "./facet-props.ts";
 import type { YamlEditorHandle } from "./yaml-editor.tsx";
+import { createBrowserHost } from "@hukube/host";
+import { HostProvider } from "@/lib/host.tsx";
 import { UnsavedGuard } from "../edit/unsaved-guard.tsx";
 import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
 
@@ -100,14 +102,18 @@ function setup() {
   const view = render(
     <EngineProvider client={client}>
       <YamlFacet {...props} />
-      <UnsavedGuard />
+      <HostProvider host={createBrowserHost()}>
+        <UnsavedGuard />
+      </HostProvider>
     </EngineProvider>,
   );
   const rerender = () =>
     view.rerender(
       <EngineProvider client={client}>
         <YamlFacet {...props} />
-        <UnsavedGuard />
+        <HostProvider host={createBrowserHost()}>
+          <UnsavedGuard />
+        </HostProvider>
       </EngineProvider>,
     );
   return {

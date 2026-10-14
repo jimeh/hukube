@@ -5,6 +5,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopBridge } from "@hukube/host";
 
 const bridge: DesktopBridge = {
+  reportOpenWork: (work) => ipcRenderer.send("hukube:open-work", work),
   engine: () => ipcRenderer.invoke("hukube:engine"),
   openWindow: (path) => ipcRenderer.send("hukube:open-window", path),
   openExternal: (url) => ipcRenderer.send("hukube:open-external", url),

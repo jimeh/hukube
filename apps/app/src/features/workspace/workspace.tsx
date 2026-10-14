@@ -18,8 +18,9 @@ import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
 import { useTheme } from "@/lib/theme.ts";
 import { ExecPanel } from "../exec/exec-panel.tsx";
 import {
-  disposeClusterSessions,
-  disposeSession,
+  attachSession,
+  detachClusterSessions,
+  endSession,
   sessionId,
   startSession,
   type ExecSessionParams,
@@ -67,14 +68,23 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   );
 
   useLayoutPersistence(api, cluster);
-  useEffect(() => () => disposeClusterSessions(cluster), [cluster]);
+  useEffect(() => () => detachClusterSessions(cluster), [cluster]);
   useEffect(() => {
     if (!api) return;
+    const attach = (panel: (typeof api.panels)[number]) => {
+      if (panel.id.startsWith("exec:"))
+        void attachSession(engine, cluster, panel.params as ExecSessionParams);
+    };
+    for (const panel of api.panels) attach(panel);
+    const added = api.onDidAddPanel(attach);
     const d = api.onDidRemovePanel((event) => {
-      if (event.id.startsWith("exec:")) disposeSession(event.id.slice(5));
+      if (event.id.startsWith("exec:")) endSession(event.id.slice(5));
     });
-    return () => d.dispose();
-  }, [api]);
+    return () => {
+      added.dispose();
+      d.dispose();
+    };
+  }, [api, engine, cluster]);
 
   useEffect(() => {
     if (!api) return;
