@@ -175,9 +175,11 @@ export async function startSession(
         return new Promise<void>((done) => terminal.write(bytes, done));
       },
       gap: ({ bytes }) => {
+        // The reset first ends an escape sequence the gap may have cut short,
+        // so the notice is not read as part of it.
         if (current())
           terminal.write(
-            `\r\n\x1b[2m[hukube: ${mebibytes(bytes)} of output was dropped while this window was not reading]\x1b[0m\r\n`,
+            `\x1b[0m\r\n\x1b[2m[hukube: ${mebibytes(bytes)} of output was dropped because this window was not keeping up]\x1b[0m\r\n`,
           );
       },
       inputDropped: (bytes) => {

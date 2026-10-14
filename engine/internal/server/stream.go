@@ -19,15 +19,15 @@ import (
 type streamLimits struct {
 	queue, window, texts int
 	open, write, drain   time.Duration
-	// stall and stallFloor bound how long streamQueue.write holds its caller.
-	stall      time.Duration
-	stallFloor uint64
+	// hold is the longest streamQueue.write keeps its caller waiting behind
+	// output the client has not acknowledged.
+	hold time.Duration
 }
 
 // streamWriteFrame is the most a frame made by streamQueue.write holds.
 const streamWriteFrame = 32 << 10
 
-var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second, 30 * time.Second, 4 << 20}
+var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second, 3 * time.Second}
 
 type streamOutput[E any] struct {
 	frame func([]byte, int)
@@ -63,6 +63,24 @@ type streamItem struct {
 	data    []byte
 	records int
 	msg     protocol.StreamServerMessage
+	// held is when write queued the oldest byte of data. It is zero for
+	// data queued by frame, which never waits.
+	held time.Time
+}
+
+// streamShedKeep is how much of the newest output streamQueue.write keeps
+// queued while it sheds: enough to repaint a screen, and little enough that
+// the gap before it is still within a terminal's scrollback when it arrives.
+const streamShedKeep = 64 << 10
+
+// flightRuns is the most runs of sent output streamQueue keeps apart.
+const flightRuns = 256
+
+// sentOutput is output from write that was sent and is not yet acknowledged:
+// where it ends in the stream, and when its oldest byte was queued.
+type sentOutput struct {
+	end  uint64
+	held time.Time
 }
 
 type streamQueue struct {
@@ -75,15 +93,10 @@ type streamQueue struct {
 	limits             streamLimits
 	wake               chan struct{}
 	changed            chan struct{}
-	// waitingSince is when output began to wait for room in the window. It
-	// is zero while writes find room at once. waiting counts the writes
-	// waiting now.
-	waitingSince time.Time
-	waiting      int
-	// taken holds what the client acknowledged in each of the last slices of
-	// the stall period, and takenIn the slice each entry is for.
-	taken   [stallSlices]uint64
-	takenIn [stallSlices]int64
+	// flight lists the output from write that is sent and not acknowledged,
+	// oldest first. waiting counts the writes waiting now.
+	flight  []sentOutput
+	waiting int
 	input   *execsession.Input
 	sizes   *execsession.Sizes
 }
@@ -135,18 +148,28 @@ func (q *streamQueue) frame(data []byte, records int) {
 	q.signal()
 }
 
-// stallSlices is how finely streamQueue tracks what the client took lately.
-const stallSlices = 6
-
-// write queues output for a stream that must not lose it, and waits for room
-// in the window while the client keeps up. A client keeps up when output has
-// waited for less than the stall period, or when it took at least the stall
-// floor during the last one. For a client that does not, write does not wait:
-// it queues the output and drops the oldest, leaving a gap.
+// write queues output for a stream that must not lose it lightly: an Exec
+// Session's. While the window is full it makes its caller wait, which holds
+// the container's process back as a slow terminal does.
 //
-// This bounds how long an Exec Session's producer is held. client-go reads
-// its heartbeat on the goroutine that writes output, and ends a session that
-// has read none for a minute.
+// It holds one invariant: write waits only while every byte it queued, and
+// the client has not acknowledged, was queued less than limits.hold ago. Once
+// the oldest such byte is older, write does not wait. It queues its output
+// and drops the oldest queued output beyond streamShedKeep, leaving a gap.
+// Output that was already sent cannot be dropped, so up to one window stays
+// in flight beside what is queued.
+//
+// Nothing renews the wait. Whether the client is silent, acknowledges a
+// trickle, or acknowledges in batches, the oldest byte ages the same way, and
+// only the acknowledgement of that byte makes the next one the oldest.
+//
+// The limit exists because of the caller. client-go reads an Exec Session's
+// connection on the goroutine that calls write, and ends the session when
+// that goroutine has read no heartbeat for 61 seconds. A heartbeat arrives
+// behind the output the Cluster had already sent: against the test cluster a
+// reader that took 115 KiB a second never reached one, and one that took 131
+// did. A caller that waits here is taking a window in less than limits.hold,
+// which with the defaults is 341 KiB a second.
 func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 	written := 0
 	for len(data) > 0 {
@@ -154,25 +177,16 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 		if n <= 0 {
 			return written, io.ErrShortWrite
 		}
-		frame := append([]byte{protocol.StreamChannelStdout}, data[:n]...)
 		q.mu.Lock()
-		shed, waited := false, false
-		for q.bytes+int(q.sent-q.acked)+len(frame) > q.limits.window && !q.finished && !q.overflow {
-			now := time.Now()
-			if q.waitingSince.IsZero() {
-				q.waitingSince = now
+		shed := false
+		for q.bytes+int(q.sent-q.acked)+n+1 > q.limits.window && !q.finished && !q.overflow {
+			wait := q.limits.hold
+			if oldest := q.oldestHeld(); !oldest.IsZero() {
+				wait -= time.Since(oldest)
 			}
-			grace := q.limits.stall - now.Sub(q.waitingSince)
-			if grace <= 0 && q.takenLately(now) < q.limits.stallFloor {
+			if wait <= 0 {
 				shed = true
 				break
-			}
-			waited = true
-			// The answer can change when the grace ends, and whenever a slice
-			// of the last stall period falls out of it.
-			wait := max(q.limits.stall/stallSlices, time.Millisecond)
-			if grace > 0 {
-				wait = min(wait, grace)
 			}
 			changed := q.changed
 			q.waiting++
@@ -199,14 +213,19 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 			}
 			return written, io.ErrClosedPipe
 		}
-		// Output stops waiting when a write finds room at once.
-		if !shed && !waited {
-			q.waitingSince = time.Time{}
+		// Output joins the frame before it while that is still queued and
+		// has room, so a process that writes a byte at a time costs no more
+		// than one that writes a block.
+		if last := len(q.items) - 1; last >= 0 && !q.items[last].held.IsZero() && len(q.items[last].data)+n <= min(streamWriteFrame+1, q.limits.window) {
+			q.items[last].data = append(q.items[last].data, data[:n]...)
+			q.bytes += n
+		} else {
+			frame := append([]byte{protocol.StreamChannelStdout}, data[:n]...)
+			q.items = append(q.items, streamItem{data: frame, held: time.Now()})
+			q.bytes += len(frame)
 		}
-		q.items = append(q.items, streamItem{data: frame})
-		q.bytes += len(frame)
 		if shed {
-			q.drop(q.limits.window)
+			q.drop(min(streamShedKeep, q.limits.window))
 		}
 		q.mu.Unlock()
 		q.signal()
@@ -216,31 +235,19 @@ func (q *streamQueue) write(ctx context.Context, data []byte) (int, error) {
 	return written, nil
 }
 
-// slice numbers the slice of the stall period that now falls in. q.mu is held
-// by the caller of this and the two methods below.
-func (q *streamQueue) slice(now time.Time) int64 {
-	return now.UnixNano() / int64(max(q.limits.stall/stallSlices, time.Nanosecond))
-}
-
-// took records that the client acknowledged n bytes.
-func (q *streamQueue) took(now time.Time, n uint64) {
-	slice := q.slice(now)
-	at := slice % stallSlices
-	if q.takenIn[at] != slice {
-		q.takenIn[at], q.taken[at] = slice, 0
+// oldestHeld is when the oldest byte from write that the client has not
+// acknowledged was queued, or zero when there is none. q.mu is held by the
+// caller.
+func (q *streamQueue) oldestHeld() time.Time {
+	if len(q.flight) > 0 {
+		return q.flight[0].held
 	}
-	q.taken[at] += n
-}
-
-// takenLately is what the client acknowledged in about the last stall period.
-func (q *streamQueue) takenLately(now time.Time) uint64 {
-	slice, total := q.slice(now), uint64(0)
-	for at, in := range q.takenIn {
-		if in > slice-stallSlices {
-			total += q.taken[at]
+	for _, item := range q.items {
+		if !item.held.IsZero() {
+			return item.held
 		}
 	}
-	return total
+	return time.Time{}
 }
 
 // drop replaces the oldest data with a gap at its position, preserving text.
@@ -280,9 +287,10 @@ func (q *streamQueue) acknowledge(n uint64) bool {
 		return false
 	}
 	if n > q.acked {
-		now := time.Now()
-		q.took(now, n-q.acked)
-		q.acked, q.lastAck = n, now
+		q.acked, q.lastAck = n, time.Now()
+		for len(q.flight) > 0 && q.flight[0].end <= n {
+			q.flight = q.flight[1:]
+		}
 		close(q.changed)
 		q.changed = make(chan struct{})
 	}
@@ -337,6 +345,15 @@ func (q *streamQueue) next() (streamItem, bool, bool, time.Duration) {
 	if item.data != nil {
 		q.bytes -= len(item.data)
 		q.sent += uint64(len(item.data))
+		if !item.held.IsZero() {
+			if last := len(q.flight) - 1; last >= flightRuns-1 {
+				// The list stays short. Output joins the newest run and takes
+				// its older time, so write gives up a little early at worst.
+				q.flight[last].end = q.sent
+			} else {
+				q.flight = append(q.flight, sentOutput{end: q.sent, held: item.held})
+			}
+		}
 	} else {
 		q.texts--
 	}
