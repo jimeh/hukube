@@ -43,7 +43,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
     await page.getByRole("option", { name: new RegExp(`^Pod ${name} ${namespace}$`) }).click();
     const pod = page
       .getByRole("tabpanel", { name, exact: true })
-      .filter({ has: page.getByRole("button", { name: "Open an Exec Session", exact: true }) });
+      .filter({ has: page.getByRole("button", { name: /^Open an Exec Session/ }) });
     await pod.getByRole("button", { name: "Open an Exec Session" }).click();
   };
   await openPod("e2e-exec");
@@ -201,12 +201,13 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   await expect(noShell.getByText("No shell in this container")).toBeVisible();
   await expect(noShell.locator("pre")).toContainText("sh");
   const noShellElement = await noShell.elementHandle();
+  await expect(noShell.getByRole("checkbox")).toHaveCount(0);
+  await noShell.getByRole("textbox", { name: "Command", exact: true }).fill("/pause -v");
   await expect(
     noShell.getByRole("checkbox", {
-      name: "Use the default shell for rancher/mirrored-pause from now on",
+      name: "Use this command for rancher/mirrored-pause from now on",
     }),
   ).toBeChecked();
-  await noShell.getByRole("textbox", { name: "Command", exact: true }).fill("/pause -v");
   await noShell.getByRole("button", { name: "Run", exact: true }).click();
   // The title changes in place; compare with the original Tab's element below.
   const chosen = page
@@ -219,6 +220,20 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
     true,
   );
   await expect(chosen.locator("header")).toContainText("/pause -v");
+  await page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close e2e-exec-no-shell", exact: true }) })
+    .first()
+    .click();
+  const noShellPod = page.getByRole("tabpanel", { name: "e2e-exec-no-shell", exact: true });
+  await noShellPod.getByRole("button", { name: "Exec Session options" }).click();
+  await page.getByRole("menuitem", { name: "Run a command…" }).click();
+  const prefilled = page.getByRole("dialog", { name: "Run a command in e2e-exec-no-shell" });
+  await expect(prefilled.getByRole("textbox", { name: "Command", exact: true })).toHaveValue(
+    "/pause -v",
+  );
+  await expect(prefilled.getByRole("checkbox")).toBeChecked();
+  await prefilled.getByRole("button", { name: "Cancel", exact: true }).click();
   await openPod("e2e-exec-no-shell");
   const remembered = page
     .getByRole("tabpanel", { name: "pause: app in e2e-exec-no-shell", exact: true })
@@ -238,12 +253,12 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   const busybox = page.getByRole("tabpanel", { name: "e2e-exec", exact: true });
   await busybox.getByRole("button", { name: "Exec Session options" }).click();
   await page.getByRole("menuitem", { name: "Run a command…" }).click();
-  const dialog = page.getByRole("dialog", { name: "Run a command in a container" });
+  const dialog = page.getByRole("dialog", { name: "Run a command in e2e-exec" });
   const command = dialog.getByRole("textbox", { name: "Command", exact: true });
   await expect(command).toBeFocused();
   await command.fill("a | b");
   await expect(dialog.getByRole("alert")).toHaveText(
-    "| needs a shell. To use one, write sh -c '…'.",
+    "The | operator needs a shell. To use one, write sh -c '…'.",
   );
   await expect(dialog.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
   await command.fill("sh -c 'echo $((6*7))'");

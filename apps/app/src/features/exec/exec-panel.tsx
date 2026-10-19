@@ -27,7 +27,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { CommandForm } from "./command-form.tsx";
-import { commandProgram, execTitle, parseCommand } from "./command.ts";
+import { commandProgram, execTitle, imageKey, parseCommand } from "./command.ts";
 import { isMac } from "@/lib/platform.ts";
 import { useTheme } from "@/lib/theme.ts";
 import { useResourceAccess } from "../edit/use-access.ts";
@@ -112,8 +112,8 @@ export function ExecPanel({
     if (showing && (theme === "dark" || theme === "light")) terminal?.theme();
   }, [terminal, theme, showing]);
   useEffect(() => {
-    if (showing && selected && terminal) terminal.focus();
-  }, [terminal, showing, selected]);
+    if (renderingTerminal && showing && selected && terminal) terminal.focus();
+  }, [terminal, showing, selected, renderingTerminal]);
   useEffect(() => terminal?.onFind(findFromTerminal), [terminal]);
   const phase = state?.phase;
   useEffect(() => {
@@ -254,25 +254,30 @@ export function ExecPanel({
           }
         />
       ) : state?.phase === "failed" ? (
-        <FailedNotice
-          state={state}
-          retry={restart("Try again")}
-          retryGone={available ? restart("Try again") : undefined}
-          params={params}
-          image={container?.image ?? ""}
-          disabledReason={reason}
-          runCommand={(commandLine) => {
-            const next = { ...params, commandLine };
-            // Commit the new header before startSession resets and refits the
-            // terminal. A resize after the process starts can drop typed input.
-            flushSync(() => {
-              api.updateParameters(next);
-              api.setTitle(execTitle(next));
-            });
-            setFinding(false);
-            void startSession(engine, cluster, next);
-          }}
-        />
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="my-auto w-full shrink-0">
+            <FailedNotice
+              state={state}
+              retry={restart("Try again")}
+              retryGone={available ? restart("Try again") : undefined}
+              params={params}
+              image={container?.image ?? ""}
+              focus={showing && selected}
+              disabledReason={reason}
+              runCommand={(commandLine) => {
+                const next = { ...params, commandLine };
+                // Commit the new header before startSession resets and refits the
+                // terminal. A resize after the process starts can drop typed input.
+                flushSync(() => {
+                  api.updateParameters(next);
+                  api.setTitle(execTitle(next));
+                });
+                setFinding(false);
+                void startSession(engine, cluster, next);
+              }}
+            />
+          </div>
+        </div>
       ) : (
         <ContextMenu
           onOpenChange={(open) => {
@@ -356,6 +361,7 @@ function FailedNotice({
   retryGone,
   params,
   image,
+  focus,
   disabledReason,
   runCommand,
 }: {
@@ -365,9 +371,13 @@ function FailedNotice({
   retryGone?: React.ReactNode;
   params: ExecSessionParams;
   image: string;
+  focus: boolean;
   disabledReason?: string;
   runCommand: (line: string) => void;
 }) {
+  const { commandFor, run } = useCommands();
+  const remembered = commandFor(image);
+  const correcting = !!params.commandLine && params.commandLine === remembered;
   const error = state.error;
   if (error?.reason === ExecReasonNoShell || error?.reason === ExecReasonCommandNotFound) {
     const noShell = error.reason === ExecReasonNoShell;
@@ -378,12 +388,20 @@ function FailedNotice({
         description={
           noShell ? (
             <>
-              hukube runs <code>sh</code>, and this container has none. You can run a program the
-              image contains instead, below, or use a debug container, for example with{" "}
-              <code>kubectl debug</code>.
+              hukube's default shell needs <code>sh</code>, and this container has none. You can run
+              a program the image contains instead, below, or use a debug container, for example
+              with <code>kubectl debug</code>.
             </>
           ) : (
-            "Choose a command this image contains."
+            <>
+              {correcting && (
+                <>
+                  You chose <code>{params.commandLine}</code> for <code>{imageKey(image)}</code>
+                  .{" "}
+                </>
+              )}
+              Choose a command this image contains.
+            </>
           )
         }
         action={
@@ -395,10 +413,23 @@ function FailedNotice({
               key={params.commandLine ?? ""}
               image={image}
               initialLine={params.commandLine}
-              rememberInitially
+              rememberInitially={noShell || correcting}
+              focus={focus}
               disabledReason={disabledReason}
               onRun={runCommand}
             />
+            {!noShell && correcting && (
+              <Button
+                variant="outline"
+                disabled={!!disabledReason}
+                onClick={() => {
+                  void run(image, "", true);
+                  runCommand("");
+                }}
+              >
+                Use the default shell
+              </Button>
+            )}
           </div>
         }
       />

@@ -1,4 +1,11 @@
-import type { EngineClient, EngineStream, ExecParams, StreamEnd } from "@hukube/engine-client";
+import {
+  ExecReasonCommandNotFound,
+  type EngineClient,
+  type EngineStream,
+  type ExecParams,
+  type StreamEnd,
+} from "@hukube/engine-client";
+import { getCommandsStore } from "./commands-store.ts";
 import { create } from "zustand";
 import { commandRefusalText, parseCommand } from "./command.ts";
 
@@ -201,12 +208,20 @@ export async function startSession(
             `\r\n\x1b[2m[hukube: ${mebibytes(bytes)} of input was not sent, because the process is not reading and too much is already waiting]\x1b[0m\r\n`,
           );
       },
-      end: (end) =>
+      end: (end) => {
+        if (!current()) return;
+        if (end.error?.reason === ExecReasonCommandNotFound && params.commandLine) {
+          const commands = getCommandsStore(engine);
+          // The stream outlives its panel. Keep a watch until this correction is saved.
+          const stop = commands.subscribe(() => {});
+          void commands.removeRecent(params.commandLine).finally(stop);
+        }
         publish(
           (end.reason === "error" || end.reason === "deleted") && !output
             ? { phase: "failed", ...end }
             : { phase: "ended", ...end },
-        ),
+        );
+      },
     },
   );
   session.stream = stream;
