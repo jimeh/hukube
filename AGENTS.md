@@ -27,6 +27,10 @@ the background on a free port. It prints the URL with its token, also saved in
 change and stop it with `mise run dev:verify:stop`; do not `pkill -f`, which
 can match your own shell. It never touches the clusters in your kubeconfig.
 
+Run `dev:verify` and `e2e` sequentially. Both Hosts serve `apps/app/dist`,
+and a Vite rebuild replaces it, so rebuilding for one can give the other
+Host a 404 during a test.
+
 ## Designing features
 
 - **Plan the UI and UX.** For anything a user sees or touches, the plan says

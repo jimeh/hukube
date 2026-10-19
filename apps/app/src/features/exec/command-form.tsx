@@ -15,7 +15,9 @@ export function CommandForm({
   inputRef,
   before,
   cancel,
-  showRecent = false,
+  showRecent = true,
+  focus = true,
+  onEdit,
 }: {
   image: string;
   initialLine?: string;
@@ -26,18 +28,34 @@ export function CommandForm({
   before?: ReactNode;
   cancel?: ReactNode;
   showRecent?: boolean;
+  focus?: boolean;
+  onEdit?: () => void;
 }) {
-  const [line, setLine] = useState(initialLine);
-  const [remember, setRemember] = useState(rememberInitially);
-  const { commands, run } = useCommands();
+  const [input, setInput] = useState({ line: initialLine, prefill: initialLine, edited: false });
+  if (input.prefill !== initialLine) {
+    setInput({ ...input, prefill: initialLine, line: input.edited ? input.line : initialLine });
+  }
+  const line = input.line;
+  const { commands, commandFor, run } = useCommands();
   const ownInput = useRef<HTMLInputElement>(null);
   const field = inputRef ?? ownInput;
   const id = useId();
   const parsed = parseCommand(line);
   const repository = imageKey(image);
+  const hasLine = !!line.trim();
+  const remembered = commandFor(image);
+  const mode = JSON.stringify([repository, hasLine, rememberInitially]);
+  const defaultChecked = hasLine && rememberInitially;
+  const [choice, setChoice] = useState({ mode, checked: defaultChecked });
+  if (choice.mode !== mode) setChoice({ mode, checked: defaultChecked });
+  const remember = choice.checked;
   useEffect(() => {
-    field.current?.focus();
-  }, [field]);
+    if (focus) field.current?.focus();
+  }, [field, focus]);
+  const editLine = (next: string) => {
+    onEdit?.();
+    setInput({ line: next, prefill: initialLine, edited: true });
+  };
   return (
     <form
       className="flex min-w-0 flex-col gap-3 text-left"
@@ -59,7 +77,7 @@ export function CommandForm({
           className="font-mono"
           aria-invalid={parsed.error !== undefined}
           aria-describedby={`${id}-preview`}
-          onChange={(event) => setLine(event.target.value)}
+          onChange={(event) => editLine(event.target.value)}
         />
         {parsed.error !== undefined ? (
           <p id={`${id}-preview`} role="alert" className="text-destructive">
@@ -71,9 +89,22 @@ export function CommandForm({
             aria-label="Words to run"
             className="flex flex-wrap gap-1 break-all text-muted-foreground"
           >
-            {parsed.command.length
-              ? parsed.command.map((word, index) => <code key={index}>{JSON.stringify(word)}</code>)
-              : "Runs the default shell."}
+            {parsed.command.length ? (
+              <>
+                <span>Runs:</span>
+                {parsed.command.map((word, index) => (
+                  <code
+                    key={index}
+                    className="min-w-4 rounded border px-1"
+                    aria-label={word === "" ? "Empty argument" : undefined}
+                  >
+                    {word}
+                  </code>
+                ))}
+              </>
+            ) : (
+              "Runs the default shell."
+            )}
           </output>
         )}
       </div>
@@ -90,7 +121,7 @@ export function CommandForm({
                 className="max-w-full"
                 title={recent}
                 onClick={() => {
-                  setLine(recent);
+                  editLine(recent);
                   field.current?.focus();
                 }}
               >
@@ -100,19 +131,29 @@ export function CommandForm({
           </div>
         </div>
       )}
-      {repository && (
+      {repository && (hasLine || remembered !== undefined) && (
         <label htmlFor={`${id}-remember`} className="flex min-w-0 items-start gap-2">
-          <Checkbox id={`${id}-remember`} checked={remember} onCheckedChange={setRemember} />
+          <Checkbox
+            id={`${id}-remember`}
+            checked={remember}
+            onCheckedChange={(checked) => setChoice({ mode, checked })}
+          />
           <span className="min-w-0 break-words">
-            {line.trim() ? "Use this command for " : "Use the default shell for "}
-            <code>{repository}</code> from now on
+            {hasLine ? "Use this command for " : "Forget the command chosen for "}
+            <code>{repository}</code>
+            {hasLine ? " from now on" : ""}
           </span>
         </label>
       )}
       {disabledReason && <p className="text-muted-foreground">{disabledReason}</p>}
       <div className="flex justify-end gap-2">
         {cancel}
-        <Button type="submit" size="sm" disabled={parsed.error !== undefined || !!disabledReason}>
+        <Button
+          type="submit"
+          variant="default"
+          size="sm"
+          disabled={parsed.error !== undefined || !!disabledReason}
+        >
           Run
         </Button>
       </div>
@@ -122,16 +163,32 @@ export function CommandForm({
 
 function RefusalMessage({ refusal }: { refusal: CommandRefusal }) {
   switch (refusal.kind) {
-    case "shell":
+    case "operator":
       return (
         <>
-          <code>{refusal.token}</code> needs a shell. To use one, write <code>sh -c '…'</code>.
+          The <code>{refusal.token}</code> operator needs a shell. To use one, write{" "}
+          <code>sh -c '…'</code>.
+        </>
+      );
+    case "glob":
+      return (
+        <>
+          The pattern <code>{refusal.token}</code> needs a shell to expand. Quote it to pass it as
+          text, or write <code>sh -c '…'</code>.
+        </>
+      );
+    case "variable":
+      return (
+        <>
+          The variable <code>{refusal.token}</code> needs a shell to expand. Quote it with single
+          quotes to pass it as text, or write <code>sh -c '…'</code>.
         </>
       );
     case "comment":
       return (
         <>
-          <code>#</code> starts a comment here. Quote it to pass it as text.
+          <code>#</code> starts a comment here. Quote it, or put a backslash before it, to pass it
+          as text.
         </>
       );
     case "invalid":

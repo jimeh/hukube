@@ -114,16 +114,25 @@ the user types runs directly, with no shell. The line is split into words by
 `shell-quote`: spaces separate words, and single quotes, double quotes, and
 backslashes work as in a shell.
 
-Anything a shell would act on is refused with a message that says how to get
-it: an operator (`|`, `&&`, `;`, `>`, `<`, `&`), a glob, a variable, or a
-comment. The message for an operator, a glob, or a variable is "`|` needs a
-shell. To use one, write `sh -c '…'`." The message for a comment is "`#`
-starts a comment here. Quote it to pass it as text." Running a pipeline is
-then explicit, `sh -c 'ps aux | grep java'`, and a container without `sh`
-gets a clear error instead of a silent wrapper that cannot work.
+Operators, globs, variables, and comments flagged by `shell-quote` are refused.
+Variables recorded by the env callback are reported before parsed tokens, so
+`ls $DIR/*.log` identifies `$DIR`, without exposing the parser's internal token.
+The messages render tokens and the shell example as code:
 
+- Operator: "The `|` operator needs a shell. To use one, write `sh -c '…'`."
+- Glob: "The pattern `*.log` needs a shell to expand. Quote it to pass it as text,
+  or write `sh -c '…'`." This includes backslash-escaped `\*.log`.
+- Variable: "The variable `$HOME` needs a shell to expand. Quote it with single
+  quotes to pass it as text, or write `sh -c '…'`."
+- Comment: "`#` starts a comment here. Quote it, or put a backslash before it,
+  to pass it as text." This also applies inside a word.
+
+Backticks, `~`, and bracket patterns such as `[ab]` are not flagged by
+`shell-quote` and pass as literal text. No additional detection is added.
+An unterminated quote is accepted as closed. The preview is labelled "Runs:"
+and shows each word as a bordered code chip, including an empty argument.
 An empty field means the default shell. The placeholder says so. A line is
-at most 4,096 characters.
+at most 4,096 characters and 256 words; its first word cannot be only whitespace.
 
 ### The Engine checks a command and says when it is missing
 
@@ -151,32 +160,46 @@ opens a menu.
   menu. The default container first is what Freelens and k9s do, and the
   menu is one click away.
 - **The menu** has the containers under "Exec Session in", as today, each
-  showing the command it will run when one is remembered, and below them
+  showing a muted "runs `<line>`" when a command is remembered, and below them
   "Run a command…".
-- **"Run a command…"** opens a dialog, "Run a command in a container", with:
+- **"Run a command…"** opens a dialog, "Run a command in `<pod>`", with:
   - a container select, when the Pod has more than one;
   - the command field, focused, with the placeholder `Default shell: bash,
 or sh`;
   - the words it will run, under the field, as the user types, or the reason
     it cannot run;
   - the recent commands, up to 10, as buttons that fill the field;
-  - "Use this command for `<image>` from now on", unchecked;
+  - the remembered line for the selected image, prefilled with remembering
+    checked. Changing the container changes the prefill until the field is edited;
+  - "Use this command for `<image>` from now on", otherwise unchecked;
   - Run and Cancel. `Enter` runs, `Escape` cancels.
 
-The tooltip of the button names the command it will run when one is
-remembered: "Open an Exec Session: runs `python3`".
+The tooltip and accessible name of the button name a remembered command:
+"Open an Exec Session, running `<line>`". Run uses the Cluster's primary
+button color, including in the dialog's portal.
 
 ### When the shell is missing, the notice offers a command
 
-The "No shell in this container" notice keeps its copy and the Cluster's
-message, and gains the same field, words, and Run button, with "Use this
-command for `<image>` from now on" checked: the default cannot work for that
-image. Run starts the session again in the same Tab with that command. The
+The "No shell in this container" notice says that hukube's default shell needs
+`sh`, which this container lacks, and offers a program the image contains or a
+debug container such as `kubectl debug`. It shows the Cluster's message and the
+same field, words, recent buttons, and Run button as the dialog. Remembering a
+nonempty command defaults to checked: the default cannot work for that image. Run starts the session again in the same Tab with that command. The
 Tab's title and header change to show it.
 
 A chosen command that is missing gets its own notice, "`python3` is not in
 this container", with the Cluster's message and the field holding the
-command, ready to correct.
+command, ready to correct, and the same recent buttons. It checks remembering
+only when the failing line is the image's remembered command. In that case it
+says "You chose `<line>` for `<image>`." and offers "Use the default shell", which
+forgets that image's command and starts the default shell in the same Tab.
+A missing chosen command is removed from recents even if its panel is unmounted.
+
+In every form an empty field has no checkbox if no command is remembered.
+Otherwise it shows "Forget the command chosen for `<image>`", unchecked.
+Crossing between empty and nonempty resets the checkbox to that state's default,
+so a checked box never changes meaning. Notices scroll when too tall for their
+Pane and stay centred when they fit.
 
 ### A command is remembered per image, by choice
 
@@ -241,8 +264,9 @@ the menu with the arrow keys. Nothing is added.
   chevron opens the menu; the arrow keys move in it.
 - In the dialog the field has focus. `Tab` moves to the recent commands, the
   checkbox, and the buttons. `Enter` in the field runs; `Escape` closes.
-- In a notice the field has focus when the notice appears, so the user can
-  type a command and press `Enter`.
+- In a notice the field takes focus only while its panel is showing and selected,
+  so a failure in another Pane cannot steal typing. Selecting that panel focuses
+  its command field, as it does for a live terminal.
 
 ### States
 
@@ -350,4 +374,35 @@ None.
   successful read; it never blocks the session from running.
 - Refusals carry a kind and token for rendering code elements, with plain text
   for session errors. The no-shell notice names the custom-program option, and
-  an empty command field labels remembering as using the default shell.
+  empty command fields now offer explicit forgetting only when a command exists.
+
+- Review corrections made checkbox defaults explicit for each entry point and
+  reset them when empty/nonempty changes the action. The dialog prefills an image's
+  remembered line until edited, and both notices offer recent commands. If the
+  setting arrives after typing starts, it neither replaces the typed line nor
+  checks remembering: the field was never prefilled from that value.
+- `CommandNotFound` removes the line from recents in the session store, independent
+  of panel lifetime. The remembered image choice stays available for correction;
+  "Use the default shell" explicitly forgets it and restarts the same Tab.
+- The parser contract follows only tokens flagged by `shell-quote`. Backticks,
+  tilde, bracket patterns, and unterminated quotes follow the literal/lenient rules
+  above. Variable callbacks take precedence over globs, and the UI enforces the
+  Engine's 256-word and whitespace-only first-word limits.
+- The words preview now uses labelled chips. The dialog names the Pod and carries
+  the Cluster's color into its portal so Run retains the primary style.
+- Failed-session content scrolls in short Panes. Notice focus follows the panel's
+  visibility and selection, without focusing its detached terminal.
+
+- The existing shared dialog focus defect was reproduced in Chromium in both the
+  command dialog and the unsaved-edits dialog. Base UI's `FloatingFocusManager`
+  hands focus from an invisible guard to the first/last control on the next
+  animation frame (`enqueueFocus`), so Tab before that frame can reach `body`.
+  `useModalInert` blocks the application root, but not the portal's guards or
+  `body`. The Container select is tabbable and receives the normal completed
+  wrap. Shared dialog components were left unchanged as requested; fixing this
+  focus handoff is a separate follow-up.
+
+- Verification must run sequentially: rebuilding with `dev:verify` during an
+  end-to-end run briefly removed their shared `apps/app/dist` and caused an
+  unrelated page navigation to return 404. This workflow hazard is recorded in
+  `AGENTS.md`; the suite was rerun without overlapping builds.

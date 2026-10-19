@@ -114,6 +114,7 @@ function view(state?: ExecState, initialParams: ExecSessionParams = params) {
 }
 afterEach(() => {
   cleanup();
+  Object.assign(api, { isVisible: true, isActive: true });
   disposeSession("id");
   close.mockClear();
   openResource.mockClear();
@@ -251,7 +252,7 @@ it.each<[ExecState, string, string]>([
     !!screen.queryByText(
       (_text, element) =>
         element?.textContent ===
-        "hukube runs sh, and this container has none. You can run a program the image contains instead, below, or use a debug container, for example with kubectl debug.",
+        "hukube's default shell needs sh, and this container has none. You can run a program the image contains instead, below, or use a debug container, for example with kubectl debug.",
     ),
   ).toBe(title === "No shell in this container");
   expect(!!screen.queryByRole("button", { name: "Try again" })).toBe(
@@ -377,8 +378,9 @@ it("runs a command from the no-shell notice in the same Tab after committing its
   });
   const field = screen.getByRole<HTMLInputElement>("textbox", { name: "Command" });
   expect(document.activeElement).toBe(field);
-  expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("true");
+  expect(screen.queryByRole("checkbox")).toBeNull();
   fireEvent.change(field, { target: { value: "/pause -v" } });
+  expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("true");
   // Refit is the ordering boundary: the stream can only open after it returns.
   mocked.terminal!.terminal.refit.mockImplementation(async () => {
     expect(screen.getByText("Command")).toBeDefined();
@@ -422,4 +424,73 @@ it("records reuse of a command when a restored Tab explicitly starts again", asy
     value: expect.objectContaining({ recent: expect.arrayContaining(["sh -l"]) }),
   });
   expect(mocked.streamParams[0]).toMatchObject({ command: ["sh", "-l"] });
+});
+
+it("does not remember a missing command that was only tried once", async () => {
+  view(
+    {
+      phase: "failed",
+      reason: "error",
+      error: { code: "not_found", reason: "CommandNotFound", message: "no bash" },
+    },
+    { ...params, commandLine: "bash -l" },
+  );
+  await vi.waitFor(() =>
+    expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("false"),
+  );
+  expect(screen.queryByRole("button", { name: "Use the default shell" })).toBeNull();
+});
+it("identifies a remembered missing command and forgets it when using the default shell", async () => {
+  mocked.setting = { images: [{ image: "busybox", command: "bash -l" }], recent: ["ash"] };
+  view(
+    {
+      phase: "failed",
+      reason: "error",
+      error: { code: "not_found", reason: "CommandNotFound", message: "no bash" },
+    },
+    { ...params, commandLine: "bash -l" },
+  );
+  expect(await screen.findByText("You chose", { exact: false })).toBeDefined();
+  expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Use the default shell" }));
+  await vi.waitFor(() => expect(mocked.streams).toHaveLength(1));
+  expect(updateParameters).toHaveBeenCalledWith({ ...params, commandLine: "" });
+  expect(setTitle).toHaveBeenCalledWith("app in web");
+  expect(mocked.streamParams[0]).not.toHaveProperty("command");
+  expect(mocked.saved).toContainEqual({
+    key: "exec/commands",
+    value: { images: [], recent: ["ash"] },
+  });
+});
+it.each(["NoShell", "CommandNotFound"])(
+  "offers recent commands in the %s notice",
+  async (reason) => {
+    mocked.setting = { images: [], recent: ["python3"] };
+    view({
+      phase: "failed",
+      reason: "error",
+      error: { code: "not_found", reason, message: "missing" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "python3" }));
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Command" }).value).toBe(
+      "python3",
+    );
+  },
+);
+it.each([
+  [false, true],
+  [true, false],
+])("does not focus a failed notice with visible=%s selected=%s", (visible, selected) => {
+  Object.assign(api, { isVisible: visible, isActive: selected });
+  const other = document.createElement("input");
+  document.body.append(other);
+  other.focus();
+  view({
+    phase: "failed",
+    reason: "error",
+    error: { code: "not_found", reason: "NoShell", message: "missing" },
+  });
+  expect(document.activeElement).toBe(other);
+  Object.assign(api, { isVisible: true, isActive: true });
+  other.remove();
 });

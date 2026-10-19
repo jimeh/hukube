@@ -15,22 +15,30 @@ import {
   SelectValue,
 } from "@hukube/ui/components/select";
 import { useId, useRef, useState, type RefObject } from "react";
+import { clusterScope } from "../clusters/cluster-color.ts";
+import { useWorkspace } from "../workspace/workspace-context.tsx";
+import { useCommands } from "./use-commands.ts";
 import { CommandForm } from "./command-form.tsx";
 import type { ExecContainer } from "./containers.ts";
 
 export function CommandDialog({
+  pod,
   containers,
   disabledReason,
   onRun,
   close,
   returnFocus,
 }: {
+  pod: string;
   containers: ExecContainer[];
   disabledReason?: string;
   onRun: (container: ExecContainer, line: string) => void;
   close: () => void;
   returnFocus: RefObject<HTMLButtonElement | null>;
 }) {
+  const { cluster } = useWorkspace();
+  const { commandFor } = useCommands();
+  const [edited, setEdited] = useState<{ image: string; fromMemory: boolean }>();
   const [name, setName] = useState(containers[0]?.name ?? "");
   const selected = containers.find((container) => container.name === name);
   const input = useRef<HTMLInputElement>(null);
@@ -45,18 +53,37 @@ export function CommandDialog({
       }}
     >
       <DialogContent
+        {...clusterScope(cluster)}
         className="sm:max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto"
         initialFocus={input}
         finalFocus={returnFocus}
       >
         <DialogHeader>
-          <DialogTitle>Run a command in a container</DialogTitle>
+          <DialogTitle>
+            Run a command in <code>{pod}</code>
+          </DialogTitle>
           <DialogDescription>
             Run a program directly. Use quotes to keep an argument's spaces.
           </DialogDescription>
         </DialogHeader>
         <CommandForm
           image={selected?.image ?? ""}
+          initialLine={selected ? (commandFor(selected.image) ?? "") : ""}
+          rememberInitially={
+            !!selected &&
+            !!commandFor(selected.image) &&
+            (!edited || (edited.image === selected.image && edited.fromMemory))
+          }
+          onEdit={() => {
+            if (selected)
+              setEdited(
+                (previous) =>
+                  previous ?? {
+                    image: selected.image,
+                    fromMemory: commandFor(selected.image) !== undefined,
+                  },
+              );
+          }}
           inputRef={input}
           showRecent
           disabledReason={reason}

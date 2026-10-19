@@ -79,7 +79,9 @@ export function ExecButton({
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="Open an Exec Session"
+              aria-label={
+                remembered ? `Open an Exec Session, running ${remembered}` : "Open an Exec Session"
+              }
               disabled={!!defaultReason}
               focusableWhenDisabled
               className="rounded-r-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
@@ -93,7 +95,7 @@ export function ExecButton({
         </TooltipTrigger>
         <TooltipContent>
           {defaultReason ??
-            (remembered ? `Open an Exec Session: runs ${remembered}` : "Open an Exec Session")}
+            (remembered ? `Open an Exec Session, running ${remembered}` : "Open an Exec Session")}
         </TooltipContent>
       </Tooltip>
       <DropdownMenu>
@@ -140,7 +142,7 @@ export function ExecButton({
                     className="truncate font-mono text-muted-foreground"
                     title={commandFor(container.image)}
                   >
-                    {commandFor(container.image)}
+                    runs {commandFor(container.image)}
                   </span>
                 )}
                 {container.state !== "running" && (
@@ -159,6 +161,7 @@ export function ExecButton({
       </DropdownMenu>
       {dialog && (
         <CommandDialog
+          pod={pod}
           containers={containers}
           disabledReason={reason}
           returnFocus={chevron}
