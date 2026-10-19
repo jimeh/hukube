@@ -336,3 +336,25 @@ it("does not check remembering when settings arrive after the dialog field was e
   expect(field.value).toBe("custom");
   expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("false");
 });
+
+it("does not remember a one-off command typed over the remembered one", async () => {
+  view();
+  act(() => deliver({ images: [{ image: "busybox", command: "python3" }], recent: [] }));
+  fireEvent.click(screen.getByRole("button", { name: "Exec Session options" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Run a command…" }));
+  const field = await screen.findByRole<HTMLInputElement>("textbox", { name: "Command" });
+  expect(field.value).toBe("python3");
+  expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("true");
+  fireEvent.change(field, { target: { value: "ls /tmp" } });
+  expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("false");
+  fireEvent.submit(field);
+  expect(open).toHaveBeenCalledWith(
+    expect.objectContaining({ commandLine: "ls /tmp" }),
+    expect.anything(),
+  );
+  await vi.waitFor(() => expect(saves).toHaveBeenCalled());
+  expect(saves).toHaveBeenLastCalledWith({
+    key: "exec/commands",
+    value: { images: [{ image: "busybox", command: "python3" }], recent: ["ls /tmp"] },
+  });
+});

@@ -38,7 +38,6 @@ export function CommandDialog({
 }) {
   const { cluster } = useWorkspace();
   const { commandFor } = useCommands();
-  const [edited, setEdited] = useState<{ image: string; fromMemory: boolean }>();
   const [name, setName] = useState(containers[0]?.name ?? "");
   const selected = containers.find((container) => container.name === name);
   const input = useRef<HTMLInputElement>(null);
@@ -69,21 +68,8 @@ export function CommandDialog({
         <CommandForm
           image={selected?.image ?? ""}
           initialLine={selected ? (commandFor(selected.image) ?? "") : ""}
-          rememberInitially={
-            !!selected &&
-            !!commandFor(selected.image) &&
-            (!edited || (edited.image === selected.image && edited.fromMemory))
-          }
-          onEdit={() => {
-            if (selected)
-              setEdited(
-                (previous) =>
-                  previous ?? {
-                    image: selected.image,
-                    fromMemory: commandFor(selected.image) !== undefined,
-                  },
-              );
-          }}
+          rememberInitially={!!selected && commandFor(selected.image) !== undefined}
+          rememberLine={selected ? commandFor(selected.image) : undefined}
           inputRef={input}
           showRecent
           disabledReason={reason}
