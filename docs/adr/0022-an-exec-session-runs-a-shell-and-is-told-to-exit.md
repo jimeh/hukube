@@ -9,8 +9,11 @@ sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
 ```
 
 It gives `bash` where the image has it and `sh` otherwise, in one request.
-The user does not choose a command. A container without `sh` cannot host a
-session, and the Tab says so with the Cluster's own message.
+A container without `sh` cannot run it, and the Tab says so with the
+Cluster's own message.
+
+This is the default. ADR-0025 lets the user choose another command, which
+replaced "The user does not choose a command" here.
 
 The Engine uses client-go's executor, WebSocket first and SPDY when the
 upgrade fails, as `kubectl` does. The fallback tests for the upgrade error
@@ -62,8 +65,9 @@ the rest:
 - **Try `bash`, then `sh`, each as its own exec,** as Headlamp and the
   Dashboard do. It works in an image with `bash` and no `sh`, which is rare,
   and it loses what the user typed while an attempt failed.
-- **Let the user type a command.** No comparable tool does, and a shell runs
-  anything else. `ExecParams.Command` is there for it.
+- **Let the user type a command.** Rejected at first, because few
+  comparable tools do and a shell runs anything else. A container without a
+  shell has no other way in, so ADR-0025 adds it.
 - **Send an interrupt before end-of-transmission.** It would stop most
   running commands when the Tab closes, as a hang-up does over SSH. It would
   also stop a long job because a laptop slept or a network dropped, which
