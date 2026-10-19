@@ -17,7 +17,7 @@ export function CommandForm({
   cancel,
   showRecent = true,
   focus = true,
-  onEdit,
+  rememberLine,
 }: {
   image: string;
   initialLine?: string;
@@ -29,7 +29,8 @@ export function CommandForm({
   cancel?: ReactNode;
   showRecent?: boolean;
   focus?: boolean;
-  onEdit?: () => void;
+  /** When set, remembering is checked by default only while the field holds this line. */
+  rememberLine?: string;
 }) {
   const [input, setInput] = useState({ line: initialLine, prefill: initialLine, edited: false });
   if (input.prefill !== initialLine) {
@@ -44,8 +45,9 @@ export function CommandForm({
   const repository = imageKey(image);
   const hasLine = !!line.trim();
   const remembered = commandFor(image);
-  const mode = JSON.stringify([repository, hasLine, rememberInitially]);
-  const defaultChecked = hasLine && rememberInitially;
+  const defaultChecked =
+    hasLine && rememberInitially && (rememberLine === undefined || line === rememberLine);
+  const mode = JSON.stringify([repository, hasLine, defaultChecked]);
   const [choice, setChoice] = useState({ mode, checked: defaultChecked });
   if (choice.mode !== mode) setChoice({ mode, checked: defaultChecked });
   const remember = choice.checked;
@@ -53,7 +55,6 @@ export function CommandForm({
     if (focus) field.current?.focus();
   }, [field, focus]);
   const editLine = (next: string) => {
-    onEdit?.();
     setInput({ line: next, prefill: initialLine, edited: true });
   };
   return (
