@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { commandProgram, execTitle, imageKey, parseCommand } from "./command.ts";
+import {
+  commandProgram,
+  commandRefusalText,
+  execTitle,
+  imageKey,
+  parseCommand,
+} from "./command.ts";
 
 it.each<[string, string[]]>([
   ["bash -l", ["bash", "-l"]],
@@ -20,18 +26,20 @@ it.each<[string, string[]]>([
 
 it.each(["|", "&&", ";", ">", "<", "&", "||", ">>", "(", ")"])("refuses the operator %s", (op) => {
   expect(parseCommand(`a ${op} b`)).toEqual({
-    error: { kind: "shell", token: op },
+    error: { kind: "operator", token: op },
   });
 });
-it.each<[string, string]>([
-  ["ls *.log", "*.log"],
-  ["ls a?", "a?"],
-  ["echo $HOME", "$HOME"],
-  ['echo "x${HOME}y"', "$HOME"],
-  ["echo $constructor", "$constructor"],
-])("refuses expansion in %s", (line, token) => {
+it.each<[string, string, string]>([
+  ["ls *.log", "*.log", "glob"],
+  ["ls a?", "a?", "glob"],
+  ["echo $HOME", "$HOME", "variable"],
+  ['echo "x${HOME}y"', "$HOME", "variable"],
+  ["echo $constructor", "$constructor", "variable"],
+  ["ls $DIR/*.log", "$DIR", "variable"],
+  [String.raw`find . -name \*.log`, "*.log", "glob"],
+])("refuses expansion in %s", (line, token, kind) => {
   expect(parseCommand(line)).toEqual({
-    error: { kind: "shell", token },
+    error: { kind, token },
   });
 });
 it.each(["x # note", "curl http://x/#a"])("refuses comments in %s", (line) => {
@@ -69,4 +77,41 @@ it("splits a typed line put back in a field into exactly the original words", ()
   const saved = JSON.parse(JSON.stringify({ line: typed })) as { line: string };
   expect(saved.line).toBe(typed);
   expect(parseCommand(saved.line)).toEqual({ command: ["ls", "*.log"] });
+});
+
+it("matches the Engine's word count and whitespace-only program limits", () => {
+  expect(parseCommand(Array(256).fill("x").join(" ")).command).toHaveLength(256);
+  expect(parseCommand(Array(257).fill("x").join(" ")).error).toEqual({
+    kind: "invalid",
+    message: "A command can have at most 256 words.",
+  });
+  expect(parseCommand("' \t' arg").error).toEqual({
+    kind: "invalid",
+    message: "The command's first word cannot be empty.",
+  });
+});
+it.each(["echo '*.log'", "echo `date`", "echo ~", "echo [ab]"])(
+  "passes unflagged text literally: %s",
+  (line) => {
+    expect(parseCommand(line)).toEqual({ command: ["echo", line.slice(5).replaceAll("'", "")] });
+  },
+);
+it.each([
+  ["a | b", "The | operator needs a shell. To use one, write sh -c '…'."],
+  [
+    "ls *.log",
+    "The pattern *.log needs a shell to expand. Quote it to pass it as text, or write sh -c '…'.",
+  ],
+  [
+    "ls $DIR/*.log",
+    "The variable $DIR needs a shell to expand. Quote it with single quotes to pass it as text, or write sh -c '…'.",
+  ],
+  [
+    "x # hi",
+    "# starts a comment here. Quote it, or put a backslash before it, to pass it as text.",
+  ],
+])("explains the refusal for %s in plain text", (line, message) => {
+  const parsed = parseCommand(line);
+  expect(parsed.error).toBeDefined();
+  expect(commandRefusalText(parsed.error!)).toBe(message);
 });

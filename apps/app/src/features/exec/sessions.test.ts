@@ -265,8 +265,38 @@ it("fails an invalid stored line before creating a terminal or stream", async ()
   expect(s.state()).toEqual({
     phase: "failed",
     reason: "error",
-    error: { code: "bad_request", message: "| needs a shell. To use one, write sh -c '…'." },
+    error: {
+      code: "bad_request",
+      message: "The | operator needs a shell. To use one, write sh -c '…'.",
+    },
   });
   expect(make).not.toHaveBeenCalled();
   expect(s.openStream).not.toHaveBeenCalled();
+});
+
+it("removes CommandNotFound from recents even without a mounted panel", async () => {
+  const s = setup();
+  const writes: unknown[] = [];
+  const engine = Object.assign(s.engine, {
+    subscribe: (
+      _method: string,
+      _params: unknown,
+      listener: { data: (setting: unknown) => void },
+    ) => {
+      queueMicrotask(() => listener.data({ value: { images: [], recent: ["bash -l", "ash"] } }));
+      return { close: () => {} };
+    },
+    request: (_method: string, setting: unknown) => {
+      writes.push(setting);
+      return Promise.resolve();
+    },
+  });
+  await startSession(engine, "c", { ...params, commandLine: "bash -l" }, async () => s.terminal);
+  s.streams[0]!.listener.end({
+    reason: "error",
+    error: { code: "not_found", reason: "CommandNotFound", message: "no bash" },
+  });
+  await vi.waitFor(() =>
+    expect(writes).toContainEqual({ key: "exec/commands", value: { images: [], recent: ["ash"] } }),
+  );
 });

@@ -2,17 +2,21 @@ import { parse } from "shell-quote";
 
 export const commandMaxLength = 4096;
 export type CommandRefusal =
-  | { kind: "shell"; token: string }
+  | { kind: "operator" | "glob" | "variable"; token: string }
   | { kind: "comment" }
   | { kind: "invalid"; message: string };
 
 /** Plain text for a failed session's error, without Markdown delimiters. */
 export function commandRefusalText(refusal: CommandRefusal): string {
   switch (refusal.kind) {
-    case "shell":
-      return `${refusal.token} needs a shell. To use one, write sh -c '…'.`;
+    case "operator":
+      return `The ${refusal.token} operator needs a shell. To use one, write sh -c '…'.`;
+    case "glob":
+      return `The pattern ${refusal.token} needs a shell to expand. Quote it to pass it as text, or write sh -c '…'.`;
+    case "variable":
+      return `The variable ${refusal.token} needs a shell to expand. Quote it with single quotes to pass it as text, or write sh -c '…'.`;
     case "comment":
-      return "# starts a comment here. Quote it to pass it as text.";
+      return "# starts a comment here. Quote it, or put a backslash before it, to pass it as text.";
     case "invalid":
       return refusal.message;
   }
@@ -27,18 +31,30 @@ export function parseCommand(line: string): ParsedCommand {
   if (line.length > commandMaxLength)
     return { error: { kind: "invalid", message: "A command can be at most 4,096 characters." } };
   try {
-    const words = parse<{ variable: string }>(line, (variable) => ({ variable }));
+    const variables: string[] = [];
+    const words = parse(line, (variable) => {
+      variables.push(variable);
+      return "";
+    });
+    // A glob can contain shell-quote's internal variable token. Report the
+    // variable seen by the callback before inspecting parsed words.
+    if (variables.length) return { error: { kind: "variable", token: `$${variables[0]}` } };
     const command: string[] = [];
     for (const word of words) {
       if (typeof word === "string") command.push(word);
       else if ("comment" in word) return { error: { kind: "comment" } };
       else {
-        const token =
-          "variable" in word ? `$${word.variable}` : word.op === "glob" ? word.pattern : word.op;
-        return { error: { kind: "shell", token } };
+        return {
+          error:
+            word.op === "glob"
+              ? { kind: "glob", token: word.pattern }
+              : { kind: "operator", token: word.op },
+        };
       }
     }
-    if (command[0] === "")
+    if (command.length > 256)
+      return { error: { kind: "invalid", message: "A command can have at most 256 words." } };
+    if (command[0] !== undefined && !command[0].trim())
       return { error: { kind: "invalid", message: "The command's first word cannot be empty." } };
     return { command };
   } catch (error) {

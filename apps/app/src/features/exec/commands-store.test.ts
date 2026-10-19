@@ -248,3 +248,23 @@ it("stops queued writes when the watch fails during a write", async () => {
   await Promise.all([first, last]);
   expect(s.store.getSnapshot()).toBeUndefined();
 });
+
+it("removes a missing command from recent commands while keeping image choices", async () => {
+  const s = setup();
+  const value = { images: [{ image: "busybox", command: "bash -l" }], recent: ["bash -l", "ash"] };
+  s.watches[0]!.data(value);
+  const removed = s.store.removeRecent("bash -l");
+  expect(s.store.getSnapshot()).toEqual({ ...value, recent: ["ash"] });
+  expect(s.writes).toHaveLength(1);
+  s.writes[0]!.resolve();
+  await removed;
+});
+it("applies a missing-command removal after an unread run in order", async () => {
+  const s = setup();
+  const run = s.store.run("busybox", "bash -l");
+  const removed = s.store.removeRecent("bash -l");
+  s.watches[0]!.data({ images: [], recent: ["ash"] });
+  expect(s.writes[0]!.value).toEqual({ images: [], recent: ["ash"] });
+  s.writes[0]!.resolve();
+  await Promise.all([run, removed]);
+});

@@ -60,7 +60,7 @@ export function createCommandsStore(client: Pick<EngineClient, "subscribe" | "re
   const key = "exec/commands";
   let snapshot: ExecCommands | undefined;
   let readState: "pending" | "ready" | "failed" = "pending";
-  let unread: { image: string; command: string; remember: boolean; resolve: () => void }[] = [];
+  let unread: { apply: (current: ExecCommands) => ExecCommands; resolve: () => void }[] = [];
   const listeners = new Set<() => void>();
   let watch: { close: () => void } | undefined;
   let writing = false;
@@ -82,10 +82,7 @@ export function createCommandsStore(client: Pick<EngineClient, "subscribe" | "re
           const stored = read(value);
           const queued = unread;
           unread = [];
-          const next = queued.reduce(
-            (current, run) => recordRun(current, run.image, run.command, run.remember),
-            stored,
-          );
+          const next = queued.reduce((current, change) => change.apply(current), stored);
           if (next === stored) {
             show(stored);
             for (const run of queued) run.resolve();
@@ -133,6 +130,18 @@ export function createCommandsStore(client: Pick<EngineClient, "subscribe" | "re
     else settled = write(value);
     return settled;
   };
+  const change = (apply: (current: ExecCommands) => ExecCommands): Promise<void> => {
+    if (readState === "failed") {
+      console.warn("Could not save Exec Session commands because the setting could not be read.");
+      return Promise.resolve();
+    }
+    if (snapshot === undefined) {
+      // Preserve the intent until it can be applied to the Engine's value.
+      return new Promise((resolve) => unread.push({ apply, resolve }));
+    }
+    const next = apply(snapshot);
+    return next === snapshot ? settled : put(next);
+  };
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => {
@@ -149,17 +158,24 @@ export function createCommandsStore(client: Pick<EngineClient, "subscribe" | "re
     commandFor: (image: string) =>
       snapshot?.images.find((entry) => entry.image === imageKey(image))?.command,
     /** Record a run, optionally replacing (or forgetting) the image's command. */
-    run: (image: string, command: string, remember = false): Promise<void> => {
-      if (readState === "failed") {
-        console.warn("Could not save Exec Session commands because the setting could not be read.");
-        return Promise.resolve();
-      }
-      if (snapshot === undefined) {
-        // Preserve the intent until it can be applied to the Engine's value.
-        return new Promise((resolve) => unread.push({ image, command, remember, resolve }));
-      }
-      const next = recordRun(snapshot, image, command, remember);
-      return next === snapshot ? settled : put(next);
-    },
+    run: (image: string, command: string, remember = false): Promise<void> =>
+      change((current) => recordRun(current, image, command, remember)),
+    /** A missing program should no longer be suggested, but may still need correcting per image. */
+    removeRecent: (command: string): Promise<void> =>
+      change((current) =>
+        current.recent.includes(command)
+          ? { ...current, recent: current.recent.filter((line) => line !== command) }
+          : current,
+      ),
   };
+}
+
+const stores = new WeakMap<EngineClient, ReturnType<typeof createCommandsStore>>();
+export function getCommandsStore(engine: EngineClient) {
+  let store = stores.get(engine);
+  if (!store) {
+    store = createCommandsStore(engine);
+    stores.set(engine, store);
+  }
+  return store;
 }

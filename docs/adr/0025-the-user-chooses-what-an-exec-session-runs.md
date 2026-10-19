@@ -9,9 +9,12 @@ So the user can choose the command.
 
 The command is a line split into words as a POSIX shell splits them, by
 `shell-quote`: quotes and backslashes work. The words run directly. A line
-with anything else a shell would act on (an operator, a glob, a variable, or
-a comment) is refused with a message that says to write `sh -c '…'`. The
-field shows the words it will run while the user types.
+with an operator, glob, variable, or comment flagged by `shell-quote` is refused,
+with guidance to quote literal text or use `sh -c '…'`. Backticks, `~`, and
+bracket patterns such as `[ab]` are not flagged and pass as literal text;
+hukube adds no detection of its own. An unterminated quote is accepted as
+closed. The field labels its preview "Runs:" and shows each word as a chip,
+including an empty argument, so these parser rules are visible before running.
 
 A shell is not added around the line, because the containers that most need
 a chosen command have none.
@@ -60,7 +63,9 @@ command with an empty first word, more than 256 words, or more than 16 KiB.
 ## Consequences
 
 - Two tags of one image share a remembered command. A wrong one fails with
-  the not-found notice, which offers to change it.
+  the not-found notice, which identifies the remembered line and offers to
+  correct it or forget it and use the default shell. Missing commands are
+  removed from recents.
 - A command that prints nothing shows "Starting…" until it does, because the
   Engine cannot tell when a process has started.
 - The remembered commands are shared by every window and both Hosts, and,
