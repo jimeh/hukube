@@ -26,10 +26,14 @@ export function readSessionTabs(cluster: string): SessionTab[] {
       )
         continue;
       // The command line is kept as typed, so Start again runs the same command.
-      const line =
-        typeof commandLine === "string" && commandLine.length <= commandMaxLength
-          ? { commandLine }
-          : {};
+      // A Tab whose line cannot be kept is not restored: without its line it
+      // would start the default shell instead.
+      if (
+        commandLine !== undefined &&
+        (typeof commandLine !== "string" || commandLine.length > commandMaxLength)
+      )
+        continue;
+      const line = commandLine === undefined ? {} : { commandLine };
       tabs.set(sessionId, {
         title: entry.title,
         params: { sessionId, namespace, pod, uid, container, ...line, preview: false },

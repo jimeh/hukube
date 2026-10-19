@@ -9,7 +9,9 @@ export class ExecCodec {
   beginSocket(): void {}
   params(params: ExecParams): ExecParams {
     if (this.#offset === undefined) return params;
-    const { start: _start, takeover: _takeover, ...rest } = params;
+    // Once attached, a socket that opens again only attaches: nothing about
+    // starting or taking over is sent twice.
+    const { start: _start, takeover: _takeover, command: _command, run: _run, ...rest } = params;
     return { ...rest, resume: this.#offset };
   }
   event(event: ExecSync): ExecSync {

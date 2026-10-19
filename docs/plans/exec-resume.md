@@ -239,14 +239,14 @@ type ExecParams struct {
 type ExecEndParams struct{ Cluster, Session string }
 ```
 
-| A session with this ID                  | `start` | The Engine                                                              |
-| --------------------------------------- | ------- | ----------------------------------------------------------------------- |
-| None                                    | no      | Ends the stream with `not_found` and the reason `SessionGone`.          |
-| None                                    | yes     | Starts one, as layer 7 does, and attaches the stream to it.             |
-| Running                                 | either  | Attaches. A start that is sent again is the same start.                 |
-| Over                                    | no      | Attaches: the window gets what it missed and the `end`.                 |
-| Over                                    | yes     | Removes it and starts a new one. This is "Start again" in the same Tab. |
-| Any, for another Pod, UID, or container | either  | Ends the stream with `bad_request`.                                     |
+| A session with this ID                  | `start` | The Engine                                                                                                                                                                |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| None                                    | no      | Ends the stream with `not_found` and the reason `SessionGone`.                                                                                                            |
+| None                                    | yes     | Starts one, as layer 7 does, and attaches the stream to it.                                                                                                               |
+| Running                                 | either  | Attaches. A start that is sent again is the same start.                                                                                                                   |
+| Over                                    | no      | Attaches: the window gets what it missed and the `end`.                                                                                                                   |
+| Over                                    | yes     | Removes it and starts a new one. This is "Start again" in the same Tab. The same start sent again, with the same `run`, attaches instead (see "Merging chosen commands"). |
+| Any, for another Pod, UID, or container | either  | Ends the stream with `bad_request`.                                                                                                                                       |
 
 A read-only Engine refuses the stream before any of this, as now. `exec.end`
 is registered with `handleMutation`. It succeeds when the session is already
@@ -698,6 +698,39 @@ arrives, which slows the writer while one control string longer than the
 ring is in it; a window cut in mid-stream takes no input, and answers no
 query, from the moment the catch-up arrives, so a query that live output
 was still being parsed for goes unanswered.
+
+### Merging chosen commands
+
+Layer 7 added choosing the command a session runs (ADR-0025,
+`docs/plans/exec-session-commands.md`) after this layer branched. Merging it
+forward settled how the two work together:
+
+- **Only a start runs a command.** `startSession` splits the Tab's
+  `commandLine` and sends `command` with `start`. An attachment, a
+  take-over, and a socket that reconnects after the first sync never send or
+  split it, so a Tab restored after a reload joins the process its line
+  started.
+- **A start that is sent again cannot run its command twice.** A stream
+  repeats `start` when its socket closes before the Engine has answered. If
+  the process had already ended, the Engine took that as "Start again" and
+  ran the command again, which a chosen command makes unsafe. Each start now
+  carries its own `run`, and an ended session is replaced only by a start
+  with another `run`. A reviewer of the merge found this.
+- **The window's record keeps the command line,** and a same-Tab restart
+  from the no-shell or not-found notice updates the record, so a Tab
+  restored from it keeps its command and title. A Tab whose line is too long
+  to keep is not restored from the record, because without its line it
+  would start the default shell.
+- **Removing a missing command from the recent ones** runs in the ordered
+  end handler. A window that attaches after a reload can be sent the same
+  end again, and removing a command that is already gone does nothing.
+- This layer's ADR is ADR-0026, after layer 7's ADR-0025.
+
+Not changed: a Tab in both the shared layout and this window's record takes
+the layout's params. If another window saved the layout after this window
+restarted the Tab with a new command, a reload shows the old command line
+until the session is started again. The session itself still attaches
+correctly.
 
 ## Measurements
 

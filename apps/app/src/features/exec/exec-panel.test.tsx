@@ -554,11 +554,12 @@ it("runs a command from the no-shell notice in the same Tab after committing its
     { params: { ...params, commandLine: "/pause -v", preview: false }, title: "pause: app in web" },
   ]);
 });
-it("keeps a Tab's command line in the window's record, and drops one too long to be valid", () => {
+it("keeps a Tab's command line in the window's record, and drops a Tab whose line cannot be kept", () => {
   rememberSessionTab("c", { params: { ...params, commandLine: "sh -l" }, title: "sh: app in web" });
   expect(readSessionTabs("c")[0]?.params.commandLine).toBe("sh -l");
+  // Restored without its line, the Tab would start the default shell instead.
   rememberSessionTab("c", { params: { ...params, commandLine: "x".repeat(4097) }, title: "x" });
-  expect(readSessionTabs("c")[0]?.params).not.toHaveProperty("commandLine");
+  expect(readSessionTabs("c")).toEqual([]);
 });
 it("prefills a missing chosen command and names its program", () => {
   const commandLine = "/usr/bin/python3 -q";

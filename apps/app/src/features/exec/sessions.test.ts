@@ -456,6 +456,27 @@ it("never sends or re-parses the command line when attaching or taking over", as
   expect(s.openStream.mock.calls[0]?.[1]).not.toHaveProperty("command");
   expect(s.openStream.mock.calls[0]?.[1]).not.toHaveProperty("start");
   expect(useExecSessions.getState().entries.get(params.sessionId)?.params).toEqual(chosen);
+  await s.listener().event({ ...sync, offset: 10 });
+  await s.listener().end({ reason: "detached" });
+  expect(s.state()?.phase).toBe("elsewhere");
+  await takeSession(s.engine, "c", chosen);
+  expect(s.openStream).toHaveBeenCalledTimes(2);
+  for (const key of ["command", "start", "run"])
+    expect(s.openStream.mock.calls[1]?.[1]).not.toHaveProperty(key);
+  expect(s.state()?.phase).toBe("attaching");
+});
+it("gives each start its own run, which a retried socket repeats", async () => {
+  const s = setup();
+  const chosen = { ...params, commandLine: "touch /marker" };
+  await startSession(s.engine, "c", chosen, async () => s.terminal);
+  const first = (s.openStream.mock.calls[0]![1] as { run?: string }).run;
+  expect(first).toMatch(/^[0-9a-f]{32}$/);
+  s.streams[0]!.listener.end({ reason: "complete", exitCode: 0 });
+  await vi.waitFor(() => expect(s.state()?.phase).toBe("ended"));
+  await startSession(s.engine, "c", chosen, async () => s.terminal);
+  const second = (s.openStream.mock.calls[1]![1] as { run?: string }).run;
+  expect(second).toMatch(/^[0-9a-f]{32}$/);
+  expect(second).not.toBe(first);
 });
 it("fails an invalid stored line before creating a terminal or stream", async () => {
   const s = setup();

@@ -258,6 +258,11 @@ type ExecParams struct {
 	// Start asks for a new session when none has this ID. Without it the
 	// stream only attaches.
 	Start bool `json:"start,omitempty"`
+	// Run identifies one start. A start sent again with the same Run, as a
+	// stream does when its socket closed before the Engine answered, attaches
+	// to the session that start made, even after it ended, instead of running
+	// its command again.
+	Run string `json:"run,omitempty"`
 	// Takeover attaches although another window is attached, which detaches
 	// that window.
 	Takeover bool `json:"takeover,omitempty"`

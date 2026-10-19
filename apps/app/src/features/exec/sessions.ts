@@ -309,6 +309,8 @@ async function openSession(
       container: params.container,
       // Only a start runs a command. An attachment joins the process already running.
       ...(intent === "start" && command.length ? { command } : {}),
+      // A start sent again over a new socket must not run the command again.
+      ...(intent === "start" ? { run: sessionId() } : {}),
       ...(intent === "start" || terminal.sized ? { cols: terminal.cols, rows: terminal.rows } : {}),
     },
     {

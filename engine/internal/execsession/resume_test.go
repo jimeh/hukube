@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -689,6 +690,59 @@ func TestRegistryEndedBoundAndRefresh(t *testing.T) {
 		p.Session = "new"
 		if _, err := f.r.Open(p, f.c, f.idx, func() {}, nil); err == nil || errorDetail(t, err).Reason != protocol.ExecReasonSessionGone {
 			t.Fatalf("newer entry expired too early: %v", err)
+		}
+	})
+}
+
+func TestRegistryRetriedStartJoinsItsEndedSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var runs atomic.Int32
+		c, idx := fixture(func(_ context.Context, o remotecommand.StreamOptions) error {
+			runs.Add(1)
+			_, _ = o.Stdout.Write([]byte("done"))
+			return nil
+		})
+		r := NewRegistry(DefaultBuffer, DefaultUnattachedTimeout)
+		defer func() { _ = r.Shutdown(context.Background()) }()
+		p := testParams
+		p.Session, p.Window, p.Start, p.Run, p.Command = "s", "w", true, "first", []string{"touch", "/marker"}
+		a, err := r.Open(p, c, idx, func() {}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-a.session.done
+		// The socket was lost before the window saw anything, and the stream
+		// sends the same start again: it joins the ended session.
+		a.Detach()
+		retried, err := r.Open(p, c, idx, func() {}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if retried.session != a.session || runs.Load() != 1 {
+			t.Fatalf("retried start ran the command again: runs=%d", runs.Load())
+		}
+		syncOf(t, retried)
+		var out []byte
+		for {
+			_, frame, end, _ := retried.Next(true, false)
+			if end != nil {
+				if end.Reason != protocol.StreamEndReasonComplete || string(out) != "done" {
+					t.Fatalf("end=%+v output=%q", end, out)
+				}
+				break
+			}
+			out = append(out, frame[1:]...)
+		}
+		// A new start, such as Start again, replaces it.
+		retried.Detach()
+		p.Run = "second"
+		again, err := r.Open(p, c, idx, func() {}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-again.session.done
+		if again.session == a.session || runs.Load() != 2 {
+			t.Fatalf("new start did not run: runs=%d", runs.Load())
 		}
 	})
 }

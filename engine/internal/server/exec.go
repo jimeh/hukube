@@ -59,8 +59,8 @@ func init() {
 		if p.Cluster == "" || p.Namespace == "" || p.Pod == "" || p.UID == "" || p.Container == "" || p.Session == "" || p.Window == "" || (p.Cols == 0) != (p.Rows == 0) {
 			return streamError(badRequest(fmt.Errorf("cluster, namespace, pod, uid, container, session, window, and a complete size are required")))
 		}
-		if !execID(p.Session) || !execID(p.Window) {
-			return streamError(badRequest(fmt.Errorf("session and window must be at most 64 letters, digits, hyphens, or underscores")))
+		if !execID(p.Session) || !execID(p.Window) || p.Run != "" && !execID(p.Run) {
+			return streamError(badRequest(fmt.Errorf("session, window, and run must be at most 64 letters, digits, hyphens, or underscores")))
 		}
 		if len(p.Command) > 0 {
 			bytes := 0

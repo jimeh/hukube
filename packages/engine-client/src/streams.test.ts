@@ -315,7 +315,7 @@ it("reattaches after a lost socket without repeating start or takeover, and drop
   const dropped = vi.fn<(bytes: number) => void>();
   const stream = conn.openStream(
     "pod.exec",
-    { ...execParams, takeover: true },
+    { ...execParams, takeover: true, command: ["touch", "/marker"], run: "r1" },
     { ...execListener(), inputDropped: dropped },
   );
   await Promise.resolve();
@@ -327,7 +327,13 @@ it("reattaches after a lost socket without repeating start or takeover, and drop
   await vi.advanceTimersByTimeAsync(100);
   const socket = sockets[2]!;
   socket.hello();
-  expect(socket.sent[0]?.params).toMatchObject({ start: true, takeover: true });
+  // Before the Engine answered, a retry repeats the same start, run included.
+  expect(socket.sent[0]?.params).toMatchObject({
+    start: true,
+    takeover: true,
+    command: ["touch", "/marker"],
+    run: "r1",
+  });
   socket.receive({ type: "event", event: { offset: 100, cols: 80, rows: 24 } });
   socket.receive(new Uint8Array([1, 226, 128, 148]).buffer);
   stream.write(new Uint8Array(ExecInputWindow + 10));
@@ -345,6 +351,8 @@ it("reattaches after a lost socket without repeating start or takeover, and drop
     method: "pod.exec",
     params: { ...execParams, start: undefined, resume: 103, cols: 132, rows: 43 },
   });
+  for (const key of ["start", "takeover", "command", "run"])
+    expect((next.sent[0] as { params: object }).params).not.toHaveProperty(key);
   expect(next.sent.filter((m) => m.type === "resize")).toEqual([]);
   stream.write(new Uint8Array(ExecInputWindow + 20));
   next.receive({ type: "ack", bytes: 10 });

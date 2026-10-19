@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "98cf59c755cb1aee";
+export const Hash = "7d63fa4f263cf7ed";
 
 //////////
 // source: protocol.go
@@ -1020,6 +1020,13 @@ export interface ExecParams {
    * stream only attaches.
    */
   start?: boolean;
+  /**
+   * Run identifies one start. A start sent again with the same Run, as a
+   * stream does when its socket closed before the Engine answered, attaches
+   * to the session that start made, even after it ended, instead of running
+   * its command again.
+   */
+  run?: string;
   /**
    * Takeover attaches although another window is attached, which detaches
    * that window.

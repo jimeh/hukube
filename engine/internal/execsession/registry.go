@@ -63,7 +63,9 @@ func (r *Registry) Open(p protocol.ExecParams, c Cluster, idx Index, wake func()
 		s.mu.Lock()
 		over := s.end != nil
 		s.mu.Unlock()
-		if over && p.Start {
+		// A new start replaces a session that is over. The same start sent
+		// again joins it instead, so a chosen command never runs twice.
+		if over && p.Start && (p.Run == "" || p.Run != s.params.Run) {
 			r.removeLocked(s)
 			s = nil
 		}
