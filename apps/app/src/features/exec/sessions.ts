@@ -15,7 +15,16 @@ import { getCommandsStore } from "./commands-store.ts";
 
 export type ExecSessionParams = Omit<
   ExecParams,
-  "cluster" | "cols" | "rows" | "command" | "session" | "window" | "start" | "takeover" | "resume"
+  | "cluster"
+  | "cols"
+  | "rows"
+  | "command"
+  | "session"
+  | "window"
+  | "start"
+  | "run"
+  | "takeover"
+  | "resume"
 > & {
   /** The line as typed, split only when the user starts a session. */
   commandLine?: string;

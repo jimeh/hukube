@@ -715,7 +715,10 @@ forward settled how the two work together:
   the process had already ended, the Engine took that as "Start again" and
   ran the command again, which a chosen command makes unsafe. Each start now
   carries its own `run`, and an ended session is replaced only by a start
-  with another `run`. A reviewer of the merge found this.
+  with another `run`. A reviewer of the merge found this. The guard holds
+  while the Engine still has the ended session: a retry that arrives after
+  it was removed, which needs 10 minutes of failed reconnects or an Engine
+  restart between the start and its answer, starts the command again.
 - **The window's record keeps the command line,** and a same-Tab restart
   from the no-shell or not-found notice updates the record, so a Tab
   restored from it keeps its command and title. A Tab whose line is too long
