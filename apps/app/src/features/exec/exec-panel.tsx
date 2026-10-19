@@ -1,6 +1,7 @@
 import {
   ExecReasonEngineStopped,
   ExecReasonNoShell,
+  ExecReasonCommandNotFound,
   ExecReasonTooManySessions,
   type StreamEnd,
 } from "@hukube/engine-client";
@@ -25,6 +26,9 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { CommandForm } from "./command-form.tsx";
+import { commandProgram, execTitle, imageKey, parseCommand } from "./command.ts";
 import { isMac } from "@/lib/platform.ts";
 import { useTheme } from "@/lib/theme.ts";
 import { useResourceAccess } from "../edit/use-access.ts";
@@ -33,7 +37,8 @@ import { Notice } from "../resource/notice.tsx";
 import { openGoToResource } from "../go-to-resource/open.ts";
 import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { execContainers, execDisabledReason } from "./containers.ts";
-import { closeSessionTab } from "./window-tabs.ts";
+import { useCommands } from "./use-commands.ts";
+import { closeSessionTab, rememberSessionTab } from "./window-tabs.ts";
 import { execKeyLabels } from "./keys.ts";
 import {
   dismissSkippedNotice,
@@ -51,6 +56,7 @@ export function ExecPanel({
 }: Pick<IDockviewPanelProps<ExecSessionParams>, "api" | "params">) {
   const { cluster, active, openResource } = useWorkspace();
   const engine = useEngine();
+  const { run: recordCommand } = useCommands();
   const session = useExecSessions((store) => store.entries.get(params.sessionId));
   const state = session?.state;
   const terminal = session?.terminal;
@@ -67,13 +73,13 @@ export function ExecPanel({
     available,
   );
   const connection = useConnectionState();
+  const containers = execContainers(pod.data?.object);
+  const container = containers.find((c) => c.name === params.container);
   const reason = execDisabledReason(
     available,
     connection,
     access?.exec,
-    execContainers(pod.data?.object).some(
-      (c) => c.name === params.container && c.state === "running",
-    ),
+    container?.state === "running",
   );
   const [visible, setVisible] = useState(api.isVisible ?? true);
   const [selected, setSelected] = useState(api.isActive ?? true);
@@ -120,8 +126,8 @@ export function ExecPanel({
     if (showing && (theme === "dark" || theme === "light")) terminal?.theme();
   }, [terminal, theme, showing]);
   useEffect(() => {
-    if (showing && selected && terminal) terminal.focus();
-  }, [terminal, showing, selected]);
+    if (renderingTerminal && showing && selected && terminal) terminal.focus();
+  }, [terminal, showing, selected, renderingTerminal]);
   useEffect(() => terminal?.onFind(findFromTerminal), [terminal]);
   const phase = state?.phase;
   useEffect(() => {
@@ -146,6 +152,7 @@ export function ExecPanel({
             focusableWhenDisabled
             onClick={() => {
               setFinding(false);
+              void recordCommand(container?.image ?? "", params.commandLine ?? "");
               void startSession(engine, cluster, params);
             }}
           />
@@ -227,6 +234,14 @@ export function ExecPanel({
               {params.container}
             </span>
           </span>
+          {params.commandLine?.trim() && (
+            <span className="flex min-w-0 max-w-full items-center gap-1.5">
+              <span className="text-muted-foreground">Command</span>
+              <span className="truncate font-mono" title={params.commandLine}>
+                {params.commandLine}
+              </span>
+            </span>
+          )}
         </div>
         <Badge
           variant={badge === "Live" ? "outline" : "secondary"}
@@ -279,11 +294,32 @@ export function ExecPanel({
           }
         />
       ) : state?.phase === "failed" ? (
-        <FailedNotice
-          state={state}
-          retry={restart("Try again")}
-          retryGone={available ? restart("Try again") : undefined}
-        />
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="my-auto w-full shrink-0">
+            <FailedNotice
+              state={state}
+              retry={restart("Try again")}
+              retryGone={available ? restart("Try again") : undefined}
+              params={params}
+              image={container?.image ?? ""}
+              focus={showing && selected}
+              disabledReason={reason}
+              runCommand={(commandLine) => {
+                const next = { ...params, commandLine };
+                // Commit the new header before startSession resets and refits the
+                // terminal. A resize after the process starts can drop typed input.
+                flushSync(() => {
+                  api.updateParameters(next);
+                  api.setTitle(execTitle(next));
+                });
+                // A reload must restore the Tab with the command it now runs.
+                rememberSessionTab(cluster, { params: next, title: execTitle(next) });
+                setFinding(false);
+                void startSession(engine, cluster, next);
+              }}
+            />
+          </div>
+        </div>
       ) : (
         <ContextMenu
           onOpenChange={(open) => {
@@ -415,12 +451,25 @@ function FailedNotice({
   state,
   retry,
   retryGone,
+  params,
+  image,
+  focus,
+  disabledReason,
+  runCommand,
 }: {
   state: Extract<ExecState, { phase: "failed" }>;
   retry: React.ReactNode;
   /** Offered while this window still sees the Pod. */
   retryGone?: React.ReactNode;
+  params: ExecSessionParams;
+  image: string;
+  focus: boolean;
+  disabledReason?: string;
+  runCommand: (line: string) => void;
 }) {
+  const { commandFor, run } = useCommands();
+  const remembered = commandFor(image);
+  const correcting = !!params.commandLine && params.commandLine === remembered;
   const error = state.error;
   if (error?.reason === ExecReasonTooManySessions)
     return (
@@ -430,24 +479,62 @@ function FailedNotice({
         action={retry}
       />
     );
-  if (error?.reason === ExecReasonNoShell)
+  if (error?.reason === ExecReasonNoShell || error?.reason === ExecReasonCommandNotFound) {
+    const noShell = error.reason === ExecReasonNoShell;
+    const program = commandProgram(parseCommand(params.commandLine ?? "").command ?? []);
     return (
       <Notice
-        title="No shell in this container"
+        title={noShell ? "No shell in this container" : `${program} is not in this container`}
         description={
-          <>
-            hukube runs <code>sh</code>, and this container has none, which is usual for distroless
-            images. A debug container is the way into one, for example with{" "}
-            <code>kubectl debug</code>.
-          </>
+          noShell ? (
+            <>
+              hukube's default shell needs <code>sh</code>, and this container has none. You can run
+              a program the image contains instead, below, or use a debug container, for example
+              with <code>kubectl debug</code>.
+            </>
+          ) : (
+            <>
+              {correcting && (
+                <>
+                  You chose <code>{params.commandLine}</code> for <code>{imageKey(image)}</code>
+                  .{" "}
+                </>
+              )}
+              Choose a command this image contains.
+            </>
+          )
         }
         action={
-          <pre className="mx-3 max-w-xl rounded-md border bg-muted/40 px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
-            {error.message}
-          </pre>
+          <div className="flex w-full min-w-0 max-w-xl flex-col gap-4">
+            <pre className="rounded-md border bg-muted/40 px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
+              {error.message}
+            </pre>
+            <CommandForm
+              key={params.commandLine ?? ""}
+              image={image}
+              initialLine={params.commandLine}
+              rememberInitially={noShell || correcting}
+              focus={focus}
+              disabledReason={disabledReason}
+              onRun={runCommand}
+            />
+            {!noShell && correcting && (
+              <Button
+                variant="outline"
+                disabled={!!disabledReason}
+                onClick={() => {
+                  void run(image, "", true);
+                  runCommand("");
+                }}
+              >
+                Use the default shell
+              </Button>
+            )}
+          </div>
         }
       />
     );
+  }
   if (error?.code === "forbidden")
     return (
       <Notice

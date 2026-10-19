@@ -62,6 +62,15 @@ func init() {
 		if !execID(p.Session) || !execID(p.Window) {
 			return streamError(badRequest(fmt.Errorf("session and window must be at most 64 letters, digits, hyphens, or underscores")))
 		}
+		if len(p.Command) > 0 {
+			bytes := 0
+			for _, word := range p.Command {
+				bytes += len(word)
+			}
+			if p.Command[0] == "" || len(p.Command) > 256 || bytes > 16<<10 {
+				return streamError(badRequest(fmt.Errorf("command must have a non-empty first word, at most 256 words, and at most 16 KiB in all")))
+			}
+		}
 		c, err := s.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
 			return streamError(err)

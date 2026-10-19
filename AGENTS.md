@@ -27,6 +27,10 @@ the background on a free port. It prints the URL with its token, also saved in
 change and stop it with `mise run dev:verify:stop`; do not `pkill -f`, which
 can match your own shell. It never touches the clusters in your kubeconfig.
 
+Run `dev:verify` and `e2e` sequentially. Both Hosts serve `apps/app/dist`,
+and a Vite rebuild replaces it, so rebuilding for one can give the other
+Host a 404 during a test.
+
 ## Designing features
 
 - **Plan the UI and UX.** For anything a user sees or touches, the plan says
@@ -76,7 +80,8 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   sent finishes after a cancel or a lost socket.
 - **Protocol changes:** declare methods in `engine/internal/protocol/methods.go`
   and edit wire types in `engine/internal/protocol`, then run `mise run gen`.
-  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Rebuild and
+  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Export new
+  runtime constants from `packages/engine-client/src/index.ts` too. Rebuild and
   restart the Engine after a protocol change, or the UI shows the out-of-date
   notice. For tygo to generate TypeScript unions, enum constants must
   start with their type's name (`ClusterPhaseReady`). `tstype` tags must not
@@ -120,7 +125,7 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   fakes in `execsession`. The fallback from WebSocket to SPDY must test for
   the upgrade error with `k8s.io/streaming/pkg/httpstream`; the helper of
   the same name in `k8s.io/apimachinery` returns false for the error
-  client-go returns. The Engine owns a session (ADR-0025): a socket that
+  client-go returns. The Engine owns a session (ADR-0026): a socket that
   closes only detaches, and the Engine hangs the session up (ADR-0022) under
   its own context when its Tab closes (`exec.end`), when no window has been
   attached for 10 minutes, or when the Engine stops. Nothing may make the
@@ -146,7 +151,13 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   sent just after a session starts makes a shell print its prompt again and
   drop what was typed, so a session starts at its terminal's real size, and
   a change to the session Tab's header must not change its height while a
-  session is live.
+  session is live. When a notice runs a new command, commit the new Tab params
+  and header before calling `startSession`, so it refits to the new layout.
+- **Exec commands:** keep the typed line in Tab params and settings. Split it
+  with `features/exec/command.ts` only when the user starts a session; an
+  attachment never runs or splits it again (ADR-0026). Never rebuild a line
+  with `shell-quote`'s `quote`: escaped literal globs do not round-trip through
+  its `parse` (ADR-0025).
 - **xterm.js:** import it only through `apps/app/src/lib/xterm.ts`, which
   loads it on demand. It cannot be sized in a hidden or detached element. In
   Chromium a terminal that is showing draws with WebGL (ADR-0024), so its

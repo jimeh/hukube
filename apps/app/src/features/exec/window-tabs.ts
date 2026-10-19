@@ -1,4 +1,5 @@
 import type { DockviewApi } from "dockview-react";
+import { commandMaxLength } from "./command.ts";
 import { endSession, type ExecSessionParams } from "./sessions.ts";
 
 interface SessionTab {
@@ -17,16 +18,21 @@ export function readSessionTabs(cluster: string): SessionTab[] {
       if (!entry || typeof entry !== "object" || typeof entry.title !== "string") continue;
       const params = entry.params;
       if (!params || typeof params !== "object") continue;
-      const { sessionId, namespace, pod, uid, container } = params;
+      const { sessionId, namespace, pod, uid, container, commandLine } = params;
       if (
         ![sessionId, namespace, pod, uid, container].every(
           (s) => typeof s === "string" && s.length > 0,
         )
       )
         continue;
+      // The command line is kept as typed, so Start again runs the same command.
+      const line =
+        typeof commandLine === "string" && commandLine.length <= commandMaxLength
+          ? { commandLine }
+          : {};
       tabs.set(sessionId, {
         title: entry.title,
-        params: { sessionId, namespace, pod, uid, container, preview: false },
+        params: { sessionId, namespace, pod, uid, container, ...line, preview: false },
       });
     }
     return [...tabs.values()];

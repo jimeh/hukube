@@ -154,7 +154,7 @@ no query.
 
 ## Decisions
 
-ADR-0025 records the decisions below. It supersedes the parts of ADR-0021
+ADR-0026 records the decisions below. It supersedes the parts of ADR-0021
 that say a session belongs to a window and cannot be resumed, and ADR-0016
 and ADR-0022 are revised where they describe holding output and when a
 session is hung up.

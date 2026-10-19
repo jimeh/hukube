@@ -400,3 +400,17 @@ func TestInputDuringHangupIsDropped(t *testing.T) {
 		}
 	})
 }
+
+func TestExecChosenCommandNotFound(t *testing.T) {
+	for _, message := range []string{`exec: "python3": executable file not found in $PATH`, `exec: "/nope/x": stat /nope/x: no such file or directory`} {
+		t.Run(message, func(t *testing.T) {
+			c, idx := fixture(func(context.Context, remotecommand.StreamOptions) error { return errors.New(message) })
+			p := testParams
+			p.Command = []string{"python3"}
+			end := Run(context.Background(), c, idx, p, NewInput(nil), NewSizes(), testOutput{io.Discard}, testTiming)
+			if end.Error == nil || end.Error.Code != protocol.ErrorCodeNotFound || end.Error.Reason != "CommandNotFound" || end.Error.Message != message {
+				t.Fatalf("chosen command failure=%+v", end.Error)
+			}
+		})
+	}
+}

@@ -67,7 +67,7 @@ its Facet is hidden, so in practice the cap counts what is on screen.
 
 This section was a sketch until Exec Sessions were built (ADR-0021,
 ADR-0022), and was revised again when the Engine came to own a session
-(ADR-0025). `docs/plans/exec-sessions.md` and `docs/plans/exec-resume.md`
+(ADR-0026). `docs/plans/exec-sessions.md` and `docs/plans/exec-resume.md`
 have the measurements.
 
 - **Input** is binary frames from the client on channel 0. Output is channel
@@ -78,7 +78,7 @@ have the measurements.
 - **Output is never held back.** This section first had the Engine stop
   reading a container's output while the client's window was full, as a slow
   terminal does to a process, and then for at most 3 seconds, by a rule with
-  a known limit. Both are gone (ADR-0025). client-go's WebSocket executor
+  a known limit. Both are gone (ADR-0026). client-go's WebSocket executor
   reads the connection and writes output on one goroutine, and ends the
   session when that goroutine has read no heartbeat for 61 seconds, so
   anything that makes the writer wait puts the session at risk. Measured
@@ -105,7 +105,7 @@ have the measurements.
 - **A session's socket is reopened, and attaches.** A socket that closes
   without `end` detaches its window from the session, which carries on in
   the Engine. The client opens the stream again with the position its
-  terminal has read to, and is sent what it missed (ADR-0025). The first
+  terminal has read to, and is sent what it missed (ADR-0026). The first
   message on a session's stream is an event that says where the output that
   follows belongs.
 - **A stream can be a mutation.** A stream method that changes a Cluster is
@@ -128,7 +128,7 @@ have the measurements.
   a sequence number. For a Log Stream an Engine restart loses that state
   anyway, and the client can resume from what it holds, so one mechanism
   covers both. An Exec Session has a process that nothing can resume from
-  the client's side, so the Engine does keep it (ADR-0025).
+  the client's side, so the Engine does keep it (ADR-0026).
 - **An `end` or `done` on the control protocol too.** See above: nothing
   there ends.
 

@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "4d46975e1790c81c";
+export const Hash = "98cf59c755cb1aee";
 
 //////////
 // source: protocol.go
@@ -966,6 +966,10 @@ export type ExecInput = typeof ExecInputFrame | typeof ExecInputWindow;
  */
 export const ExecReasonNoShell = "NoShell";
 /**
+ * ExecReasonCommandNotFound means the chosen program is missing.
+ */
+export const ExecReasonCommandNotFound = "CommandNotFound";
+/**
  * ExecReasonConnectionLost means the session ran and then lost its
  * connection to the Cluster.
  */
@@ -987,7 +991,7 @@ export const ExecReasonTooManySessions = "TooManySessions";
 /**
  * Reasons in the ErrorDetail of an Exec Session that ended with an error.
  */
-export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonConnectionLost | typeof ExecReasonEngineStopped | typeof ExecReasonSessionGone | typeof ExecReasonTooManySessions;
+export type ExecReason = typeof ExecReasonNoShell | typeof ExecReasonCommandNotFound | typeof ExecReasonConnectionLost | typeof ExecReasonEngineStopped | typeof ExecReasonSessionGone | typeof ExecReasonTooManySessions;
 /**
  * ExecParams opens an Exec Session: a process with a TTY in a container.
  */

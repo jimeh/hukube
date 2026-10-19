@@ -1,5 +1,6 @@
 import {
   EngineRequestError,
+  ExecReasonCommandNotFound,
   ExecReasonSessionGone,
   ExecReasonTooManySessions,
   type EngineClient,
@@ -9,11 +10,15 @@ import {
 } from "@hukube/engine-client";
 import { create } from "zustand";
 import type * as TerminalModule from "@/lib/xterm.ts";
+import { commandRefusalText, parseCommand } from "./command.ts";
+import { getCommandsStore } from "./commands-store.ts";
 
 export type ExecSessionParams = Omit<
   ExecParams,
   "cluster" | "cols" | "rows" | "command" | "session" | "window" | "start" | "takeover" | "resume"
 > & {
+  /** The line as typed, split only when the user starts a session. */
+  commandLine?: string;
   sessionId: string;
   preview?: boolean;
 };
@@ -213,6 +218,21 @@ async function openSession(
     focusPending = false;
     session.terminal?.focus();
   };
+  // A start splits the Tab's command line. An attachment never does: the
+  // process it joins was started from the line as it was then.
+  let command: string[] = [];
+  if (intent === "start") {
+    const parsed = parseCommand(params.commandLine ?? "");
+    if (parsed.error !== undefined) {
+      publish({
+        phase: "failed",
+        reason: "error",
+        error: { code: "bad_request", message: commandRefusalText(parsed.error) },
+      });
+      return;
+    }
+    command = parsed.command;
+  }
   let terminal: ExecTerminal;
   try {
     terminal = session.terminal ?? (await makeTerminal());
@@ -287,6 +307,8 @@ async function openSession(
       pod: params.pod,
       uid: params.uid,
       container: params.container,
+      // Only a start runs a command. An attachment joins the process already running.
+      ...(intent === "start" && command.length ? { command } : {}),
       ...(intent === "start" || terminal.sized ? { cols: terminal.cols, rows: terminal.rows } : {}),
     },
     {
@@ -371,6 +393,14 @@ async function openSession(
       },
       end: (end) => {
         if (!current()) return;
+        // A replayed end can reach a window that attached after a reload too,
+        // which is harmless: removing a recent command that is gone does nothing.
+        if (end.error?.reason === ExecReasonCommandNotFound && params.commandLine) {
+          const commands = getCommandsStore(engine);
+          // The stream outlives its panel. Keep a watch until this correction is saved.
+          const stop = commands.subscribe(() => {});
+          void commands.removeRecent(params.commandLine).finally(stop);
+        }
         pendingControls++;
         terminal.holdInput(true);
         void enqueue(() => {

@@ -22,6 +22,10 @@ After a reload a Tab attaches to the session with its ID, checked against
 the Tab's Pod, UID, and container. A Tab whose session the Engine no longer
 has says so and offers to start a new one. Attaching never starts a session.
 
+A Tab keeps the command line its session runs (ADR-0025). Attaching joins the
+process that line started and never runs or splits the line again. Only the
+user starting the session again, from the Tab or from a notice, runs it anew.
+
 10 minutes is a compromise. The Engine cannot tell a reload from a window
 closed for good, so a closed window leaves a shell running for that long,
 and a connection lost for longer loses the session. The limit is a flag.

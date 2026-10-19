@@ -16,6 +16,7 @@ import { newResourceUri } from "@/features/resource/facet-rules.ts";
 import { ResourcePanel } from "@/features/resource/resource-panel.tsx";
 import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
 import { useTheme } from "@/lib/theme.ts";
+import { execTitle } from "../exec/command.ts";
 import { ExecPanel } from "../exec/exec-panel.tsx";
 import {
   attachSession,
@@ -79,7 +80,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         const params = panel.params as ExecSessionParams;
         rememberSessionTab(cluster, {
           params,
-          title: panel.api.title ?? `${params.container} in ${params.pod}`,
+          title: panel.api.title ?? execTitle(params),
         });
         void attachSession(engine, cluster, params);
       }
@@ -119,7 +120,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         openPanel<ExecSessionParams>(api, {
           id: `exec:${params.sessionId}`,
           component: "exec",
-          title: `${params.container} in ${params.pod}`,
+          title: execTitle(params),
           params,
           preview: false,
           ...(options?.pane ? { pane: options.pane } : {}),

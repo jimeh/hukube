@@ -433,3 +433,69 @@ it.each([
     expect(notice()).toBeUndefined();
   },
 );
+
+it("splits the kept command line at each start and sends argv to pod.exec", async () => {
+  const s = setup();
+  const chosen = { ...params, commandLine: "sh -c 'echo $((6*7))'" };
+  await startSession(s.engine, "c", chosen, async () => s.terminal);
+  expect(s.openStream.mock.calls[0]?.[1]).toMatchObject({ command: ["sh", "-c", "echo $((6*7))"] });
+  expect(useExecSessions.getState().entries.get(params.sessionId)?.params).toEqual(chosen);
+  s.streams[0]!.listener.end({ reason: "complete", exitCode: 0 });
+  // The store handles an end in order with the output before it.
+  await vi.waitFor(() =>
+    expect(useExecSessions.getState().entries.get(params.sessionId)?.state.phase).toBe("ended"),
+  );
+  await startSession(s.engine, "c", chosen, async () => s.terminal);
+  expect(s.openStream.mock.calls[1]?.[1]).toMatchObject({ command: ["sh", "-c", "echo $((6*7))"] });
+});
+it("never sends or re-parses the command line when attaching or taking over", async () => {
+  const s = setup();
+  const chosen = { ...params, commandLine: "a | b" };
+  await attachSession(s.engine, "c", chosen, async () => s.terminal);
+  expect(s.openStream).toHaveBeenCalledOnce();
+  expect(s.openStream.mock.calls[0]?.[1]).not.toHaveProperty("command");
+  expect(s.openStream.mock.calls[0]?.[1]).not.toHaveProperty("start");
+  expect(useExecSessions.getState().entries.get(params.sessionId)?.params).toEqual(chosen);
+});
+it("fails an invalid stored line before creating a terminal or stream", async () => {
+  const s = setup();
+  const make = vi.fn<() => Promise<typeof s.terminal>>(async () => s.terminal);
+  await startSession(s.engine, "c", { ...params, commandLine: "a | b" }, make);
+  expect(s.state()).toEqual({
+    phase: "failed",
+    reason: "error",
+    error: {
+      code: "bad_request",
+      message: "The | operator needs a shell. To use one, write sh -c '…'.",
+    },
+  });
+  expect(make).not.toHaveBeenCalled();
+  expect(s.openStream).not.toHaveBeenCalled();
+});
+
+it("removes CommandNotFound from recents even without a mounted panel", async () => {
+  const s = setup();
+  const writes: unknown[] = [];
+  const engine = Object.assign(s.engine, {
+    subscribe: (
+      _method: string,
+      _params: unknown,
+      listener: { data: (setting: unknown) => void },
+    ) => {
+      queueMicrotask(() => listener.data({ value: { images: [], recent: ["bash -l", "ash"] } }));
+      return { close: () => {} };
+    },
+    request: (_method: string, setting: unknown) => {
+      writes.push(setting);
+      return Promise.resolve();
+    },
+  });
+  await startSession(engine, "c", { ...params, commandLine: "bash -l" }, async () => s.terminal);
+  s.streams[0]!.listener.end({
+    reason: "error",
+    error: { code: "not_found", reason: "CommandNotFound", message: "no bash" },
+  });
+  await vi.waitFor(() =>
+    expect(writes).toContainEqual({ key: "exec/commands", value: { images: [], recent: ["ash"] } }),
+  );
+});

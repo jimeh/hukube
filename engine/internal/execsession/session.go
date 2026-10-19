@@ -87,7 +87,7 @@ func Run(ctx context.Context, c Cluster, idx Index, p protocol.ExecParams, input
 	}
 	executor, err := c.Exec(p)
 	if err != nil {
-		return startFailure(err)
+		return startFailure(err, len(p.Command) > 0)
 	}
 	sizes.Initial(p.Cols, p.Rows)
 	ectx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -152,7 +152,7 @@ func classify(ctx context.Context, c Cluster, p protocol.ExecParams, started tim
 			return protocol.StreamEnd{Reason: protocol.StreamEndReasonComplete, ExitCode: &code}
 		}
 	} else if !output {
-		return startFailure(err)
+		return startFailure(err, len(p.Command) > 0)
 	}
 	if reason := settle(ctx, c, p, started, timing); reason != "" {
 		return protocol.StreamEnd{Reason: reason}
@@ -197,7 +197,7 @@ func settle(ctx context.Context, c Cluster, p protocol.ExecParams, started time.
 		}
 	}
 }
-func startFailure(err error) protocol.StreamEnd {
+func startFailure(err error, chosen bool) protocol.StreamEnd {
 	message := err.Error()
 	detail := &protocol.ErrorDetail{Code: protocol.ErrorCodeUnavailable, Message: message}
 	switch {
@@ -205,6 +205,9 @@ func startFailure(err error) protocol.StreamEnd {
 		detail.Code = protocol.ErrorCodeForbidden
 	case strings.Contains(message, "executable file not found"), strings.Contains(message, "no such file or directory"):
 		detail.Code, detail.Reason = protocol.ErrorCodeNotFound, protocol.ExecReasonNoShell
+		if chosen {
+			detail.Reason = protocol.ExecReasonCommandNotFound
+		}
 	case strings.Contains(message, "is not valid for pod"):
 		detail.Code = protocol.ErrorCodeNotFound
 	default:

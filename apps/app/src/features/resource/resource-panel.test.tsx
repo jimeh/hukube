@@ -23,6 +23,7 @@ import { ResourcePanel } from "./resource-panel.tsx";
 const state = vi.hoisted(() => ({
   client: {
     request: () => Promise.resolve({ edit: { allowed: true }, delete: { allowed: true } }),
+    subscribe: () => ({ close: () => {}, update: () => {} }),
     onStateChange: () => () => {},
     getState: () => "open",
   },

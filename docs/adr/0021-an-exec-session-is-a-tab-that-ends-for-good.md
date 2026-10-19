@@ -1,6 +1,6 @@
 # An Exec Session is a Tab of its own, and one that ended stays ended
 
-Superseded in part by ADR-0025: the Engine now owns a session, and a window
+Superseded in part by ADR-0026: the Engine now owns a session, and a window
 attaches to it again after a reload or a lost connection. The two sections
 that said otherwise are marked below. The rest stands.
 
@@ -15,7 +15,7 @@ Cluster's color, because what is typed into it takes effect there.
 
 ## A session's view is owned by the window, not by a component
 
-The Engine owns the session (ADR-0025). The window keeps what shows it in
+The Engine owns the session (ADR-0026). The window keeps what shows it in
 one store: each session's stream, its terminal, and the element the terminal
 renders into. The Tab's component attaches that element and reads the
 session's state. A component that mounts again, as it may when a Tab moves
@@ -27,7 +27,7 @@ only detaches.
 
 ## A Tab attaches to its session, and never starts one
 
-This section said a session cannot be resumed. ADR-0025 replaces it.
+This section said a session cannot be resumed. ADR-0026 replaces it.
 
 A stored Workspace layout holds a session's Tab. After a reload the Tab
 attaches to the session with its ID. If the Engine no longer has it, the Tab

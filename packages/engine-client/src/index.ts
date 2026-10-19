@@ -8,6 +8,7 @@ export {
   ExecInputFrame,
   ExecInputWindow,
   ExecReasonNoShell,
+  ExecReasonCommandNotFound,
   ExecReasonSessionGone,
   ExecReasonTooManySessions,
   ExecReasonConnectionLost,

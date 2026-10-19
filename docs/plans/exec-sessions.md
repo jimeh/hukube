@@ -7,7 +7,7 @@ where the result differs from the text below. The Windows and Linux rows of
 `docs/plans/exec-resume.md` replaces what this plan says about holding
 output, the `lost` state, a session ending with its socket, and the prompts
 for closing a Cluster tab or a window. The Engine now owns a session
-(ADR-0025).
+(ADR-0026).
 
 ## Outcome
 
