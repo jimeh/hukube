@@ -222,6 +222,8 @@ const (
 const (
 	// ExecReasonNoShell means the container has no shell to run.
 	ExecReasonNoShell = "NoShell"
+	// ExecReasonCommandNotFound means the chosen program is missing.
+	ExecReasonCommandNotFound = "CommandNotFound"
 	// ExecReasonConnectionLost means the session ran and then lost its
 	// connection to the Cluster.
 	ExecReasonConnectionLost = "ConnectionLost"

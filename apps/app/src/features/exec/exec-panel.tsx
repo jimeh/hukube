@@ -1,4 +1,9 @@
-import { ExecReasonEngineStopped, ExecReasonNoShell, type StreamEnd } from "@hukube/engine-client";
+import {
+  ExecReasonEngineStopped,
+  ExecReasonNoShell,
+  ExecReasonCommandNotFound,
+  type StreamEnd,
+} from "@hukube/engine-client";
 import { useConnectionState, useEngine, useSubscription } from "@hukube/engine-client/react";
 import { Badge } from "@hukube/ui/components/badge";
 import { Button } from "@hukube/ui/components/button";
@@ -20,6 +25,9 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { CommandForm } from "./command-form.tsx";
+import { commandProgram, execTitle, parseCommand } from "./command.ts";
 import { isMac } from "@/lib/platform.ts";
 import { useTheme } from "@/lib/theme.ts";
 import { useResourceAccess } from "../edit/use-access.ts";
@@ -28,6 +36,7 @@ import { Notice } from "../resource/notice.tsx";
 import { openGoToResource } from "../go-to-resource/open.ts";
 import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { execContainers, execDisabledReason } from "./containers.ts";
+import { useCommands } from "./use-commands.ts";
 import { execKeyLabels } from "./keys.ts";
 import {
   startSession,
@@ -43,6 +52,7 @@ export function ExecPanel({
 }: Pick<IDockviewPanelProps<ExecSessionParams>, "api" | "params">) {
   const { cluster, active, openResource } = useWorkspace();
   const engine = useEngine();
+  const { run: recordCommand } = useCommands();
   const session = useExecSessions((store) => store.entries.get(params.sessionId));
   const state = session?.state;
   const terminal = session?.terminal;
@@ -59,13 +69,13 @@ export function ExecPanel({
     available,
   );
   const connection = useConnectionState();
+  const containers = execContainers(pod.data?.object);
+  const container = containers.find((c) => c.name === params.container);
   const reason = execDisabledReason(
     available,
     connection,
     access?.exec,
-    execContainers(pod.data?.object).some(
-      (c) => c.name === params.container && c.state === "running",
-    ),
+    container?.state === "running",
   );
   const [visible, setVisible] = useState(api.isVisible ?? true);
   const [selected, setSelected] = useState(api.isActive ?? true);
@@ -124,6 +134,7 @@ export function ExecPanel({
             focusableWhenDisabled
             onClick={() => {
               setFinding(false);
+              void recordCommand(container?.image ?? "", params.commandLine ?? "");
               void startSession(engine, cluster, params);
             }}
           />
@@ -190,6 +201,14 @@ export function ExecPanel({
               {params.container}
             </span>
           </span>
+          {params.commandLine?.trim() && (
+            <span className="flex min-w-0 max-w-full items-center gap-1.5">
+              <span className="text-muted-foreground">Command</span>
+              <span className="truncate font-mono" title={params.commandLine}>
+                {params.commandLine}
+              </span>
+            </span>
+          )}
         </div>
         <Badge
           variant={badge === "Live" ? "outline" : "secondary"}
@@ -239,6 +258,20 @@ export function ExecPanel({
           state={state}
           retry={restart("Try again")}
           retryGone={available ? restart("Try again") : undefined}
+          params={params}
+          image={container?.image ?? ""}
+          disabledReason={reason}
+          runCommand={(commandLine) => {
+            const next = { ...params, commandLine };
+            // Commit the new header before startSession resets and refits the
+            // terminal. A resize after the process starts can drop typed input.
+            flushSync(() => {
+              api.updateParameters(next);
+              api.setTitle(execTitle(next));
+            });
+            setFinding(false);
+            void startSession(engine, cluster, next);
+          }}
         />
       ) : (
         <ContextMenu
@@ -321,31 +354,56 @@ function FailedNotice({
   state,
   retry,
   retryGone,
+  params,
+  image,
+  disabledReason,
+  runCommand,
 }: {
   state: Extract<ExecState, { phase: "failed" }>;
   retry: React.ReactNode;
   /** Offered while this window still sees the Pod. */
   retryGone?: React.ReactNode;
+  params: ExecSessionParams;
+  image: string;
+  disabledReason?: string;
+  runCommand: (line: string) => void;
 }) {
   const error = state.error;
-  if (error?.reason === ExecReasonNoShell)
+  if (error?.reason === ExecReasonNoShell || error?.reason === ExecReasonCommandNotFound) {
+    const noShell = error.reason === ExecReasonNoShell;
+    const program = commandProgram(parseCommand(params.commandLine ?? "").command ?? []);
     return (
       <Notice
-        title="No shell in this container"
+        title={noShell ? "No shell in this container" : `${program} is not in this container`}
         description={
-          <>
-            hukube runs <code>sh</code>, and this container has none, which is usual for distroless
-            images. A debug container is the way into one, for example with{" "}
-            <code>kubectl debug</code>.
-          </>
+          noShell ? (
+            <>
+              hukube runs <code>sh</code>, and this container has none. You can run a program the
+              image contains instead, below, or use a debug container, for example with{" "}
+              <code>kubectl debug</code>.
+            </>
+          ) : (
+            "Choose a command this image contains."
+          )
         }
         action={
-          <pre className="mx-3 max-w-xl rounded-md border bg-muted/40 px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
-            {error.message}
-          </pre>
+          <div className="flex w-full min-w-0 max-w-xl flex-col gap-4">
+            <pre className="rounded-md border bg-muted/40 px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
+              {error.message}
+            </pre>
+            <CommandForm
+              key={params.commandLine ?? ""}
+              image={image}
+              initialLine={params.commandLine}
+              rememberInitially
+              disabledReason={disabledReason}
+              onRun={runCommand}
+            />
+          </div>
         }
       />
     );
+  }
   if (error?.code === "forbidden")
     return (
       <Notice
