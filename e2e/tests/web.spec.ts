@@ -200,6 +200,59 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
     .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
   await expect(noShell.getByText("No shell in this container")).toBeVisible();
   await expect(noShell.locator("pre")).toContainText("sh");
+  const noShellElement = await noShell.elementHandle();
+  await expect(
+    noShell.getByRole("checkbox", {
+      name: "Use the default shell for rancher/mirrored-pause from now on",
+    }),
+  ).toBeChecked();
+  await noShell.getByRole("textbox", { name: "Command", exact: true }).fill("/pause -v");
+  await noShell.getByRole("button", { name: "Run", exact: true }).click();
+  // The title changes in place; compare with the original Tab's element below.
+  const chosen = page
+    .getByRole("tabpanel", { name: "pause: app in e2e-exec-no-shell", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) });
+  await expect(chosen.locator(".xterm-rows")).toContainText("pause.c v3.6-");
+  await expect(chosen.getByText("The process exited with code 0.")).toBeVisible();
+  // It is the original Tab, with the same identity after changing its title.
+  expect(await chosen.evaluate((element, original) => element === original, noShellElement)).toBe(
+    true,
+  );
+  await expect(chosen.locator("header")).toContainText("/pause -v");
+  await openPod("e2e-exec-no-shell");
+  const remembered = page
+    .getByRole("tabpanel", { name: "pause: app in e2e-exec-no-shell", exact: true })
+    .filter({ has: page.getByRole("button", { name: "Find in scrollback" }) })
+    .last();
+  await expect(remembered.locator(".xterm-rows")).toContainText("pause.c v3.6-");
+  await expect(remembered.getByText("The process exited with code 0.")).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Choose an explicit shell from the busybox Pod's menu. A bare pipeline is
+  // refused; shell syntax inside the argument to sh -c is passed unchanged.
+  await page
+    .locator(".dv-tab")
+    .filter({ has: page.getByRole("button", { name: "Close e2e-exec", exact: true }) })
+    .first()
+    .click();
+  const busybox = page.getByRole("tabpanel", { name: "e2e-exec", exact: true });
+  await busybox.getByRole("button", { name: "Exec Session options" }).click();
+  await page.getByRole("menuitem", { name: "Run a command…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Run a command in a container" });
+  const command = dialog.getByRole("textbox", { name: "Command", exact: true });
+  await expect(command).toBeFocused();
+  await command.fill("a | b");
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "| needs a shell. To use one, write sh -c '…'.",
+  );
+  await expect(dialog.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+  await command.fill("sh -c 'echo $((6*7))'");
+  await expect(dialog.getByRole("checkbox")).not.toBeChecked();
+  await command.press("Enter");
+  const custom = page.getByRole("tabpanel", { name: "sh: app in e2e-exec", exact: true });
+  await expect(custom.locator(".xterm-rows")).toContainText("42");
+  await expect(custom.getByText("The process exited with code 0.")).toBeVisible();
+  await expect(custom.locator("header")).toContainText("sh -c 'echo $((6*7))'");
 });
 
 // Opens an Exec Session in a new Pod with one container, `app`.

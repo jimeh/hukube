@@ -93,8 +93,10 @@ word as an object: an operator (`|`, `&&`, `;`, `>`), a glob, a variable
 | `echo 'open`               | `echo`, `open` (no error)        |
 | `curl http://x/#a`         | `curl`, `http://x/`, comment `a` |
 
-Its `quote` turns words back into a line that splits the same way, which is
-what the header and the list of recent commands show.
+Its `quote` does not always turn words back into a line that splits the
+same way: `quote(["ls", "*.log"])` is `ls \*.log`, which `parse` reads as a
+glob. So hukube keeps the line the user typed and splits it when a session
+starts, and never rebuilds a line from words.
 
 It is lenient in two ways that matter here: an unterminated quote is taken as
 closed, and a `#` inside a word starts a comment. The field therefore shows
@@ -190,7 +192,8 @@ and new Pod names, which a key by Pod or container name would not.
   across all images.
 - Both live in one setting, `exec/commands`, in the Engine's store
   (ADR-0009), so every window and both Hosts share them:
-  `{ "images": [{ "image": "…", "command": ["…"] }], "recent": [["…"]] }`,
+  `{ "images": [{ "image": "…", "command": "…" }], "recent": ["…"] }`,
+  where each command is the line as the user typed it,
   at most 100 images, the least recently used dropped first.
 - Image names come from the Cluster. They are compared as strings in a list,
   never used as keys of a plain object.
@@ -205,9 +208,11 @@ and new Pod names, which a key by Pod or container name would not.
 web-7d9f`. The program comes first because a narrow Tab truncates its
   end. A default session keeps `<container> in <pod>`.
 - The header gains a "Command" part after the container, in the same style,
-  with the command as `quote` writes it. A default session shows none.
-- The command is part of the Tab's params, so Start again, Try again, and a
-  Tab restored after a reload run the same command.
+  with the line as the user typed it. A default session shows none.
+- The line is part of the Tab's params, as `commandLine`, so Start again,
+  Try again, and a Tab restored after a reload run the same command. It is
+  split into words when the session starts. A line that no longer splits,
+  such as one edited in the settings file, fails to start with the reason.
 - The header must not change height while a session is live (`AGENTS.md`,
   "Sessions outlive their panel"). The command is set before a session
   starts, and a notice that runs a new command changes the header before it
@@ -263,11 +268,11 @@ One part, in this order:
    `Command`, the classification by whether a command was chosen, and
    `mise run gen`.
 2. A module `features/exec/command.ts`: splitting a line into words or a
-   refusal, quoting words for display, an image's key, and the program's
+   refusal, an image's key, and the program's
    name for a title.
 3. A store `features/exec/commands-store.ts` for `exec/commands`: read by
    watch, remembered and recent commands, serialized writes.
-4. `ExecSessionParams.command`, sent by `startSession`; the Tab title from
+4. `ExecSessionParams.commandLine`, split and sent by `startSession`; the Tab title from
    it; the header part.
 5. The split button, its menu item, and the dialog.
 6. The notices' field.
@@ -278,7 +283,7 @@ One part, in this order:
 
 | Concern                                  | Evidence                                                                                 |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Splitting and quoting                    | Unit tests of `command.ts`: each row of the probe table, each refusal, empty, the limit  |
+| Splitting and typed-line reuse           | Unit tests of `command.ts`: each row of the probe table, each refusal, empty, the limit  |
 | Image key                                | Unit tests: tag, digest, both, a registry port, no tag                                   |
 | Remembering                              | Unit tests of the store: remember, replace, forget, the 100 and 10 bounds, order, writes |
 | Engine check                             | Go test: each bad `Command` ends with `bad_request`; a good one reaches the executor     |
@@ -315,3 +320,34 @@ code is already there.
 ## Unresolved questions
 
 None.
+
+## What changed while building
+
+- **The typed line is kept, not rebuilt from words.** A unit test showed
+  that `shell-quote`'s `quote` does not round-trip: `quote(["ls", "*.log"])`
+  is `ls \*.log`, which its `parse` reads as a glob, so a recent command put
+  back in the field would be refused. The Tab's params, the remembered
+  commands, and the recent commands therefore hold the line as typed, which
+  is split again when a session starts, and the header shows that line.
+  `quote` is not used.
+- A fresh settings watch is opened after serialized writes settle, following
+  the column-layout store's pattern. Watch values have no revision, so an old
+  echo must not replace a newer local value. This keeps queued edits based on
+  the last value seen or written.
+- The command dialog suppresses the container menu's focus restoration when
+  it opens; otherwise the closing menu can steal focus from the command field.
+- A same-Tab command restart commits its params, title, and header with
+  `flushSync` before starting the session. The existing terminal reset/refit
+  path then sizes it before opening the stream.
+- If the default container is stopped but another container is running, the
+  main button is disabled with that reason. The menu still lets the user
+  choose a running container.
+- Explicit Start again, Try again, and restored-Tab starts also record command
+  reuse, so recent commands and image recency include those entry points.
+- Runs made before the settings watch answers are queued as intents and applied
+  to its first value, preserving existing remembered and recent commands. A
+  read error discards those intents and suppresses persistence until a
+  successful read; it never blocks the session from running.
+- Refusals carry a kind and token for rendering code elements, with plain text
+  for session errors. The no-shell notice names the custom-program option, and
+  an empty command field labels remembering as using the default shell.

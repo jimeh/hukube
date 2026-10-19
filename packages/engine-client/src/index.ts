@@ -8,6 +8,7 @@ export {
   ExecInputFrame,
   ExecInputWindow,
   ExecReasonNoShell,
+  ExecReasonCommandNotFound,
   ExecReasonConnectionLost,
   ExecReasonEngineStopped,
 } from "./protocol.gen.ts";

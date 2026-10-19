@@ -3,6 +3,7 @@ import { metadata } from "../edit/yaml.ts";
 
 export interface ExecContainer {
   name: string;
+  image: string;
   kind: "container" | "init" | "ephemeral";
   state: string;
 }
@@ -38,7 +39,18 @@ export function execContainers(object: Record<string, unknown> | undefined): Exe
       .filter((name: unknown): name is string => typeof name === "string");
     if (kind === "container" && typeof defaultName === "string" && names.includes(defaultName))
       names.splice(0, 0, ...names.splice(names.indexOf(defaultName), 1));
-    for (const name of names) result.push({ name, kind, state: states.get(name) ?? "waiting" });
+    for (const name of names) {
+      const definition = (spec[field] as unknown[])
+        .map(record)
+        .find((item) => item["name"] === name);
+      const image = definition?.["image"];
+      result.push({
+        name,
+        image: typeof image === "string" ? image : "",
+        kind,
+        state: states.get(name) ?? "waiting",
+      });
+    }
   }
   return result;
 }
