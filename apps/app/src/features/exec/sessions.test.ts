@@ -247,3 +247,26 @@ it("opens the stream once the terminal has its size, or after a wait without one
     vi.useRealTimers();
   }
 });
+
+it("splits the kept command line at each start and sends argv to pod.exec", async () => {
+  const s = setup();
+  const chosen = { ...params, commandLine: "sh -c 'echo $((6*7))'" };
+  await startSession(s.engine, "c", chosen, async () => s.terminal);
+  expect(s.openStream.mock.calls[0]?.[1]).toMatchObject({ command: ["sh", "-c", "echo $((6*7))"] });
+  expect(useExecSessions.getState().entries.get(params.sessionId)?.params).toEqual(chosen);
+  s.streams[0]!.listener.end({ reason: "complete", exitCode: 0 });
+  await startSession(s.engine, "c", chosen, async () => s.terminal);
+  expect(s.openStream.mock.calls[1]?.[1]).toMatchObject({ command: ["sh", "-c", "echo $((6*7))"] });
+});
+it("fails an invalid stored line before creating a terminal or stream", async () => {
+  const s = setup();
+  const make = vi.fn<() => Promise<typeof s.terminal>>(async () => s.terminal);
+  await startSession(s.engine, "c", { ...params, commandLine: "a | b" }, make);
+  expect(s.state()).toEqual({
+    phase: "failed",
+    reason: "error",
+    error: { code: "bad_request", message: "| needs a shell. To use one, write sh -c '…'." },
+  });
+  expect(make).not.toHaveBeenCalled();
+  expect(s.openStream).not.toHaveBeenCalled();
+});

@@ -1,7 +1,10 @@
 import type { EngineClient, EngineStream, ExecParams, StreamEnd } from "@hukube/engine-client";
 import { create } from "zustand";
+import { commandRefusalText, parseCommand } from "./command.ts";
 
 export type ExecSessionParams = Omit<ExecParams, "cluster" | "cols" | "rows" | "command"> & {
+  /** The line as typed, split only when a session starts. */
+  commandLine?: string;
   sessionId: string;
   preview?: boolean;
 };
@@ -107,6 +110,15 @@ export async function startSession(
     session.terminal?.setEnded(state.phase === "ended" || state.phase === "failed");
     put(id, { ...session });
   };
+  const parsed = parseCommand(params.commandLine ?? "");
+  if (parsed.error !== undefined) {
+    publish({
+      phase: "failed",
+      reason: "error",
+      error: { code: "bad_request", message: commandRefusalText(parsed.error) },
+    });
+    return;
+  }
   let terminal: ExecTerminal;
   try {
     terminal = session.terminal ?? (await makeTerminal());
@@ -154,6 +166,7 @@ export async function startSession(
       pod: params.pod,
       uid: params.uid,
       container: params.container,
+      ...(parsed.command.length ? { command: parsed.command } : {}),
       cols: terminal.cols,
       rows: terminal.rows,
     },

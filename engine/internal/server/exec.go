@@ -50,6 +50,15 @@ func init() {
 		if p.Cluster == "" || p.Namespace == "" || p.Pod == "" || p.UID == "" || p.Container == "" || p.Cols == 0 || p.Rows == 0 {
 			return streamError(badRequest(fmt.Errorf("cluster, namespace, pod, uid, container, cols, and rows are required")))
 		}
+		if len(p.Command) > 0 {
+			bytes := 0
+			for _, word := range p.Command {
+				bytes += len(word)
+			}
+			if p.Command[0] == "" || len(p.Command) > 256 || bytes > 16<<10 {
+				return streamError(badRequest(fmt.Errorf("command must have a non-empty first word, at most 256 words, and at most 16 KiB in all")))
+			}
+		}
 		c, err := s.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
 			return streamError(err)

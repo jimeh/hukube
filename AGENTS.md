@@ -76,7 +76,8 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   sent finishes after a cancel or a lost socket.
 - **Protocol changes:** declare methods in `engine/internal/protocol/methods.go`
   and edit wire types in `engine/internal/protocol`, then run `mise run gen`.
-  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Rebuild and
+  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Export new
+  runtime constants from `packages/engine-client/src/index.ts` too. Rebuild and
   restart the Engine after a protocol change, or the UI shows the out-of-date
   notice. For tygo to generate TypeScript unions, enum constants must
   start with their type's name (`ClusterPhaseReady`). `tstype` tags must not
@@ -131,7 +132,12 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   sent just after a session starts makes a shell print its prompt again and
   drop what was typed, so a session starts at its terminal's real size, and
   a change to the session Tab's header must not change its height while a
-  session is live.
+  session is live. When a notice runs a new command, commit the new Tab params
+  and header before calling `startSession`, so it refits to the new layout.
+- **Exec commands:** keep the typed line in Tab params and settings. Split it
+  with `features/exec/command.ts` when starting a session. Never rebuild a line
+  with `shell-quote`'s `quote`: escaped literal globs do not round-trip through
+  its `parse` (ADR-0025).
 - **xterm.js:** import it only through `apps/app/src/lib/xterm.ts`, which
   loads it on demand. It cannot be sized in a hidden or detached element. In
   Chromium a terminal that is showing draws with WebGL (ADR-0024), so its

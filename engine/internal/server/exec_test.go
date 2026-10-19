@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -377,5 +378,46 @@ func TestInputAcknowledgementsCoalesce(t *testing.T) {
 	// The second total replaced the first, and data kept its place between them.
 	if !slices.Equal(got, []uint64{5, 9}) {
 		t.Fatalf("acknowledgements=%v", got)
+	}
+}
+
+func TestPodExecCommand(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		command []string
+		bad     bool
+	}{
+		{"default", nil, false}, {"empty slice", []string{}, false},
+		{"chosen", []string{"sh", "-c", "echo 42"}, false},
+		{"empty first word", []string{"", "arg"}, true},
+		{"256 words", append([]string{"x"}, make([]string, 255)...), false},
+		{"257 words", append([]string{"x"}, make([]string, 256)...), true},
+		{"16 KiB", []string{strings.Repeat("é", 8192)}, false},
+		{"over 16 KiB", []string{strings.Repeat("é", 8192), "x"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var built atomic.Int32
+			replaceExecutor(t, func(_ *cluster.Cluster, p protocol.ExecParams) (execsession.Executor, error) {
+				built.Add(1)
+				if !slices.Equal(p.Command, tt.command) {
+					return nil, fmt.Errorf("wrong command: %q", p.Command)
+				}
+				return sessionExecutor(func(context.Context, remotecommand.StreamOptions) error { return nil }), nil
+			})
+			pod := execPod(t)
+			_, ts := execServer(t, pod)
+			c := dialStream(t, ts)
+			p := execParams(pod)
+			p.Command = tt.command
+			openExec(c, p)
+			end := awaitLogEnd(c)
+			if tt.bad {
+				if end.Error == nil || end.Error.Code != protocol.ErrorCodeBadRequest || built.Load() != 0 {
+					t.Fatalf("invalid command end=%+v built=%d", end, built.Load())
+				}
+			} else if end.Reason != protocol.StreamEndReasonComplete || built.Load() != 1 {
+				t.Fatalf("valid command end=%+v built=%d", end, built.Load())
+			}
+		})
 	}
 }
