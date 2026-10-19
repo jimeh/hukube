@@ -375,7 +375,6 @@ None.
 - Refusals carry a kind and token for rendering code elements, with plain text
   for session errors. The no-shell notice names the custom-program option, and
   empty command fields now offer explicit forgetting only when a command exists.
-
 - Review corrections made checkbox defaults explicit for each entry point and
   reset them when empty/nonempty changes the action. The dialog prefills an image's
   remembered line until edited, and both notices offer recent commands. If the
@@ -392,7 +391,6 @@ None.
   the Cluster's color into its portal so Run retains the primary style.
 - Failed-session content scrolls in short Panes. Notice focus follows the panel's
   visibility and selection, without focusing its detached terminal.
-
 - The existing shared dialog focus defect was reproduced in Chromium in both the
   command dialog and the unsaved-edits dialog. Base UI's `FloatingFocusManager`
   hands focus from an invisible guard to the first/last control on the next
@@ -401,8 +399,19 @@ None.
   `body`. The Container select is tabbable and receives the normal completed
   wrap. Shared dialog components were left unchanged as requested; fixing this
   focus handoff is a separate follow-up.
-
 - Verification must run sequentially: rebuilding with `dev:verify` during an
   end-to-end run briefly removed their shared `apps/app/dist` and caused an
   unrelated page navigation to return 404. This workflow hazard is recorded in
   `AGENTS.md`; the suite was rerun without overlapping builds.
+- **In the dialog, remembering is checked only while the field holds the
+  remembered command.** A follow-up review found that typing a one-off
+  command over the prefilled one kept the box checked, so the one-off
+  replaced the remembered command. The box now returns to unchecked when the
+  line differs from the remembered one.
+
+Not changed, and accepted after the follow-up reviews: `$(…)` and a lone `$`
+are refused as "the variable `$`"; Run in the no-shell notice is enabled
+with an empty field, which runs the default shell again; a recent command
+removed after a not-found start is computed from the window's last value of
+the setting, which can be stale if no component in the window watches it;
+and Tab in a dialog can reach `<body>` for one frame, in every dialog.
