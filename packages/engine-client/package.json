@@ -9,6 +9,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "anser": "2.3.5"
+  },
   "devDependencies": {
     "@types/react": "^19.3.0"
   },

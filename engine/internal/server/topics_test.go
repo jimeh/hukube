@@ -58,6 +58,10 @@ func TestMethodHandlersMatchDeclarations(t *testing.T) {
 			if requests[method.Name] == nil {
 				t.Errorf("request %q has no handler", method.Name)
 			}
+		case protocol.MethodKindStream:
+			if streams[method.Name] == nil {
+				t.Errorf("stream %q has no handler", method.Name)
+			}
 		case protocol.MethodKindTopic:
 			if topics[method.Name] == nil {
 				t.Errorf("topic %q has no handler", method.Name)
@@ -67,6 +71,11 @@ func TestMethodHandlersMatchDeclarations(t *testing.T) {
 	for name := range requests {
 		if declared[name] != protocol.MethodKindRequest {
 			t.Errorf("request handler %q has no declaration", name)
+		}
+	}
+	for name := range streams {
+		if declared[name] != protocol.MethodKindStream {
+			t.Errorf("stream handler %q has no declaration", name)
 		}
 	}
 	for name := range topics {

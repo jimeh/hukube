@@ -6,6 +6,7 @@ import type { ResourceAddress, TypeKey } from "@hukube/k8s";
 export interface FacetTarget {
   type: TypeKey;
   resourceType?: ResourceType;
+  logs?: boolean;
 }
 
 /** Resource state and switcher controls shared by a Facet and its badge. */
@@ -24,8 +25,10 @@ export interface FacetProps {
   related: SubscriptionState<Related>;
   /** The panel whose Pane related Resources open in. */
   panelId: string;
-  /** Whether this Facet is currently visible. */
+  /** Whether this Facet is selected in its Resource tab. */
   showing: boolean;
+  /** Whether the Facet, its tab, and its Workspace are all showing. */
+  visible: boolean;
   /** The switcher row element for the showing Facet's own controls. */
   controls: HTMLElement | null;
 }

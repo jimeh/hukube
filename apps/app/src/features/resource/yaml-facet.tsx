@@ -1,20 +1,22 @@
 import { Button } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
-import { EyeIcon } from "@hugeicons/core-free-icons";
+import { EyeIcon, Search01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Skeleton } from "@hukube/ui/components/skeleton";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { FacetProps } from "./facet-props.ts";
 import { manifestYaml } from "./manifest.ts";
 import { Notice } from "./notice.tsx";
+import type { YamlEditorHandle } from "./yaml-editor.tsx";
 
 const YamlEditor = lazy(() => import("./yaml-editor.tsx"));
 
 /** Shows the last Manifest and places its controls in the switcher while visible. */
 export function YamlFacet({ address, kind, manifest, lastObject, showing, controls }: FacetProps) {
   const [showManagedFields, setShowManagedFields] = useState(false);
+  const editor = useRef<YamlEditorHandle>(null);
   const yaml = useMemo(
     () => (lastObject ? manifestYaml(lastObject, { managedFields: showManagedFields }) : undefined),
     [lastObject, showManagedFields],
@@ -24,27 +26,45 @@ export function YamlFacet({ address, kind, manifest, lastObject, showing, contro
       {showing &&
         controls &&
         createPortal(
-          <Tooltip>
-            <TooltipTrigger
-              render={<Button variant="ghost" size="sm" />}
-              className="shrink-0 @max-[26rem]/switcher:size-7 @max-[26rem]/switcher:p-0"
-              aria-label={showManagedFields ? "Hide managed fields" : "Show managed fields"}
-              aria-pressed={showManagedFields}
-              onClick={() => setShowManagedFields(!showManagedFields)}
-            >
-              <HugeiconsIcon
-                icon={EyeIcon}
-                aria-hidden="true"
-                className="hidden @max-[26rem]/switcher:block"
-              />
-              <span className="@max-[26rem]/switcher:hidden">
+          <>
+            <Tooltip>
+              <TooltipTrigger
+                render={<Button variant="ghost" size="sm" disabled={yaml === undefined} />}
+                className="shrink-0 @max-[26rem]/switcher:size-7 @max-[26rem]/switcher:p-0"
+                aria-label="Search"
+                onClick={() => editor.current?.search()}
+              >
+                <HugeiconsIcon
+                  icon={Search01Icon}
+                  aria-hidden="true"
+                  className="hidden @max-[26rem]/switcher:block"
+                />
+                <span className="@max-[26rem]/switcher:hidden">Search</span>
+              </TooltipTrigger>
+              <TooltipContent>Search</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={<Button variant="ghost" size="sm" />}
+                className="shrink-0 @max-[26rem]/switcher:size-7 @max-[26rem]/switcher:p-0"
+                aria-label={showManagedFields ? "Hide managed fields" : "Show managed fields"}
+                aria-pressed={showManagedFields}
+                onClick={() => setShowManagedFields(!showManagedFields)}
+              >
+                <HugeiconsIcon
+                  icon={EyeIcon}
+                  aria-hidden="true"
+                  className="hidden @max-[26rem]/switcher:block"
+                />
+                <span className="@max-[26rem]/switcher:hidden">
+                  {showManagedFields ? "Hide managed fields" : "Show managed fields"}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
                 {showManagedFields ? "Hide managed fields" : "Show managed fields"}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              {showManagedFields ? "Hide managed fields" : "Show managed fields"}
-            </TooltipContent>
-          </Tooltip>,
+              </TooltipContent>
+            </Tooltip>
+          </>,
           controls,
         )}
       {manifest.error && (
@@ -53,7 +73,7 @@ export function YamlFacet({ address, kind, manifest, lastObject, showing, contro
       <div className="min-h-0 flex-1">
         {yaml !== undefined ? (
           <Suspense fallback={<EditorSkeleton />}>
-            <YamlEditor value={yaml} />
+            <YamlEditor ref={editor} value={yaml} />
           </Suspense>
         ) : manifest.data?.deleted ? (
           <Notice

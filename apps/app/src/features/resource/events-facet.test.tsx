@@ -26,6 +26,7 @@ const props: FacetProps = {
   related: { stale: false },
   panelId: "resource",
   showing: true,
+  visible: true,
   controls: null,
 };
 function show(events: FacetProps["events"], overrides: Partial<FacetProps> = {}) {

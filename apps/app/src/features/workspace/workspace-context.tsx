@@ -13,6 +13,8 @@ export interface OpenOptions {
 
 export interface WorkspaceValue {
   cluster: string;
+  /** Whether this Workspace is showing in the window. */
+  active: boolean;
   status?: ClusterStatus;
   types: ReadonlyMap<TypeKey, ResourceType>;
   /** The Resource Type of the active list tab, if the active tab is a list. */

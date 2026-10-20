@@ -67,6 +67,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   const value = useMemo<WorkspaceValue>(
     () => ({
       cluster,
+      active,
       ...(status ? { status } : {}),
       types,
       ...(activeListType ? { activeListType } : {}),
@@ -106,7 +107,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         });
       },
     }),
-    [api, cluster, status, types, activeListType],
+    [api, cluster, active, status, types, activeListType],
   );
 
   return (

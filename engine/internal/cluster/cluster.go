@@ -122,6 +122,7 @@ type Cluster struct {
 	meta  metadata.Interface
 	dyn   dynamic.Interface
 	core  coreclient.CoreV1Interface
+	logs  coreclient.CoreV1Interface
 	table rest.Interface
 
 	// Index holds metadata for every Resource of every indexed type.
@@ -184,6 +185,13 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 	if err != nil {
 		return nil, fmt.Errorf("core client: %w", err)
 	}
+	logCfg := rest.CopyConfig(cfg)
+	logCfg.Timeout = 0
+	logCfg.RateLimiter = nil
+	logs, err := coreclient.NewForConfig(logCfg)
+	if err != nil {
+		return nil, fmt.Errorf("log client: %w", err)
+	}
 	table, err := newTableClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("table client: %w", err)
@@ -197,6 +205,7 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 		meta:       meta,
 		dyn:        dyn,
 		core:       core,
+		logs:       logs,
 		table:      table,
 		Index:      index.New(),
 		status:     protocol.ClusterStatus{Phase: protocol.ClusterPhaseConnecting},

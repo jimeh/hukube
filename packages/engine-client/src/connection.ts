@@ -1,3 +1,4 @@
+import { StreamPool, type StreamDelivery } from "./streams.ts";
 import {
   EngineRequestError,
   type ConnectionState,
@@ -5,8 +6,17 @@ import {
   type EngineEndpoint,
   type Subscription,
   type SubscriptionListener,
+  type EngineStream,
+  type StreamListener,
 } from "./client.ts";
-import type { RequestMethod, Requests, TopicMethod, Topics } from "./methods.gen.ts";
+import type {
+  RequestMethod,
+  Requests,
+  TopicMethod,
+  Topics,
+  StreamMethod,
+  Streams,
+} from "./methods.gen.ts";
 import {
   Hash,
   Subprotocol,
@@ -17,6 +27,7 @@ import {
 
 /** The subset of WebSocket that EngineConnection uses. */
 export interface SocketLike {
+  binaryType?: string;
   send(data: string): void;
   close(): void;
   onopen: ((event: Event) => void) | null;
@@ -54,6 +65,7 @@ const defaultRetryDelays = [250, 500, 1000, 2000, 5000];
  * flight when the socket drops are rejected.
  */
 export class EngineConnection implements EngineClient {
+  readonly #streams: StreamPool;
   readonly #url: string;
   readonly #protocols: string[];
   readonly #createSocket: SocketFactory;
@@ -71,6 +83,7 @@ export class EngineConnection implements EngineClient {
   readonly #stateListeners = new Set<() => void>();
 
   constructor(options: ConnectionOptions) {
+    this.#streams = new StreamPool(options, () => this.#outdated(undefined));
     this.#url = `${options.url.replace(/^http/, "ws")}/ws`;
     this.#protocols = [Subprotocol, TokenSubprotocolPrefix + options.token];
     this.#createSocket =
@@ -78,6 +91,15 @@ export class EngineConnection implements EngineClient {
     this.#retryDelays = options.retryDelaysMs ?? defaultRetryDelays;
     this.#helloTimeoutMs = options.helloTimeoutMs ?? 5000;
     this.#connect();
+  }
+
+  openStream<M extends StreamMethod>(
+    method: M,
+    params: Streams[M]["params"],
+    listener: StreamListener<M>,
+    delivery?: StreamDelivery<M>,
+  ): EngineStream {
+    return this.#streams.open(method, params, listener, delivery);
   }
 
   request<M extends RequestMethod>(
@@ -136,6 +158,7 @@ export class EngineConnection implements EngineClient {
   }
 
   close(): void {
+    this.#streams.close();
     clearTimeout(this.#retryTimer);
     clearTimeout(this.#helloTimer);
     const socket = this.#socket;
@@ -198,6 +221,7 @@ export class EngineConnection implements EngineClient {
   }
 
   #outdated(protocol: string | undefined): void {
+    this.#streams.close();
     clearTimeout(this.#retryTimer);
     clearTimeout(this.#helloTimer);
     const socket = this.#socket;

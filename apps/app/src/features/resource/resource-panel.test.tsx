@@ -34,6 +34,11 @@ vi.mock("@hukube/engine-client/react", () => ({
     return state.events;
   },
 }));
+vi.mock("./logs-facet.tsx", () => ({
+  LogsFacet: ({ visible }: { visible: boolean }) => (
+    <div data-testid="logs-visible">{String(visible)}</div>
+  ),
+}));
 vi.mock("./yaml-editor.tsx", () => ({ default: () => <div>YAML editor</div> }));
 
 beforeEach(() => {
@@ -61,6 +66,7 @@ it("keeps the last Manifest and a Deleted badge across Facets, or marks never-fo
   const api = { updateParameters: vi.fn<() => void>() } as unknown as DockviewPanelApi;
   const workspace = {
     cluster: "c",
+    active: true,
     types: new Map(),
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
@@ -94,6 +100,7 @@ it("chooses a Facet with complete params and keeps YAML mounted without its cont
   const api = { updateParameters } as unknown as DockviewPanelApi;
   const workspace = {
     cluster: "c",
+    active: true,
     types: new Map(),
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
@@ -128,6 +135,7 @@ function subscriptionPanel(type = "pods") {
   const api = { updateParameters: vi.fn<() => void>() } as unknown as DockviewPanelApi;
   const workspace = {
     cluster: "c",
+    active: true,
     types: new Map(),
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
@@ -177,6 +185,7 @@ it("subscribes to Related for the whole tab and requests cells only while showin
   } as unknown as DockviewPanelApi;
   const workspace = {
     cluster: "c",
+    active: true,
     types: new Map(),
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
@@ -232,6 +241,7 @@ it("offers every Facet in More Facets only while overflowing and changes the URI
   };
   const workspace = {
     cluster: "c",
+    active: true,
     types: new Map(),
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
@@ -260,7 +270,7 @@ it("offers every Facet in More Facets only while overflowing and changes the URI
   const choices = await screen.findAllByRole("menuitemradio");
   expect(
     choices.map((element) => element.getAttribute("aria-label") ?? element.textContent),
-  ).toEqual(["YAML", "Events, 1 warning", "Related, 12 Resources"]);
+  ).toEqual(["YAML", "Logs", "Events, 1 warning", "Related, 12 Resources"]);
   expect(
     screen
       .getByRole("menuitemradio", { name: "Related, 12 Resources" })
@@ -365,7 +375,13 @@ describe("a double-click on a related Resource", () => {
   const openResource = vi.fn<WorkspaceValue["openResource"]>();
   const tab = (id: string, address: typeof pod & { type: string }, facet: "yaml" | "related") => (
     <WorkspaceContext
-      value={{ cluster: "c", types: new Map(), openList: vi.fn<() => void>(), openResource }}
+      value={{
+        cluster: "c",
+        active: true,
+        types: new Map(),
+        openList: vi.fn<() => void>(),
+        openResource,
+      }}
     >
       <ResourcePanel
         api={{ id, updateParameters: vi.fn<() => void>() } as unknown as DockviewPanelApi}
@@ -447,4 +463,62 @@ describe("a double-click on a related Resource", () => {
     fireEvent.click(screen.getByRole("tablist", { name: "Facets" }), { detail: 2 });
     expect(openResource).not.toHaveBeenCalled();
   });
+});
+
+it("keeps a custom Resource's Logs entry after Pod ownership disappears and passes combined visibility", () => {
+  const address = { cluster: "c", type: "constructor", namespace: "ns", name: "custom" };
+  state.manifest = { stale: false, data: { object: { metadata: { uid: "uid" } } } };
+  let visibility: ((event: { isVisible: boolean }) => void) | undefined;
+  const api = {
+    id: "custom",
+    isVisible: true,
+    updateParameters: vi.fn<() => void>(),
+    onDidVisibilityChange: (listener: typeof visibility) => {
+      visibility = listener;
+      return { dispose: vi.fn<() => void>() };
+    },
+  } as unknown as DockviewPanelApi;
+  const workspace = {
+    cluster: "c",
+    active: true,
+    types: new Map(),
+    openList: vi.fn<() => void>(),
+    openResource: vi.fn<() => void>(),
+  };
+  const panel = (active = true, facet: "logs" | "yaml" = "logs") => (
+    <WorkspaceContext value={{ ...workspace, active }}>
+      <ResourcePanel api={api} params={{ uri: formatResourceUri({ ...address, facet }) }} />
+    </WorkspaceContext>
+  );
+  const view = render(panel());
+  expect(screen.queryByRole("tab", { name: "Logs" })).toBeNull();
+  state.related = {
+    stale: false,
+    data: {
+      found: true,
+      total: 1,
+      types: [],
+      sections: [
+        {
+          relationship: "owns",
+          direction: "out",
+          total: 1,
+          rows: [{ depth: 1, status: "found", kind: "Pod", type: "pods", name: "p" }],
+        },
+      ],
+    },
+  };
+  view.rerender(panel());
+  expect(screen.getByRole("tab", { name: "Logs" })).toBeDefined();
+  expect(screen.getByTestId("logs-visible").textContent).toBe("true");
+  state.related = { stale: false, data: { found: true, total: 0, types: [], sections: [] } };
+  view.rerender(panel());
+  expect(screen.getByRole("tab", { name: "Logs" })).toBeDefined();
+  act(() => visibility?.({ isVisible: false }));
+  expect(screen.getByTestId("logs-visible").textContent).toBe("false");
+  act(() => visibility?.({ isVisible: true }));
+  view.rerender(panel(false));
+  expect(screen.getByTestId("logs-visible").textContent).toBe("false");
+  view.rerender(panel(true, "yaml"));
+  expect(screen.getByTestId("logs-visible").textContent).toBe("false");
 });
