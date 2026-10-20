@@ -48,6 +48,14 @@ loopback, and prints a URL with a fresh Engine token:
 mise run dev:tailnet  # → http://<node>.<tailnet>.ts.net:5173/#token=...
 ```
 
+The Engine token grants the kubeconfig credentials' read and write access,
+unless the Engine runs with `--read-only`. This task is read-only by default.
+Anyone with its URL has that access. To allow editing and deleting Resources:
+
+```sh
+HUKUBE_TAILNET_WRITE=1 mise run dev:tailnet
+```
+
 It serves plain HTTP, which Tailscale encrypts in transit. To use another
 hostname that resolves to the Tailscale IP, set it in an ignored
 `mise.local.toml`:

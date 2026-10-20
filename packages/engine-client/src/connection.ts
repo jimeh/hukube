@@ -3,6 +3,7 @@ import {
   EngineRequestError,
   type ConnectionState,
   type EngineClient,
+  type RequestOptions,
   type EngineEndpoint,
   type Subscription,
   type SubscriptionListener,
@@ -19,6 +20,7 @@ import type {
 } from "./methods.gen.ts";
 import {
   Hash,
+  MaxClientMessageBytes,
   Subprotocol,
   TokenSubprotocolPrefix,
   type ClientMessage,
@@ -53,6 +55,7 @@ interface ActiveSubscription {
 }
 
 interface PendingRequest {
+  cleanup(): void;
   resolve(value: unknown): void;
   reject(error: Error): void;
 }
@@ -105,16 +108,45 @@ export class EngineConnection implements EngineClient {
   request<M extends RequestMethod>(
     method: M,
     params: Requests[M]["params"],
+    options?: RequestOptions,
   ): Promise<Requests[M]["result"]> {
+    if (options?.signal?.aborted) {
+      return Promise.reject(
+        new EngineRequestError({ code: "cancelled", message: "Request cancelled" }),
+      );
+    }
     if (this.#state !== "open") {
       return Promise.reject(
-        new EngineRequestError({ code: "disconnected", message: "not connected to the Engine" }),
+        new EngineRequestError({ code: "not_connected", message: "not connected to the Engine" }),
       );
     }
     const id = this.#nextId++;
+    const encoded = JSON.stringify({ id, type: "request", method, params });
+    // A character is at most three bytes of UTF-8, so most messages need no measuring.
+    if (
+      encoded.length * 3 > MaxClientMessageBytes &&
+      new TextEncoder().encode(encoded).byteLength > MaxClientMessageBytes
+    ) {
+      // Sending it would close the socket, and every subscription with it.
+      return Promise.reject(
+        new EngineRequestError({
+          code: "too_large",
+          message: "The request is larger than the Engine accepts.",
+        }),
+      );
+    }
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-      this.#send({ id, type: "request", method, params });
+      const signal = options?.signal;
+      const abort = () => {
+        if (!this.#pending.delete(id)) return;
+        cleanup();
+        this.#send({ id, type: "cancel" });
+        reject(new EngineRequestError({ code: "cancelled", message: "Request cancelled" }));
+      };
+      const cleanup = () => signal?.removeEventListener("abort", abort);
+      this.#pending.set(id, { resolve, reject, cleanup });
+      signal?.addEventListener("abort", abort, { once: true });
+      this.#socket?.send(encoded);
     });
   }
 
@@ -236,6 +268,7 @@ export class EngineConnection implements EngineClient {
     const pending = this.#pending.get(msg.id);
     if (pending) {
       this.#pending.delete(msg.id);
+      pending.cleanup();
       if (msg.type === "error" && msg.error) {
         pending.reject(new EngineRequestError(msg.error));
       } else {
@@ -262,7 +295,10 @@ export class EngineConnection implements EngineClient {
       code: "disconnected",
       message: "lost connection to the Engine",
     });
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      pending.cleanup();
+      pending.reject(error);
+    }
     this.#pending.clear();
   }
 

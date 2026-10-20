@@ -1,4 +1,4 @@
-import { stringify } from "yaml";
+import { renderYaml } from "../edit/yaml.ts";
 
 export interface ManifestOptions {
   /** Include metadata.managedFields, which is noise for most reading. */
@@ -16,7 +16,7 @@ export function manifestYaml(
     const { managedFields: _hidden, ...rest } = metadata;
     shown = { ...object, metadata: rest };
   }
-  return stringify(shown, { lineWidth: 0, aliasDuplicateObjects: false });
+  return renderYaml(shown);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

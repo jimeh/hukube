@@ -16,12 +16,17 @@ const (
 	TokenSubprotocolPrefix = "hukube.token."
 )
 
+// MaxClientMessageBytes is the largest message the Engine reads from a control socket.
+const MaxClientMessageBytes = 8 << 20
+
 // ClientType identifies what a ClientMessage asks the Engine to do.
 type ClientType string
 
 const (
 	// ClientTypeRequest asks for a single response.
 	ClientTypeRequest ClientType = "request"
+	// ClientTypeCancel cancels the request with the same ID.
+	ClientTypeCancel ClientType = "cancel"
 	// ClientTypeSubscribe starts a subscription that emits data until cancelled.
 	ClientTypeSubscribe ClientType = "subscribe"
 	// ClientTypeUpdate replaces the params of an existing subscription, such as
@@ -77,16 +82,32 @@ type Hello struct {
 type ErrorCode string
 
 const (
-	ErrorCodeBadRequest ErrorCode = "bad_request"
-	ErrorCodeNotFound   ErrorCode = "not_found"
-	ErrorCodeForbidden  ErrorCode = "forbidden"
-	ErrorCodeInternal   ErrorCode = "internal"
+	ErrorCodeBadRequest  ErrorCode = "bad_request"
+	ErrorCodeNotFound    ErrorCode = "not_found"
+	ErrorCodeForbidden   ErrorCode = "forbidden"
+	ErrorCodeInternal    ErrorCode = "internal"
+	ErrorCodeConflict    ErrorCode = "conflict"
+	ErrorCodeInvalid     ErrorCode = "invalid"
+	ErrorCodeCancelled   ErrorCode = "cancelled"
+	ErrorCodeUnavailable ErrorCode = "unavailable"
+	ErrorCodeTooLarge    ErrorCode = "too_large"
 )
 
 // ErrorDetail describes why a request or subscription failed.
 type ErrorDetail struct {
 	Code    ErrorCode `json:"code"`
 	Message string    `json:"message"`
+	// Reason is the API server's reason, such as "Invalid".
+	Reason string `json:"reason,omitempty"`
+	// Causes lists what was wrong, one per field when the field is known.
+	Causes []ErrorCause `json:"causes,omitempty"`
+}
+
+// ErrorCause describes one field or rule that refused a request.
+type ErrorCause struct {
+	Field   string `json:"field,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message"`
 }
 
 func (e *ErrorDetail) Error() string { return string(e.Code) + ": " + e.Message }

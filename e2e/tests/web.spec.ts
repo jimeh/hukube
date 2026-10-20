@@ -107,6 +107,7 @@ test("goes to a Resource and a Resource Type from the palette", async ({ page })
   // The shortcut wins over the editor's own Ctrl+K handling.
   await editor.click();
   await page.keyboard.press("ControlOrMeta+K");
+  await assertModalTabs(page, page.getByRole("dialog"));
   await input.fill("ConfigMap");
   await expect(page.getByRole("option", { name: /^ConfigMap configmaps/ })).toHaveAttribute(
     "aria-selected",
@@ -868,7 +869,7 @@ async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Pr
 // viewer's versions of find. Anything else a Monaco feature brings along has
 // to be removed in apps/app/src/lib/monaco.ts.
 const allowedEditorCommands =
-  /^(cursor\w*|deleteLeft|deleteRight|removeSecondaryCursors|cancelSelection|undo|redo|tab|outdent|lineBreakInsert|scroll(Page|Line)(Up|Down)|editor\.action\.selectAll|editor\.cancelOperation|actions\.find|editor\.action\.(next|previous)MatchFindAction|toggleFind(CaseSensitive|WholeWord|Regex|InSelection)|closeFindWidget|vs\.editor\.ICodeEditor:\d+:hukube\.logs\.\w+)$/;
+  /^(cursor\w*|deleteLeft|deleteRight|removeSecondaryCursors|cancelSelection|undo|redo|tab|outdent|lineBreakInsert|scroll(Page|Line)(Up|Down)|editor\.action\.selectAll|editor\.cancelOperation|actions\.find|editor\.action\.(next|previous)MatchFindAction|toggleFind(CaseSensitive|WholeWord|Regex|InSelection)|closeFindWidget|vs\.editor\.ICodeEditor:\d+:hukube\.(logs\.\w+|edit\.review))$/;
 
 /** Lists the commands Monaco has a key for that are not allowed one. */
 async function unexpectedEditorKeyBindings(page: Page): Promise<string[]> {
@@ -916,3 +917,223 @@ async function unexpectedEditorKeyBindings(page: Page): Promise<string[]> {
     .filter(([command]) => !allowedEditorCommands.test(command))
     .map(([command, keys]) => `${command} (${keys})`);
 }
+
+test("reviews and applies ConfigMap edits, handles overlaps, and confirms deletion", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  const name = "e2e-edit-config";
+  kubectl("-n", namespace, "create", "configmap", name, "--from-literal=greeting=hello");
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await page
+    .getByRole("complementary", { name: "Resource types" })
+    .getByRole("button", { name: /^ConfigMap \d+$/ })
+    .click();
+  const list = page.getByRole("tabpanel", { name: "configmaps", exact: true });
+  await list.getByRole("textbox", { name: "Filter by name" }).fill(name);
+  const row = list.getByRole("row", { name: new RegExp(`${name} ${namespace}`) });
+  await row.click();
+  const panel = page.getByRole("tabpanel", { name, exact: true });
+  const editor = panel.locator(".monaco-editor:visible");
+  await expect(editor.locator(".view-lines")).toContainText("hello");
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+S");
+  await expect(
+    page.getByRole("dialog", { name: `Review changes to ConfigMap ${name}` }),
+  ).toBeHidden();
+  await panel.getByRole("button", { name: "Edit", exact: true }).click();
+  const reviewButton = panel.getByRole("button", { name: "Review changes", exact: true });
+  await expect(reviewButton).toBeDisabled();
+  await expect
+    .poll(() => editor.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.insertText("focus-test");
+  await expect(editor.locator(".view-lines")).toContainText("focus-test");
+  for (let i = 0; i < "focus-test".length; i++) await page.keyboard.press("Backspace");
+  await expect(reviewButton).toBeDisabled();
+  await page.keyboard.press("ControlOrMeta+S");
+  await expect(
+    page.getByRole("dialog", { name: `Review changes to ConfigMap ${name}` }),
+  ).toBeHidden();
+  const write = async (greeting: string, extra = false) => {
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+A");
+    // Paste a document. insertText is typing, so Monaco reindents every newline.
+    const text = `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\ndata:\n  greeting: ${greeting}\n${extra ? "  added: reviewed\n" : ""}`;
+    await page.evaluate((yaml) => navigator.clipboard.writeText(yaml), text);
+    await page.keyboard.press("ControlOrMeta+V");
+    await expect(reviewButton).toBeEnabled();
+  };
+  await write("hello", true);
+  await panel.locator("header").click();
+  await page.keyboard.press("ControlOrMeta+S");
+  await expect(
+    page.getByRole("dialog", { name: `Review changes to ConfigMap ${name}` }),
+  ).toBeHidden();
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+S");
+  const dialog = page.getByRole("dialog", { name: `Review changes to ConfigMap ${name}` });
+  await expect(dialog.getByText("The Cluster accepts this edit.")).toBeVisible();
+  await expect(dialog.getByText(clusterId, { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Back to editing" })).toBeFocused();
+  await assertModalTabs(page, dialog);
+  expect(kubectl("-n", namespace, "get", "configmap", name, "-o", "jsonpath={.data.added}")).toBe(
+    "",
+  );
+  await expect(dialog.locator(".monaco-diff-editor")).toBeVisible();
+  expect(await unexpectedEditorKeyBindings(page)).toEqual([]);
+  await dialog.locator(".monaco-diff-editor .monaco-editor").last().click();
+  await page.keyboard.press("ControlOrMeta+S");
+  await expect(dialog).toBeVisible();
+  expect(kubectl("-n", namespace, "get", "configmap", name, "-o", "jsonpath={.data.added}")).toBe(
+    "",
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(editor.locator(".view-lines")).toContainText("reviewed");
+  await expect(editor.getByRole("textbox", { name: "Resource YAML" })).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+Z");
+  await expect(reviewButton).toBeDisabled();
+  await page.keyboard.type("# focus-returned");
+  await expect(editor.locator(".view-lines")).toContainText("focus-returned");
+  await write("hello", true);
+  await reviewButton.click();
+  await expect(dialog.getByText("The Cluster accepts this edit.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(row.getByRole("gridcell").nth(2)).toHaveText("2");
+  await expect(panel.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Edit", exact: true }).click();
+  await write("mine", true);
+  kubectl(
+    "-n",
+    namespace,
+    "patch",
+    "configmap",
+    name,
+    "--type=merge",
+    "--patch",
+    '{"data":{"greeting":"theirs"}}',
+  );
+  await expect(panel.getByText(/changed on the Cluster while you were editing/)).toBeVisible();
+  await reviewButton.click();
+  await expect(dialog.getByText(/You and the Cluster both changed data.greeting/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Overwrite and apply" }).click();
+  await expect(dialog).toBeHidden();
+  expect(
+    kubectl("-n", namespace, "get", "configmap", name, "-o", "jsonpath={.data.greeting}"),
+  ).toBe("mine");
+  await panel.getByRole("button", { name: "Delete", exact: true }).click();
+  const confirmation = page.getByRole("alertdialog", { name: `Delete ConfigMap ${name}?` });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByText(clusterId, { exact: true })).toBeVisible();
+  await expect(confirmation.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await assertModalTabs(page, confirmation);
+  await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(confirmation).toBeHidden();
+  await expect(row).toBeHidden();
+  await expect(panel.getByText("Deleted", { exact: true })).toBeVisible();
+  const unavailableEdit = panel.getByRole("button", { name: "Edit", exact: true });
+  await unavailableEdit.hover();
+  await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toHaveText(
+    "The Manifest is not available.",
+  );
+  await panel.getByRole("button", { name: "Show managed fields", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(unavailableEdit).toBeFocused();
+  await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toHaveText(
+    "The Manifest is not available.",
+  );
+});
+
+async function assertModalTabs(page: Page, dialog: Locator): Promise<void> {
+  await page.evaluate(() => {
+    const background = document.getElementById("root")!;
+    background.dataset["focusEscaped"] = "false";
+    background.addEventListener(
+      "focusin",
+      () => {
+        background.dataset["focusEscaped"] = "true";
+      },
+      { once: true },
+    );
+  });
+  const controls = await dialog.locator('button,input,textarea,[tabindex="0"]').count();
+  for (let i = 0; i < controls + 12; i++) {
+    await page.keyboard.press("Tab");
+  }
+  await expect
+    .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  expect(await page.locator("#root").getAttribute("data-focus-escaped")).toBe("false");
+}
+
+test("shows a readable unknown-field refusal and keeps the YAML editor usable", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  const name = "e2e-refusal";
+  kubectl("-n", namespace, "create", "deployment", name, "--image=rancher/mirrored-pause:3.6");
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await page
+    .getByRole("complementary", { name: "Resource types" })
+    .getByRole("button", { name: /^Deployment \d+$/ })
+    .click();
+  const list = page.getByRole("tabpanel", { name: "deployments.apps", exact: true });
+  await list.getByRole("textbox", { name: "Filter by name" }).fill(name);
+  await list.getByRole("row", { name: new RegExp(`${name} ${namespace}`) }).click();
+  const panel = page.getByRole("tabpanel", { name, exact: true });
+  const editor = panel.locator(".monaco-editor:visible");
+  await expect(editor.locator(".view-lines")).toContainText("replicas");
+  await editor.click();
+  await page.keyboard.type("x");
+  await expect(
+    panel.getByText("Choose Edit to change this Manifest.", { exact: true }),
+  ).toBeVisible();
+  const edit = panel.getByRole("button", { name: "Edit", exact: true });
+  await edit.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toBeHidden();
+  await edit.click();
+  const review = panel.getByRole("button", { name: "Review changes", exact: true });
+  await review.hover();
+  await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toHaveText(
+    "No unsaved edits",
+  );
+  await panel.getByRole("button", { name: "Cancel", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(review).toBeFocused();
+  await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toHaveText(
+    "No unsaved edits",
+  );
+  const text = `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\nspec:\n  bogusField: 1\n  replicas: 1\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: pause\n          image: rancher/mirrored-pause:3.6\n`;
+  await editor.getByRole("textbox", { name: "Resource YAML" }).focus();
+  await expect
+    .poll(() => editor.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.evaluate((yaml) => navigator.clipboard.writeText(yaml), text);
+  await page.keyboard.press("ControlOrMeta+V");
+  await expect(review).toBeEnabled();
+  await review.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toBeHidden();
+  await review.click();
+  const dialog = page.getByRole("dialog", { name: `Review changes to Deployment ${name}` });
+  await expect(dialog.getByText("spec.bogusField: unknown field", { exact: true })).toBeVisible();
+  expect((await dialog.innerText()).length).toBeLessThan(1500);
+  await dialog.getByRole("button", { name: "Back to editing" }).click();
+  const strip = panel.locator('[data-notice="error"]');
+  await expect(strip).toContainText("spec.bogusField: unknown field");
+  expect(
+    await strip.evaluate((element) => element.getBoundingClientRect().height),
+  ).toBeLessThanOrEqual(128);
+  expect(
+    await editor.evaluate((element) => element.getBoundingClientRect().height),
+  ).toBeGreaterThan(200);
+  await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+  const discard = page.getByRole("alertdialog");
+  await assertModalTabs(page, discard);
+  await discard.getByRole("button", { name: "Discard edits" }).click();
+  await expect(edit).toBeFocused();
+});
