@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -118,6 +119,7 @@ type Cluster struct {
 	probe discovery.DiscoveryInterface
 	meta  metadata.Interface
 	dyn   dynamic.Interface
+	core  coreclient.CoreV1Interface
 	table rest.Interface
 
 	// Index holds metadata for every Resource of every indexed type.
@@ -173,6 +175,10 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 	if err != nil {
 		return nil, fmt.Errorf("dynamic client: %w", err)
 	}
+	core, err := coreclient.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("core client: %w", err)
+	}
 	table, err := newTableClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("table client: %w", err)
@@ -185,6 +191,7 @@ func newCluster(ctx context.Context, id string, cfg *rest.Config, log *slog.Logg
 		probe:      probe,
 		meta:       meta,
 		dyn:        dyn,
+		core:       core,
 		table:      table,
 		Index:      index.New(),
 		status:     protocol.ClusterStatus{Phase: protocol.ClusterPhaseConnecting},
@@ -230,18 +237,6 @@ func (c *Cluster) Types() []protocol.ResourceType {
 // changes are signalled by Index.Changed instead.
 func (c *Cluster) TypesChanged() (<-chan struct{}, func()) {
 	return c.typesChanged.Subscribe()
-}
-
-// resolve returns where a type is currently served. It copies the fields
-// because discovery updates them under c.mu.
-func (c *Cluster) resolve(key protocol.TypeKey) (gvr schema.GroupVersionResource, namespaced bool, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	t, ok := c.types[key]
-	if !ok {
-		return schema.GroupVersionResource{}, false, false
-	}
-	return t.gvr, t.info.Namespaced, true
 }
 
 func (c *Cluster) setStatus(s protocol.ClusterStatus) {

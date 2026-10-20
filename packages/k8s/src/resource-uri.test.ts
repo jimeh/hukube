@@ -31,6 +31,18 @@ describe("Resource URIs", () => {
     expect(parseResourceUri(formatResourceUri(address))).toEqual(address);
   });
 
+  it("round-trips the Events Facet", () => {
+    const address: ResourceAddress = {
+      cluster: "c",
+      type: "pods",
+      namespace: "ns",
+      name: "web",
+      facet: "events",
+    };
+    expect(formatResourceUri(address)).toBe("hukube://resource/v1/c/pods/ns/web#events");
+    expect(parseResourceUri(formatResourceUri(address))).toEqual(address);
+  });
+
   it("uses a stable, versioned format", () => {
     expect(
       formatResourceUri({ cluster: "a/b", type: "pods", namespace: "", name: "x", facet: "yaml" }),

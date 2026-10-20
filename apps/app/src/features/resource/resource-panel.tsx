@@ -1,22 +1,25 @@
 import { useSubscription } from "@hukube/engine-client/react";
-import { parseResourceUri } from "@hukube/k8s";
+import { formatResourceUri, parseResourceUri, type Facet } from "@hukube/k8s";
 import { Badge } from "@hukube/ui/components/badge";
-import { Button } from "@hukube/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
-import { Skeleton } from "@hukube/ui/components/skeleton";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@hukube/ui/components/tabs";
+import type { IDockviewPanelProps } from "dockview-react";
+import { useState } from "react";
 
+import type { ResourcePanelParams } from "@/features/workspace/dock.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 
-import { manifestYaml } from "./manifest.ts";
+import { resourceEventsParams } from "./facet-rules.ts";
+import { facetsFor, resolveFacet } from "./facets.ts";
+import { Notice } from "./notice.tsx";
 
-const YamlEditor = lazy(() => import("./yaml-editor.tsx"));
-
-/** One Resource, shown through its YAML Facet and kept live. */
-export function ResourcePanel({ uri }: { uri: string }) {
-  const address = parseResourceUri(uri);
+/** One live Resource, with its Facet named in the tab's Resource URI. */
+export function ResourcePanel({
+  api,
+  params,
+}: Pick<IDockviewPanelProps<ResourcePanelParams>, "api" | "params">) {
+  const address = parseResourceUri(params.uri);
   const { types } = useWorkspace();
-  const { data, error } = useSubscription(
+  const manifest = useSubscription(
     "resource.get",
     address
       ? {
@@ -27,27 +30,30 @@ export function ResourcePanel({ uri }: { uri: string }) {
         }
       : undefined,
   );
-  const [showManagedFields, setShowManagedFields] = useState(false);
-
-  // Keep showing the last known Manifest after the Resource is deleted.
   const [lastObject, setLastObject] = useState<Record<string, unknown>>();
-  if (data?.object && data.object !== lastObject) setLastObject(data.object);
-
-  const yaml = useMemo(
-    () => (lastObject ? manifestYaml(lastObject, { managedFields: showManagedFields }) : undefined),
-    [lastObject, showManagedFields],
+  if (manifest.data?.object && manifest.data.object !== lastObject)
+    setLastObject(manifest.data.object);
+  const target = { type: address?.type ?? "", resourceType: types.get(address?.type ?? "") };
+  const available = facetsFor(target);
+  const events = useSubscription(
+    "resource.events",
+    address && available.some((facet) => facet.id === "events")
+      ? resourceEventsParams(address, manifest, manifest.data?.object ?? lastObject)
+      : undefined,
   );
-
-  if (!address) {
+  const selected = resolveFacet(address?.facet, target);
+  const [mounted, setMounted] = useState<ReadonlySet<Facet>>(() => new Set([selected]));
+  if (!mounted.has(selected)) setMounted(new Set([...mounted, selected]));
+  const [controls, setControls] = useState<HTMLDivElement | null>(null);
+  if (!address)
     return (
       <Notice
         title="Unreadable address"
-        description={`This tab points at "${uri}", which is not a Resource URI.`}
+        description={`This tab points at "${params.uri}", which is not a Resource URI.`}
       />
     );
-  }
-  const kind = types.get(address.type)?.kind ?? address.type;
-
+  const kind = target.resourceType?.kind ?? address.type;
+  const shared = { address, kind, manifest, lastObject, events, controls };
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
@@ -56,55 +62,50 @@ export function ResourcePanel({ uri }: { uri: string }) {
         {address.namespace && (
           <span className="truncate font-mono text-muted-foreground">in {address.namespace}</span>
         )}
-        {data?.deleted && (
+        {manifest.data?.deleted && (
           <Badge variant="destructive">{lastObject ? "Deleted" : "Not found"}</Badge>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto"
-          aria-pressed={showManagedFields}
-          onClick={() => setShowManagedFields(!showManagedFields)}
-        >
-          {showManagedFields ? "Hide managed fields" : "Show managed fields"}
-        </Button>
       </header>
-      {error && <p className="border-b px-3 py-2 text-destructive">{error.message}</p>}
-      <div className="min-h-0 flex-1">
-        {yaml !== undefined ? (
-          <Suspense fallback={<EditorSkeleton />}>
-            <YamlEditor value={yaml} />
-          </Suspense>
-        ) : data?.deleted ? (
-          <Notice
-            title="Not found"
-            description={`No ${kind} named ${address.name} exists right now. This view updates if it is created.`}
-          />
-        ) : (
-          <EditorSkeleton />
+      <Tabs
+        value={selected}
+        onValueChange={(value) => {
+          const facet = resolveFacet(value as Facet, target);
+          api.updateParameters({ ...params, uri: formatResourceUri({ ...address, facet }) });
+        }}
+        className="min-h-0 flex-1 gap-0"
+      >
+        <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-3">
+          <TabsList variant="line" aria-label="Facets" activateOnFocus className="shrink-0">
+            {available.map(({ id, label, Badge: FacetBadge, accessibleName }) => (
+              <TabsTrigger
+                key={id}
+                value={id}
+                aria-label={accessibleName?.({ ...shared, showing: selected === id })}
+              >
+                {label}
+                {FacetBadge && <FacetBadge {...shared} showing={selected === id} />}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <div ref={setControls} className="flex min-w-0 items-center" />
+        </div>
+        {available.map(
+          ({ id, View }) =>
+            mounted.has(id) && (
+              <TabsContent
+                key={id}
+                value={id}
+                keepMounted
+                // Each Facet has its own focusable content, so the panel is not a second stop.
+                tabIndex={-1}
+                className="min-h-0 overflow-hidden"
+                hidden={selected !== id}
+              >
+                <View {...shared} showing={selected === id} />
+              </TabsContent>
+            ),
         )}
-      </div>
+      </Tabs>
     </div>
-  );
-}
-
-function EditorSkeleton() {
-  return (
-    <div className="flex flex-col gap-2 p-3">
-      <Skeleton className="h-3 w-40" />
-      <Skeleton className="h-3 w-64" />
-      <Skeleton className="h-3 w-52" />
-    </div>
-  );
-}
-
-function Notice({ title, description }: { title: string; description: string }) {
-  return (
-    <Empty className="h-full">
-      <EmptyHeader>
-        <EmptyTitle>{title}</EmptyTitle>
-        <EmptyDescription>{description}</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
   );
 }
