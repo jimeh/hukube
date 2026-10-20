@@ -76,8 +76,9 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   `--args --no-sandbox`.
 - **Test clusters:** the e2e k3d cluster's kubeconfig is written to
   `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
-- **envtest:** `go test` skips Engine integration tests without
-  `KUBEBUILDER_ASSETS`; use `mise run test:engine`.
+- **envtest:** without `KUBEBUILDER_ASSETS`, `go test` reports `ok` for the
+  `cluster` and `server` packages without running any of their tests, unit
+  tests included; use `mise run test:engine`.
 - **Dependency cooldown:** `bunfig.toml`, `mise.toml`, and Dependabot skip
   releases younger than 7 days. For an urgent security fix, add the package to
   Bun's `minimumReleaseAgeExcludes` or pin the exact tool version.

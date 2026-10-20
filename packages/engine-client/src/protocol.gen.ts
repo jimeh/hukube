@@ -240,12 +240,22 @@ export interface Expr {
 export const SortFieldName = "name";
 export const SortFieldNamespace = "namespace";
 export const SortFieldAge = "age";
-export type SortField = typeof SortFieldName | typeof SortFieldNamespace | typeof SortFieldAge;
+/**
+ * SortFieldColumn sorts by the cells of the Column named by Sort.Column.
+ */
+export const SortFieldColumn = "column";
+export type SortField = typeof SortFieldName | typeof SortFieldNamespace | typeof SortFieldAge | typeof SortFieldColumn;
 /**
  * Sort orders a query result.
  */
 export interface Sort {
   field: SortField;
+  /**
+   * Column names the Column to sort by when Field is SortFieldColumn. Rows
+   * without a value for it sort last in both directions, and a name the
+   * result has no Column for leaves the rows in name order.
+   */
+  column?: string;
   desc?: boolean;
 }
 /**
@@ -258,6 +268,32 @@ export interface QueryParams {
   sort: Sort;
   offset: number /* int */;
   limit: number /* int */;
+  /**
+   * Columns asks for the Columns of the one Resource Type the Query selects,
+   * and for each Row's cells. A Query that can match any other number of
+   * types is a bad request.
+   */
+  columns?: boolean;
+}
+/**
+ * Column describes one column of a Resource Type's list, as the Cluster
+ * defines it for `kubectl get`. The name and age columns are left out, because
+ * every Row already carries a name and a creation time.
+ */
+export interface Column {
+  name: string;
+  /**
+   * Type is the OpenAPI type the Cluster declares for the column's cells:
+   * string, integer, number, boolean, or date. It is a hint, not a promise:
+   * built-in types declare some columns of numbers as string. A date cell
+   * holds a duration the Cluster rendered, such as "5m", not a timestamp.
+   */
+  type: string;
+  /**
+   * Priority is 0 for the columns `kubectl get` shows by default, and higher
+   * for the ones it only shows with `-o wide`.
+   */
+  priority: number /* int */;
 }
 /**
  * QueryResult is one window of a query's matching Resources.
@@ -266,6 +302,11 @@ export interface QueryResult {
   total: number /* int */;
   offset: number /* int */;
   rows: Row[];
+  /**
+   * Columns is absent when QueryParams.Columns is unset, and until the
+   * Engine has fetched them.
+   */
+  columns?: Column[];
 }
 /**
  * Row summarizes one Resource in a query result.
@@ -276,6 +317,11 @@ export interface Row {
   namespace?: string;
   name: string;
   createdAt: string;
+  /**
+   * Cells holds one value per QueryResult.Columns entry. It is absent while
+   * the Engine has no cells for the Resource.
+   */
+  cells?: unknown[];
 }
 /**
  * FindParams subscribes to the Resources, among those Where selects, whose

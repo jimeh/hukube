@@ -15,6 +15,14 @@ spec:
     - name: v1
       served: true
       storage: true
+      # A CRD's own list columns, as `kubectl get` shows them.
+      additionalPrinterColumns:
+        - name: Size
+          type: integer
+          jsonPath: .spec.size
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
       schema:
         openAPIV3Schema:
           type: object

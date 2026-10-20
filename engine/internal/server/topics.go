@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -82,13 +83,29 @@ var topics = map[protocol.Method]topic{
 		if err != nil {
 			return nil, badRequest(err)
 		}
+		if p.Columns && len(q.Types()) != 1 {
+			return nil, badRequest(errors.New("columns need a Query that selects exactly one Resource Type"))
+		}
 		c, err := srv.cfg.Clusters.Get(p.Cluster)
 		if err != nil {
 			return nil, err
 		}
+		if !p.Columns {
+			return &liveValue{
+				compute: func() (any, error) { return query.Run(c.Index, q, nil, p.Sort, p.Offset, p.Limit), nil },
+				stop:    forward(ctx, notify, queryChanges(c.Index, q)),
+			}, nil
+		}
+		// The Cluster watches the type's Table for as long as a subscription
+		// holds it, so cells also change without the index changing.
+		table, release := c.Table(q.Types()[0])
+		stop := forward(ctx, notify, queryChanges(c.Index, q), table.Changed)
 		return &liveValue{
-			compute: func() (any, error) { return query.Run(c.Index, q, p.Sort, p.Offset, p.Limit), nil },
-			stop:    forward(ctx, notify, queryChanges(c.Index, q)),
+			compute: func() (any, error) { return query.Run(c.Index, q, table, p.Sort, p.Offset, p.Limit), nil },
+			stop: func() {
+				stop()
+				release()
+			},
 		}, nil
 	},
 
