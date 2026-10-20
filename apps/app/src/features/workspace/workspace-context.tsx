@@ -7,6 +7,8 @@ export interface OpenOptions {
   preview?: boolean;
   /** The ID of the panel this is opened from, to open beside it. */
   beside?: string;
+  /** The ID of a panel whose Pane the new tab opens in. */
+  pane?: string;
 }
 
 export interface WorkspaceValue {

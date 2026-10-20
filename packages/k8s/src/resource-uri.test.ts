@@ -60,3 +60,14 @@ describe("Resource URIs", () => {
     expect(parseResourceUri(uri)).toBeUndefined();
   });
 });
+
+it("round-trips the Related Facet in a Resource URI", () => {
+  const address = {
+    cluster: "c",
+    type: "pods",
+    namespace: "shop",
+    name: "web",
+    facet: "related" as const,
+  };
+  expect(parseResourceUri(formatResourceUri(address))).toEqual(address);
+});
