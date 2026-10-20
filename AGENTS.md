@@ -27,6 +27,10 @@ the background on a free port. It prints the URL with its token, also saved in
 change and stop it with `mise run dev:verify:stop`; do not `pkill -f`, which
 can match your own shell. It never touches the clusters in your kubeconfig.
 
+Run `dev:verify` and `e2e` sequentially. Both Hosts serve `apps/app/dist`,
+and a Vite rebuild replaces it, so rebuilding for one can give the other
+Host a 404 during a test.
+
 ## Designing features
 
 - **Plan the UI and UX.** For anything a user sees or touches, the plan says
@@ -69,13 +73,15 @@ can match your own shell. It never touches the clusters in your kubeconfig.
 ## Hazards
 
 - **Cluster mutations:** register requests that change a Cluster with
-  `handleMutation`, so `--read-only` covers them. Run preflight and dry runs
+  `handleMutation`, and streams that do with `handleMutationStream`, so
+  `--read-only` covers them. Run preflight and dry runs
   under the request context. Never run a real PATCH or DELETE under it:
   use `context.WithoutCancel` with `Timing.WriteTimeout`, so a write already
   sent finishes after a cancel or a lost socket.
 - **Protocol changes:** declare methods in `engine/internal/protocol/methods.go`
   and edit wire types in `engine/internal/protocol`, then run `mise run gen`.
-  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Rebuild and
+  It writes `protocol.gen.ts`, `methods.gen.ts`, and `hash.gen.go`. Export new
+  runtime constants from `packages/engine-client/src/index.ts` too. Rebuild and
   restart the Engine after a protocol change, or the UI shows the out-of-date
   notice. For tygo to generate TypeScript unions, enum constants must
   start with their type's name (`ClusterPhaseReady`). `tstype` tags must not
@@ -113,6 +119,37 @@ can match your own shell. It never touches the clusters in your kubeconfig.
   there. Tests replace the log opener (`openPodLogs` in `server`) or use the
   fakes in `logstream`. A `rest.Config` with a `Timeout` ends a follow at
   that duration, which is why log requests have their own client.
+- **Exec Sessions:** envtest has no kubelet, so nothing can be executed
+  there. Tests replace the executor (`newPodExecutor` in `server`) or use the
+  fakes in `execsession`. The fallback from WebSocket to SPDY must test for
+  the upgrade error with `k8s.io/streaming/pkg/httpstream`; the helper of
+  the same name in `k8s.io/apimachinery` returns false for the error
+  client-go returns. A session's process outlives a dropped connection, so
+  the Engine hangs up (ADR-0022) under the executor's own context, not the
+  socket's. The index is empty while a type is listed, so only the Cluster
+  can say a Pod is gone.
+- **Session keys:** every key decision for a focused Exec Session is in
+  `features/exec/keys.ts` (ADR-0023). `Mod+J` must stay unhandled there too.
+- **Sessions outlive their panel:** the window's store in
+  `features/exec/sessions.ts` owns each session's stream and terminal. A
+  panel that mounts again must not start, end, or reset a session. A resize
+  sent just after a session starts makes a shell print its prompt again and
+  drop what was typed, so a session starts at its terminal's real size, and
+  a change to the session Tab's header must not change its height while a
+  session is live. When a notice runs a new command, commit the new Tab params
+  and header before calling `startSession`, so it refits to the new layout.
+- **Exec commands:** keep the typed line in Tab params and settings. Split it
+  with `features/exec/command.ts` when starting a session. Never rebuild a line
+  with `shell-quote`'s `quote`: escaped literal globs do not round-trip through
+  its `parse` (ADR-0025).
+- **xterm.js:** import it only through `apps/app/src/lib/xterm.ts`, which
+  loads it on demand. It cannot be sized in a hidden or detached element. In
+  Chromium a terminal that is showing draws with WebGL (ADR-0024), so its
+  screen is a canvas: a test that reads the screen sets `localStorage`'s
+  `hukube.terminal.renderer` to `dom` first. Playwright's `deviceScaleFactor`
+  does not reach the WebGL canvas, which then draws at the wrong scale. To
+  look at a high-density screen, launch with `--force-device-scale-factor`
+  and a `null` viewport.
 - **Monaco:** `monaco-editor/editor/editor.api` has no find, clipboard, or
   icon font. `apps/app/src/lib/monaco.ts` imports them and removes the key
   bindings they add beyond find, so import Monaco from there. Its text

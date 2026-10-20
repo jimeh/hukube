@@ -262,6 +262,7 @@ func writeError(err error) error {
 type accessKey struct {
 	resource              schema.GroupVersionResource
 	namespace, name, verb string
+	subresource           string
 }
 type cachedAccess struct {
 	access protocol.Access
@@ -279,38 +280,49 @@ func (c *Cluster) Access(ctx context.Context, ref protocol.ResourceRef) (protoco
 			return protocol.Access{Reason: fmt.Sprintf("The Cluster does not support %s this Resource Type.", action)}, nil
 		}
 		key := accessKey{resource: schema.GroupVersionResource{Group: info.Group, Version: info.Version, Resource: info.Resource}, namespace: ref.Namespace, name: ref.Name, verb: verb}
-		c.accessMu.Lock()
-		cached, ok := c.access[key]
-		c.accessMu.Unlock()
-		if ok && time.Now().Before(cached.until) {
-			return cached.access, ctx.Err()
-		}
-		review, err := c.auth.SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authv1.ResourceAttributes{Namespace: ref.Namespace, Verb: verb, Group: info.Group, Version: info.Version, Resource: info.Resource, Name: ref.Name}}}, metav1.CreateOptions{})
-		if ctx.Err() != nil {
-			return protocol.Access{}, ctx.Err()
-		}
-		access := protocol.Access{Allowed: true}
-		if err == nil && !review.Status.Allowed && (review.Status.Denied || review.Status.EvaluationError == "") {
-			access = protocol.Access{Reason: fmt.Sprintf("Your Cluster credentials do not permit %s this Resource.", action)}
-			if review.Status.Reason != "" {
-				access.Reason += " " + review.Status.Reason
-			}
-		}
-		c.accessMu.Lock()
-		now := time.Now()
-		for key, cached := range c.access {
-			if !now.Before(cached.until) {
-				delete(c.access, key)
-			}
-		}
-		c.access[key] = cachedAccess{access: access, until: now.Add(c.timing.AccessCache)}
-		c.accessMu.Unlock()
-		return access, nil
+		return c.checkAccess(ctx, key, action, &authv1.ResourceAttributes{Namespace: ref.Namespace, Verb: verb, Group: info.Group, Version: info.Version, Resource: info.Resource, Name: ref.Name})
 	}
 	e, err := check("patch", "editing")
 	if err != nil {
 		return protocol.ResourceAccess{}, err
 	}
 	d, err := check("delete", "deleting")
-	return protocol.ResourceAccess{Edit: e, Delete: d}, err
+	if err != nil {
+		return protocol.ResourceAccess{}, err
+	}
+	var exec protocol.Access
+	if ref.Type == "pods" {
+		exec, err = c.ExecAccess(ctx, ref.Namespace, ref.Name)
+	}
+	return protocol.ResourceAccess{Edit: e, Delete: d, Exec: exec}, err
+}
+
+func (c *Cluster) checkAccess(ctx context.Context, key accessKey, action string, attrs *authv1.ResourceAttributes) (protocol.Access, error) {
+	c.accessMu.Lock()
+	cached, ok := c.access[key]
+	c.accessMu.Unlock()
+	if ok && time.Now().Before(cached.until) {
+		return cached.access, ctx.Err()
+	}
+	review, err := c.auth.SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: attrs}}, metav1.CreateOptions{})
+	if ctx.Err() != nil {
+		return protocol.Access{}, ctx.Err()
+	}
+	access := protocol.Access{Allowed: true}
+	if err == nil && !review.Status.Allowed && (review.Status.Denied || review.Status.EvaluationError == "") {
+		access = protocol.Access{Reason: fmt.Sprintf("Your Cluster credentials do not permit %s this Resource.", action)}
+		if review.Status.Reason != "" {
+			access.Reason += " " + review.Status.Reason
+		}
+	}
+	c.accessMu.Lock()
+	now := time.Now()
+	for key, cached := range c.access {
+		if !now.Before(cached.until) {
+			delete(c.access, key)
+		}
+	}
+	c.access[key] = cachedAccess{access: access, until: now.Add(c.timing.AccessCache)}
+	c.accessMu.Unlock()
+	return access, nil
 }

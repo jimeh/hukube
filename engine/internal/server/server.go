@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -28,7 +29,7 @@ import (
 type Config struct {
 	// Token must be presented by every client on the control socket.
 	Token string
-	// ReadOnly refuses requests that change a Cluster.
+	// ReadOnly refuses requests and streams that change a Cluster.
 	ReadOnly bool
 	// AllowedOrigins lists exact browser origins, such as a dev server or the
 	// desktop Host's app origin, allowed in addition to same-origin pages.
@@ -48,7 +49,11 @@ type Config struct {
 
 // Server handles HTTP requests and control socket sessions.
 type Server struct {
-	cfg Config
+	cfg          Config
+	execMu       sync.Mutex
+	execs        map[*runningExec]struct{}
+	execSockets  map[chan struct{}]struct{}
+	shuttingDown bool
 }
 
 // New returns a Server. It panics if cfg has no Token, because the Engine must

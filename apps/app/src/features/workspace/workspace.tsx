@@ -1,5 +1,5 @@
 import { formatResourceUri, type TypeKey } from "@hukube/k8s";
-import { useSubscription } from "@hukube/engine-client/react";
+import { useEngine, useSubscription } from "@hukube/engine-client/react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import {
   DockviewReact,
@@ -16,6 +16,15 @@ import { newResourceUri } from "@/features/resource/facet-rules.ts";
 import { ResourcePanel } from "@/features/resource/resource-panel.tsx";
 import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
 import { useTheme } from "@/lib/theme.ts";
+import { execTitle } from "../exec/command.ts";
+import { ExecPanel } from "../exec/exec-panel.tsx";
+import {
+  disposeClusterSessions,
+  disposeSession,
+  sessionId,
+  startSession,
+  type ExecSessionParams,
+} from "../exec/sessions.ts";
 
 import { openPanel, pinPanel, type ListPanelParams, type ResourcePanelParams } from "./dock.ts";
 import { PanelTab } from "./panel-tab.tsx";
@@ -24,6 +33,9 @@ import { useLayoutPersistence } from "./use-layout-persistence.ts";
 import { WorkspaceContext, type WorkspaceValue } from "./workspace-context.tsx";
 
 const components = {
+  exec: ({ api, params }: IDockviewPanelProps<ExecSessionParams>) => (
+    <ExecPanel api={api} params={params} />
+  ),
   list: ({ api, params }: IDockviewPanelProps<ListPanelParams>) => (
     <ResourceListPanel
       panelId={api.id}
@@ -43,6 +55,7 @@ const tabComponents = { tab: PanelTab };
  * window is not out of date.
  */
 export function Workspace({ cluster, active }: { cluster: string; active: boolean }) {
+  const engine = useEngine();
   const { data: status } = useSubscription("cluster.status", { cluster });
   const { data: typeList } = useSubscription("cluster.types", { cluster });
   const types = useMemo(() => new Map((typeList ?? []).map((t) => [t.key, t])), [typeList]);
@@ -55,6 +68,14 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   );
 
   useLayoutPersistence(api, cluster);
+  useEffect(() => () => disposeClusterSessions(cluster), [cluster]);
+  useEffect(() => {
+    if (!api) return;
+    const d = api.onDidRemovePanel((event) => {
+      if (event.id.startsWith("exec:")) disposeSession(event.id.slice(5));
+    });
+    return () => d.dispose();
+  }, [api]);
 
   useEffect(() => {
     if (!api) return;
@@ -70,6 +91,19 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
       active,
       ...(status ? { status } : {}),
       types,
+      openExecSession: (target, options) => {
+        if (!api) return;
+        const params = { ...target, sessionId: sessionId() };
+        void startSession(engine, cluster, params);
+        openPanel<ExecSessionParams>(api, {
+          id: `exec:${params.sessionId}`,
+          component: "exec",
+          title: execTitle(params),
+          params,
+          preview: false,
+          ...(options?.pane ? { pane: options.pane } : {}),
+        });
+      },
       ...(activeListType ? { activeListType } : {}),
       openList: (type, options) => {
         if (!api) return;
@@ -107,7 +141,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         });
       },
     }),
-    [api, cluster, active, status, types, activeListType],
+    [api, engine, cluster, active, status, types, activeListType],
   );
 
   return (

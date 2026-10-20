@@ -118,7 +118,7 @@ func TestReadOnlyRequests(t *testing.T) {
 	if err := json.Unmarshal(raw, &access); err != nil {
 		t.Fatal(err)
 	}
-	if access.Edit.Allowed || access.Delete.Allowed || !strings.Contains(access.Edit.Reason, "read-only") || !strings.Contains(access.Delete.Reason, "read-only") {
+	if access.Edit.Allowed || access.Delete.Allowed || access.Exec.Allowed || !strings.Contains(access.Edit.Reason, "read-only") || !strings.Contains(access.Delete.Reason, "read-only") || access.Exec.Reason != execReadOnlyReason {
 		t.Fatalf("read-only access = %+v", access)
 	}
 }

@@ -1,9 +1,13 @@
 import type { EngineStream, StreamData, StreamListener, StreamState } from "./client.ts";
 import type { ConnectionOptions, SocketLike } from "./connection.ts";
+import { ExecCodec } from "./exec-codec.ts";
 import { LogCodec } from "./log-codec.ts";
 import type { StreamMethod, Streams } from "./methods.gen.ts";
 import {
   Hash,
+  ExecInputFrame,
+  ExecInputWindow,
+  StreamChannelStdin,
   StreamSubprotocol,
   TokenSubprotocolPrefix,
   type StreamEnd,
@@ -16,6 +20,7 @@ import {
  * hold what opening the stream again needs.
  */
 export interface StreamCodec<M extends StreamMethod> {
+  readonly resumable: boolean;
   /** Called before each socket opens. */
   beginSocket(params: Streams[M]["params"]): void;
   /** The params to open a socket with, including what resumes the stream. */
@@ -26,7 +31,17 @@ export interface StreamCodec<M extends StreamMethod> {
 
 const codecs: { [M in StreamMethod]: () => StreamCodec<M> } = {
   "resource.logs": () => new LogCodec(),
+  "pod.exec": () => new ExecCodec(),
 };
+
+/**
+ * The most input a stream holds for a process that is not reading it. A write
+ * that would add to waiting input beyond this is refused and reported, so a
+ * container that never reads cannot take the window's memory one paste at a
+ * time. A write is always accepted when nothing is waiting, however large:
+ * one paste is the user's to make.
+ */
+export const streamInputPendingLimit = 8 << 20;
 
 /** The Worker defers consumption until its main-thread listener returns. */
 export type StreamDelivery<M extends StreamMethod> = (
@@ -106,6 +121,12 @@ class SocketStream implements EngineStream {
   #heldBack = false;
   #ended = false;
   #closed = false;
+  #opened = false;
+  #input: { data: Uint8Array; offset: number }[] = [];
+  #inputPending = 0;
+  #inputSent = 0;
+  #inputAcked = 0;
+  #size?: { cols: number; rows: number };
   constructor(
     readonly pool: StreamPool,
     readonly method: StreamMethod,
@@ -125,6 +146,7 @@ class SocketStream implements EngineStream {
     if (!this.#heldBack) this.resume();
   }
   pause(): void {
+    if (!this.#codec.resumable) return;
     if (!this.#started) this.#heldBack = true;
     if (this.#closed || this.#ended || this.#paused) return;
     this.#paused = true;
@@ -145,11 +167,48 @@ class SocketStream implements EngineStream {
     this.pool.release(this);
     this.pool.forget(this);
   }
+  write(data: Uint8Array): void {
+    if (this.#codec.resumable || this.#closed || this.#ended || !data.byteLength) return;
+    if (this.#inputPending > 0 && this.#inputPending + data.byteLength > streamInputPendingLimit) {
+      this.listener.inputDropped?.(data.byteLength);
+      return;
+    }
+    this.#input.push({ data, offset: 0 });
+    this.#inputPending += data.byteLength;
+    this.#flushInput();
+  }
+  resize(cols: number, rows: number): void {
+    if (this.#codec.resumable || this.#closed || this.#ended) return;
+    if (![cols, rows].every((size) => Number.isInteger(size) && size > 0 && size <= 65535)) return;
+    this.#size = { cols, rows };
+    if (this.#opened) this.#socket?.send(JSON.stringify({ type: "resize", cols, rows }));
+  }
+  #flushInput(): void {
+    if (!this.#opened || !this.#socket || this.#closed || this.#ended) return;
+    while (this.#input.length && this.#inputSent - this.#inputAcked < ExecInputWindow) {
+      const pending = this.#input[0]!;
+      const size = Math.min(
+        ExecInputFrame,
+        ExecInputWindow - (this.#inputSent - this.#inputAcked),
+        pending.data.byteLength - pending.offset,
+      );
+      const frame = new Uint8Array(size + 1);
+      frame[0] = StreamChannelStdin;
+      frame.set(pending.data.subarray(pending.offset, pending.offset + size), 1);
+      this.#socket.send(frame);
+      this.#inputSent += size;
+      this.#inputPending -= size;
+      pending.offset += size;
+      if (pending.offset === pending.data.byteLength) this.#input.shift();
+    }
+  }
   #disconnect(): void {
     clearTimeout(this.#timer);
     clearTimeout(this.#helloTimer);
     const socket = this.#socket;
     this.#socket = undefined;
+    this.#input = [];
+    this.#inputPending = 0;
     socket?.close();
   }
   #end(end: StreamEnd): void {
@@ -174,6 +233,7 @@ class SocketStream implements EngineStream {
     let verified = false;
     let received = 0;
     let consumed = 0;
+    const pendingConsumption: { total: number; done: boolean }[] = [];
     const mismatch = () => {
       this.#end({
         reason: "error",
@@ -217,6 +277,9 @@ class SocketStream implements EngineStream {
             params: this.#codec.params(this.params),
           }),
         );
+        this.#opened = true;
+        if (this.#size) socket.send(JSON.stringify({ type: "resize", ...this.#size }));
+        this.#flushInput();
         this.state("open");
         return;
       }
@@ -229,17 +292,35 @@ class SocketStream implements EngineStream {
           return;
         }
         received += data.byteLength;
-        const total = received;
+        const entry = { total: received, done: false };
+        pendingConsumption.push(entry);
         const acknowledge = () => {
-          if (this.#socket !== socket || total <= consumed) return;
-          consumed = total;
-          socket.send(JSON.stringify({ type: "ack", bytes: consumed }));
+          if (this.#socket !== socket || entry.done) return;
+          entry.done = true;
+          while (pendingConsumption[0]?.done) consumed = pendingConsumption.shift()!.total;
+          if (consumed) socket.send(JSON.stringify({ type: "ack", bytes: consumed }));
         };
         if (this.delivery) this.delivery(lines, data.byteLength, acknowledge);
         else {
-          this.listener.data(lines);
-          acknowledge();
+          try {
+            const result = this.listener.data(lines);
+            if (result) void Promise.resolve(result).then(acknowledge, acknowledge);
+            else acknowledge();
+          } catch {
+            acknowledge();
+          }
         }
+      } else if (message?.type === "ack" && !this.#codec.resumable) {
+        const bytes = message.bytes ?? 0;
+        if (!Number.isSafeInteger(bytes) || bytes < this.#inputAcked || bytes > this.#inputSent) {
+          this.#end({
+            reason: "error",
+            error: { code: "internal", message: "Invalid input acknowledgement" },
+          });
+          return;
+        }
+        this.#inputAcked = bytes;
+        this.#flushInput();
       } else if (message?.type === "event")
         this.listener.event(this.#codec.event(message.event as Streams[StreamMethod]["event"]));
       else if (message?.type === "gap" && message.gap) this.listener.gap(message.gap);
@@ -249,6 +330,14 @@ class SocketStream implements EngineStream {
       if (this.#socket !== socket) return;
       this.#socket = undefined;
       clearTimeout(this.#helloTimer);
+      if (this.#opened && !this.#codec.resumable) {
+        this.#ended = true;
+        this.#input = [];
+        this.#inputPending = 0;
+        this.pool.release(this);
+        this.state("lost");
+        return;
+      }
       this.state("reconnecting");
       const delays = options.retryDelaysMs ?? [250, 500, 1000, 2000, 5000];
       const delay = delays[Math.min(this.#attempt++, delays.length - 1)] ?? 1000;
