@@ -114,3 +114,19 @@ metadata:
   labels: { app: web }
 spec:
   size: 3
+---
+apiVersion: v1
+kind: Event
+metadata:
+  name: web-available
+  namespace: sample-shop
+involvedObject:
+  apiVersion: apps/v1
+  kind: Deployment
+  name: web
+  namespace: sample-shop
+reason: Available
+message: Deployment web has two ready replicas.
+type: Normal
+source:
+  component: sample
