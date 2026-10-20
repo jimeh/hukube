@@ -31,6 +31,7 @@ export function persistLayout(
   target: LayoutTarget,
   key: string,
   saveDelayMs = defaultSaveDelayMs,
+  onRestored?: () => void,
 ): () => void {
   let restored = false;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -52,13 +53,13 @@ export function persistLayout(
         restored = true;
         watch.close();
         const stored = setting.value as StoredLayout | null;
-        if (stored?.version !== 1) return;
         try {
-          target.fromJSON(stored.dockview);
+          if (stored?.version === 1) target.fromJSON(stored.dockview);
         } catch (err) {
           console.warn("Discarding unreadable Workspace layout", err);
           target.clear();
         }
+        onRestored?.();
       },
     },
   );

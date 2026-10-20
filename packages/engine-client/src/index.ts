@@ -9,6 +9,8 @@ export {
   ExecInputWindow,
   ExecReasonNoShell,
   ExecReasonCommandNotFound,
+  ExecReasonSessionGone,
+  ExecReasonTooManySessions,
   ExecReasonConnectionLost,
   ExecReasonEngineStopped,
 } from "./protocol.gen.ts";

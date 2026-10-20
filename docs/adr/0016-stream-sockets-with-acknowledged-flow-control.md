@@ -43,10 +43,10 @@ TCP backpressure cannot be the mechanism:
 ## A stream ends, a subscription does not
 
 The Engine's last message on a stream is `end`, with a reason: `complete`,
-`deleted`, `stopped`, or `error` with an error detail. It then closes the
-socket. A socket that closes without `end` was lost, and the client opens the
-stream again if the stream can resume. An `end` is final, and the client does
-not reconnect.
+`deleted`, `stopped`, `detached`, or `error` with an error detail. It then
+closes the socket. A socket that closes without `end` was lost, and the
+client opens the stream again. An `end` is final, and the client does not
+reconnect.
 
 The control protocol gets no such message. A subscription is a view of
 current state: it answers again whenever the state changes, a Resource that
@@ -66,46 +66,33 @@ its Facet is hidden, so in practice the cap counts what is on screen.
 ## How an Exec Session uses it
 
 This section was a sketch until Exec Sessions were built (ADR-0021,
-ADR-0022). The socket did not need to change shape, but two of the sketch's
-expectations did not hold against a real session, and it now records what was
-built. `docs/plans/exec-sessions.md` has the measurements.
+ADR-0022), and was revised again when the Engine came to own a session
+(ADR-0026). `docs/plans/exec-sessions.md` and `docs/plans/exec-resume.md`
+have the measurements.
 
 - **Input** is binary frames from the client on channel 0. Output is channel
   1, because a session has a TTY and the container writes one stream.
 - **Resize** is a client text message. An **exit status** is a field of `end`
   with the reason `complete`. There is no message to close stdin: closing it
   does not end a shell on a TTY.
-- **Output is held back, but not for long.** The Engine stops reading the
-  container's output while the client's window is full, which is what a slow
-  terminal does to a process. The sketch expected that to last as long as it
-  had to. It cannot. client-go's WebSocket executor reads the connection and
-  writes output on one goroutine, and ends the session when that goroutine
-  has read no heartbeat for 61 seconds. A heartbeat arrives behind the output
-  the Cluster had already sent. Measured against the test cluster, a session
-  whose output was taken at 115 KiB a second ended at 61 seconds, having read
-  6.8 MiB without reaching a heartbeat. One taken at 131 KiB a second
-  carried on.
+- **Output is never held back.** This section first had the Engine stop
+  reading a container's output while the client's window was full, as a slow
+  terminal does to a process, and then for at most 3 seconds, by a rule with
+  a known limit. Both are gone (ADR-0026). client-go's WebSocket executor
+  reads the connection and writes output on one goroutine, and ends the
+  session when that goroutine has read no heartbeat for 61 seconds, so
+  anything that makes the writer wait puts the session at risk. Measured
+  against the test cluster, a session whose output was taken at 115 KiB a
+  second ended at 61 seconds.
 
-  So the Engine holds one invariant: **it makes a process wait only while
-  every byte it has queued for the client, and the client has not
-  acknowledged, was queued less than 3 seconds ago.** Once the oldest such
-  byte is older, the Engine does not wait. It queues the new output and drops
-  the oldest queued output, keeping the newest 64 KiB, and leaves a gap where
-  the rest was. Nothing renews the wait: a silent client, a trickle of
-  acknowledgements, and acknowledgements in batches all age the oldest byte
-  the same way. A process is made to wait only for a client that takes a
-  window (1 MiB) in under 3 seconds, which is 341 KiB a second, 2.6 times
-  the rate that was measured to be enough.
-
-  Known limit: the Engine keeps the times of sent output in a list of at
-  most 256 entries, and a frame sent beyond that takes an older frame's
-  time. So when more than 256 frames are unacknowledged at once, the Engine
-  can stop waiting before any byte is 3 seconds old, and a client that
-  takes more than 341 KiB a second can lose output. Measured against the
-  test cluster, where a window of output is 300 to 1,600 frames, a client
-  taking 400 KiB a second lost most of a flood of short lines, and one
-  taking 500 lost none. The error is only in that direction: a process is
-  never made to wait for longer than the invariant allows.
+  The Engine now reads everything a session's process writes into a ring of
+  its most recent output, and the writer never waits. A session's stream
+  sends from the ring at its window's position while the acknowledged window
+  has room. A window that falls behind the ring's start is not sent a `gap`:
+  it is told to clear its terminal and how much was skipped, and is sent the
+  ring. The stream's queue, with its 4 MiB and its `gap`, is what a Log
+  Stream uses. A session's output is in it only as the frame about to be
+  sent.
 
 - **Input is acknowledged too.** The sketch left input to TCP, with the
   Engine as the reader. But the client's acknowledgements of output arrive on
@@ -115,8 +102,12 @@ built. `docs/plans/exec-sessions.md` has the measurements.
   most 256 KiB beyond that. The rest of a large paste waits in the Worker. A
   write that would add to more than 8 MiB already waiting is refused and
   reported.
-- **A session's socket is not reopened.** A socket that closes without `end`
-  ends the session (ADR-0021).
+- **A session's socket is reopened, and attaches.** A socket that closes
+  without `end` detaches its window from the session, which carries on in
+  the Engine. The client opens the stream again with the position its
+  terminal has read to, and is sent what it missed (ADR-0026). The first
+  message on a session's stream is an event that says where the output that
+  follows belongs.
 - **A stream can be a mutation.** A stream method that changes a Cluster is
   registered so that a read-only Engine refuses it (ADR-0020).
 - **Data reaches the main thread** as transferred buffers, which a terminal
@@ -134,15 +125,18 @@ built. `docs/plans/exec-sessions.md` has the measurements.
   Engine would keep sending between the moment the client falls behind and
   the moment its message arrives, so memory in the browser has no bound.
 - **Keep a stream alive in the Engine across a lost socket** and replay from
-  a sequence number. An Engine restart loses that state anyway, so the client
-  must be able to resume from what it holds. One mechanism covers both.
+  a sequence number. For a Log Stream an Engine restart loses that state
+  anyway, and the client can resume from what it holds, so one mechanism
+  covers both. An Exec Session has a process that nothing can resume from
+  the client's side, so the Engine does keep it (ADR-0026).
 - **An `end` or `done` on the control protocol too.** See above: nothing
   there ends.
 
 ## Consequences
 
 - A slow UI costs the Engine at most the queue, and the browser at most the
-  window, per stream. What the user loses is shown as a gap.
+  window, per stream. What the user loses is shown as a gap. For an Exec
+  Session the Engine's cost is the session's ring, whoever is attached.
 - The stream abstraction in `packages/engine-client` exposes states, events,
   data, gaps, and an end. It exposes nothing of WebSockets, so another
   transport could replace them.

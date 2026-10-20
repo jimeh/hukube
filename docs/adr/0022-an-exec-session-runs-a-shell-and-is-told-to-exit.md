@@ -35,16 +35,18 @@ against k3s with containerd, a shell and its children were still running
 after the client's connection was cancelled, and closing stdin did nothing
 either, because the runtime keeps the TTY open.
 
-So when a session's client goes away, or the Engine shuts down, the Engine
-writes end-of-transmission to the session's stdin, waits a second for the
-process to exit, and then drops the connection. An idle shell exits. A
+So when a session is to end, the Engine hangs up: it writes
+end-of-transmission to the session's stdin, waits a second for the
+process to exit, and then drops the connection. A session is to end when its
+Tab closes, when no window has been attached to it for 10 minutes, or when
+the Engine shuts down (ADR-0026). A socket that closes is none of these. An
+idle shell exits. A
 command still running in the foreground keeps running, and the shell exits
 when that command does. The Kubernetes Dashboard ends its sessions the same
 way.
 
-hukube says this where it matters: in the prompt before a live session is
-closed, and when a session is lost with its connection. It does not claim a
-process is gone.
+hukube says this where it matters: in the prompt before a live session's
+Tab is closed or the desktop app quits. It does not claim a process is gone.
 
 ## Why a session ended
 

@@ -3,12 +3,8 @@ import type { Setting, StreamListener } from "@hukube/engine-client";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ExecPanel } from "./exec-panel.tsx";
-import {
-  disposeSession,
-  useExecSessions,
-  type ExecState,
-  type ExecSessionParams,
-} from "./sessions.ts";
+import { endSession, useExecSessions, type ExecState, type ExecSessionParams } from "./sessions.ts";
+import { readSessionTabs, rememberSessionTab } from "./window-tabs.ts";
 import { fakeTerminal } from "./test-terminal.ts";
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
 
@@ -29,6 +25,8 @@ const mocked = vi.hoisted(() => ({
 }));
 vi.mock("@hukube/engine-client/react", () => {
   const engine = {
+    onStateChange: () => () => {},
+    getState: () => "open",
     request: (method: string, params: unknown) => {
       if (method === "settings.put") {
         mocked.saved.push(params);
@@ -114,8 +112,9 @@ function view(state?: ExecState, initialParams: ExecSessionParams = params) {
 }
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   Object.assign(api, { isVisible: true, isActive: true });
-  disposeSession("id");
+  endSession("id");
   close.mockClear();
   openResource.mockClear();
   mocked.deleted = false;
@@ -131,19 +130,19 @@ afterEach(() => {
   mocked.object["metadata"] = { uid: "uid" };
 });
 
-it("restores a Tab without starting anything until Start a new session is pressed", async () => {
-  view();
-  expect(screen.getByText("No session is running here")).toBeDefined();
+it("shows gone with no stream until Start a new session is pressed", async () => {
+  view({ phase: "gone" });
+  expect(screen.getByText("This session is gone")).toBeDefined();
   expect(
     screen.getByText(
-      "An Exec Session belongs to the window that started it, and does not survive a reload.",
+      "The Engine no longer has it. It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached.",
     ),
   ).toBeDefined();
-  expect(screen.getByText("Not running")).toBeDefined();
+  expect(screen.getByText("Gone")).toBeDefined();
   expect(mocked.streams).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Start a new session" }));
   expect(await screen.findByText("Starting…")).toBeDefined();
-  expect(mocked.streams).toHaveLength(1);
+  await vi.waitFor(() => expect(mocked.streams).toHaveLength(1));
 });
 it("shows the waiting notice and cancels by closing the Tab", () => {
   view({ phase: "waiting" });
@@ -176,10 +175,6 @@ it.each<[ExecState, string]>([
       error: { code: "unavailable", reason: "EngineStopped", message: "The Engine shut down." },
     },
     "The Engine shut down, which ended the session. Its shell was told to exit.",
-  ],
-  [
-    { phase: "ended", reason: "lost" },
-    "The session lost its connection to the Engine. A command that was running may still be running in the container.",
   ],
 ])("shows the end state %j", (state, copy) => {
   view(state);
@@ -370,6 +365,163 @@ it("moves focus to Start again when a focused session ends", () => {
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start again" }));
 });
 
+const change = (state: ExecState) =>
+  act(() =>
+    useExecSessions.setState((store) => ({
+      entries: new Map(store.entries).set("id", { ...store.entries.get("id")!, state }),
+    })),
+  );
+
+it("shows attaching, reconnecting, and elsewhere without replacing the terminal area", () => {
+  const rendered = view({ phase: "attaching" });
+  expect(screen.getByText("Attaching…")).toBeDefined();
+  const area = mocked.terminal!.terminal.element.parentElement!;
+  const body = area.parentElement!;
+  expect(area.classList.contains("isolate")).toBe(true);
+  change({ phase: "live" });
+  const badge = screen.getByText("Live");
+  const slot = [...badge.classList].find((name) => name.startsWith("w-["));
+  change({ phase: "reconnecting" });
+  expect(
+    [...screen.getByText("Reconnecting…").classList].find((name) => name.startsWith("w-[")),
+  ).toBe(slot);
+  expect(
+    screen
+      .getByText(
+        "Reconnecting to the Engine. The session keeps running, and the Engine keeps its recent output.",
+      )
+      .classList.contains("absolute"),
+  ).toBe(true);
+  const reconnecting = screen.getByText(
+    "Reconnecting to the Engine. The session keeps running, and the Engine keeps its recent output.",
+  );
+  expect(reconnecting.classList.contains("bg-background")).toBe(true);
+  expect(reconnecting.classList.contains("border-t")).toBe(true);
+  expect(mocked.terminal!.terminal.element.parentElement).toBe(area);
+  change({ phase: "elsewhere" });
+  expect(screen.getByText("Not attached")).toBeDefined();
+  expect(
+    screen.getByText(
+      "An Exec Session shows in one window at a time. Using it here detaches the other window.",
+    ),
+  ).toBeDefined();
+  expect(
+    screen.getByRole("button", { name: "Use it here" }).closest(".absolute")?.parentElement,
+  ).toBe(body);
+  expect(mocked.terminal!.terminal.element.parentElement).toBe(area);
+  const card = screen.getByRole("button", { name: "Use it here" }).closest(".bg-popover")!;
+  expect(card).not.toBeNull();
+  expect(card.classList.contains("border")).toBe(true);
+  expect(card.classList.contains("rounded-md")).toBe(true);
+  expect(card.classList.contains("w-full")).toBe(true);
+  expect(card.classList.contains("min-w-0")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Use it here" }));
+  expect(screen.getByText("Attaching…")).toBeDefined();
+  rendered.unmount();
+});
+
+it("keeps output for gone sessions and offers a new session with its disabled reason", async () => {
+  mocked.connection = "reconnecting";
+  view({ phase: "live" });
+  act(() =>
+    useExecSessions.setState((store) => ({
+      entries: new Map(store.entries).set("id", {
+        ...store.entries.get("id")!,
+        hasOutput: true,
+        state: { phase: "gone" },
+      }),
+    })),
+  );
+  expect(
+    screen.getByText(
+      "This session is gone. It ended, the Engine restarted, or it was told to exit after 10 minutes with no window attached.",
+    ),
+  ).toBeDefined();
+  expect(mocked.terminal!.terminal.element.isConnected).toBe(true);
+  const button = screen.getByRole("button", { name: "Start a new session" });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.focus(button);
+  expect(await screen.findByText("Reconnecting to the Engine")).toBeDefined();
+});
+
+it("shows the too-many-sessions notice and retry button", () => {
+  view({
+    phase: "failed",
+    reason: "error",
+    error: { code: "unavailable", reason: "TooManySessions", message: "full" },
+  });
+  expect(screen.getByText("Not started")).toBeDefined();
+  expect(screen.getByText("Too many Exec Sessions")).toBeDefined();
+  expect(
+    screen.getByText("The Engine runs at most 64 at a time. End one and try again."),
+  ).toBeDefined();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+});
+
+it.each(["gone", "elsewhere"] as const)(
+  "moves focus from a focused terminal when it becomes %s",
+  (phase) => {
+    view({ phase: "live" });
+    const field = document.createElement("textarea");
+    mocked.terminal!.terminal.element.append(field);
+    field.focus();
+    act(() =>
+      useExecSessions.setState((store) => ({
+        entries: new Map(store.entries).set("id", {
+          ...store.entries.get("id")!,
+          state: { phase },
+        }),
+      })),
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: phase === "gone" ? "Start a new session" : "Use it here",
+      }),
+    );
+  },
+);
+
+it("shows skipped output over the terminal and Dismiss hides it through later output", async () => {
+  view({ phase: "gone" });
+  fireEvent.click(screen.getByRole("button", { name: "Start a new session" }));
+  await vi.waitFor(() => expect(mocked.streams).toHaveLength(1));
+  act(() =>
+    mocked.streams[0]!.event({ offset: 4096, cols: 80, rows: 24, reset: true, skipped: 2048 }),
+  );
+  const message =
+    "2.0 KiB of earlier output is not shown. The Engine keeps only a session's most recent output.";
+  const notice = await screen.findByText(message);
+  const overlay = notice.closest("output")!;
+  expect(overlay.classList.contains("absolute")).toBe(true);
+  expect(overlay.classList.contains("bg-background")).toBe(true);
+  expect(overlay.classList.contains("border-t")).toBe(true);
+  const area = mocked.terminal!.terminal.element.parentElement;
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await act(async () => {
+    await mocked.streams[0]!.data(new TextEncoder().encode("more"));
+  });
+  expect(screen.queryByText(message)).toBeNull();
+  act(() =>
+    mocked.streams[0]!.event({ offset: 8192, cols: 80, rows: 24, reset: true, skipped: 4096 }),
+  );
+  expect(
+    await screen.findByText("4.0 KiB of output was skipped because this window was not keeping up"),
+  ).toBeDefined();
+  act(() => mocked.terminal!.type());
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  expect(mocked.terminal!.terminal.element.parentElement).toBe(area);
+});
+
+it("forgets and disposes a waiting start when Cancel closes its Tab", () => {
+  rememberSessionTab("c", { params, title: "waiting" });
+  view({ phase: "waiting" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(close).toHaveBeenCalledOnce();
+  expect(useExecSessions.getState().entries.has("id")).toBe(false);
+  expect(mocked.terminal!.terminal.dispose).toHaveBeenCalledOnce();
+  expect(readSessionTabs("c")).toEqual([]);
+});
+
 it("runs a command from the no-shell notice in the same Tab after committing its header", async () => {
   view({
     phase: "failed",
@@ -397,6 +549,17 @@ it("runs a command from the no-shell notice in the same Tab after committing its
     key: "exec/commands",
     value: { images: [{ image: "busybox", command: "/pause -v" }], recent: ["/pause -v"] },
   });
+  // A reload that restores the Tab from this window's record runs the new command's title.
+  expect(readSessionTabs("c")).toEqual([
+    { params: { ...params, commandLine: "/pause -v", preview: false }, title: "pause: app in web" },
+  ]);
+});
+it("keeps a Tab's command line in the window's record, and drops a Tab whose line cannot be kept", () => {
+  rememberSessionTab("c", { params: { ...params, commandLine: "sh -l" }, title: "sh: app in web" });
+  expect(readSessionTabs("c")[0]?.params.commandLine).toBe("sh -l");
+  // Restored without its line, the Tab would start the default shell instead.
+  rememberSessionTab("c", { params: { ...params, commandLine: "x".repeat(4097) }, title: "x" });
+  expect(readSessionTabs("c")).toEqual([]);
 });
 it("prefills a missing chosen command and names its program", () => {
   const commandLine = "/usr/bin/python3 -q";
@@ -415,8 +578,9 @@ it("prefills a missing chosen command and names its program", () => {
   expect(screen.getByText("python3 missing")).toBeDefined();
 });
 
-it("records reuse of a command when a restored Tab explicitly starts again", async () => {
-  view(undefined, { ...params, commandLine: "sh -l" });
+it("records reuse of a command when a gone session's Tab explicitly starts again", async () => {
+  // A restored Tab attaches by itself (ADR-0026); one whose session is gone offers to start.
+  view({ phase: "gone" }, { ...params, commandLine: "sh -l" });
   fireEvent.click(screen.getByRole("button", { name: "Start a new session" }));
   await vi.waitFor(() => expect(mocked.streams).toHaveLength(1));
   expect(mocked.saved).toContainEqual({

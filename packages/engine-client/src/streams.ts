@@ -20,7 +20,8 @@ import {
  * hold what opening the stream again needs.
  */
 export interface StreamCodec<M extends StreamMethod> {
-  readonly resumable: boolean;
+  readonly input: boolean;
+  readonly pausable: boolean;
   /** Called before each socket opens. */
   beginSocket(params: Streams[M]["params"]): void;
   /** The params to open a socket with, including what resumes the stream. */
@@ -122,6 +123,7 @@ class SocketStream implements EngineStream {
   #ended = false;
   #closed = false;
   #opened = false;
+  #attached = false;
   #input: { data: Uint8Array; offset: number }[] = [];
   #inputPending = 0;
   #inputSent = 0;
@@ -146,7 +148,7 @@ class SocketStream implements EngineStream {
     if (!this.#heldBack) this.resume();
   }
   pause(): void {
-    if (!this.#codec.resumable) return;
+    if (!this.#codec.pausable) return;
     if (!this.#started) this.#heldBack = true;
     if (this.#closed || this.#ended || this.#paused) return;
     this.#paused = true;
@@ -168,7 +170,10 @@ class SocketStream implements EngineStream {
     this.pool.forget(this);
   }
   write(data: Uint8Array): void {
-    if (this.#codec.resumable || this.#closed || this.#ended || !data.byteLength) return;
+    if (!this.#codec.input || !data.byteLength) return;
+    // Input for a stream that is not attached is dropped without a report:
+    // its terminal already shows that it takes none.
+    if (this.#closed || this.#ended || !this.#opened || !this.#attached) return;
     if (this.#inputPending > 0 && this.#inputPending + data.byteLength > streamInputPendingLimit) {
       this.listener.inputDropped?.(data.byteLength);
       return;
@@ -178,7 +183,7 @@ class SocketStream implements EngineStream {
     this.#flushInput();
   }
   resize(cols: number, rows: number): void {
-    if (this.#codec.resumable || this.#closed || this.#ended) return;
+    if (!this.#codec.input || this.#closed || this.#ended) return;
     if (![cols, rows].every((size) => Number.isInteger(size) && size > 0 && size <= 65535)) return;
     this.#size = { cols, rows };
     if (this.#opened) this.#socket?.send(JSON.stringify({ type: "resize", cols, rows }));
@@ -202,18 +207,25 @@ class SocketStream implements EngineStream {
       if (pending.offset === pending.data.byteLength) this.#input.shift();
     }
   }
-  #disconnect(): void {
+  #disconnect(code?: number): void {
     clearTimeout(this.#timer);
     clearTimeout(this.#helloTimer);
     const socket = this.#socket;
     this.#socket = undefined;
+    this.#dropInput();
+    socket?.close(code);
+  }
+  #dropInput(): void {
+    const dropped = this.#inputPending;
     this.#input = [];
-    this.#inputPending = 0;
-    socket?.close();
+    this.#inputPending = this.#inputSent = this.#inputAcked = 0;
+    this.#opened = this.#attached = false;
+    if (dropped) this.listener.inputDropped?.(dropped);
   }
   #end(end: StreamEnd): void {
     this.#ended = true;
-    this.#disconnect();
+    // A normal close confirms receipt of end to the Engine.
+    this.#disconnect(1000);
     this.pool.release(this);
     this.state("ended");
     this.listener.end(end);
@@ -274,11 +286,12 @@ class SocketStream implements EngineStream {
           JSON.stringify({
             type: "open",
             method: this.method,
-            params: this.#codec.params(this.params),
+            params: this.#codec.params(
+              this.#codec.input && this.#size ? { ...this.params, ...this.#size } : this.params,
+            ),
           }),
         );
         this.#opened = true;
-        if (this.#size) socket.send(JSON.stringify({ type: "resize", ...this.#size }));
         this.#flushInput();
         this.state("open");
         return;
@@ -310,7 +323,7 @@ class SocketStream implements EngineStream {
             acknowledge();
           }
         }
-      } else if (message?.type === "ack" && !this.#codec.resumable) {
+      } else if (message?.type === "ack" && this.#codec.input) {
         const bytes = message.bytes ?? 0;
         if (!Number.isSafeInteger(bytes) || bytes < this.#inputAcked || bytes > this.#inputSent) {
           this.#end({
@@ -321,23 +334,17 @@ class SocketStream implements EngineStream {
         }
         this.#inputAcked = bytes;
         this.#flushInput();
-      } else if (message?.type === "event")
+      } else if (message?.type === "event") {
+        if (this.#codec.input) this.#attached = true;
         this.listener.event(this.#codec.event(message.event as Streams[StreamMethod]["event"]));
-      else if (message?.type === "gap" && message.gap) this.listener.gap(message.gap);
+      } else if (message?.type === "gap" && message.gap) this.listener.gap(message.gap);
       else if (message?.type === "end" && message.end) this.#end(message.end);
     };
     socket.onclose = () => {
       if (this.#socket !== socket) return;
       this.#socket = undefined;
       clearTimeout(this.#helloTimer);
-      if (this.#opened && !this.#codec.resumable) {
-        this.#ended = true;
-        this.#input = [];
-        this.#inputPending = 0;
-        this.pool.release(this);
-        this.state("lost");
-        return;
-      }
+      this.#dropInput();
       this.state("reconnecting");
       const delays = options.retryDelaysMs ?? [250, 500, 1000, 2000, 5000];
       const delay = delays[Math.min(this.#attempt++, delays.length - 1)] ?? 1000;

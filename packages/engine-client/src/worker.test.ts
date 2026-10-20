@@ -210,6 +210,9 @@ it("tells the main thread when input was refused", async () => {
       pod: "p",
       uid: "u",
       container: "main",
+      session: "s",
+      window: "w",
+      start: true,
       cols: 80,
       rows: 24,
     },
@@ -220,6 +223,11 @@ it("tells the main thread when input was refused", async () => {
   socket.onmessage?.(
     new MessageEvent("message", {
       data: JSON.stringify({ type: "hello", hello: { protocol: Hash } }),
+    }),
+  );
+  socket.onmessage?.(
+    new MessageEvent("message", {
+      data: JSON.stringify({ type: "event", event: { offset: 0, cols: 80, rows: 24 } }),
     }),
   );
   const mebibyte = 1 << 20;
@@ -249,6 +257,9 @@ it("relays input and resize and transfers Exec bytes without copying the output 
       pod: "p",
       uid: "u",
       container: "main",
+      session: "s",
+      window: "w",
+      start: true,
       cols: 80,
       rows: 24,
     },
@@ -258,6 +269,7 @@ it("relays input and resize and transfers Exec bytes without copying the output 
   const receive = (data: unknown) => socket.onmessage?.(new MessageEvent("message", { data }));
   socket.onopen?.(new Event("open"));
   receive(JSON.stringify({ type: "hello", hello: { protocol: Hash } }));
+  receive(JSON.stringify({ type: "event", event: { offset: 0, cols: 80, rows: 24 } }));
   send({ kind: "stream-write", id: 10, data: new Uint8Array([255, 0, 42]) });
   send({ kind: "stream-resize", id: 10, cols: 132, rows: 43 });
   expect(socket.binary).toEqual([new Uint8Array([0, 255, 0, 42])]);

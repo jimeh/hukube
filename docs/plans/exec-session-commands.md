@@ -233,7 +233,9 @@ web-7d9f`. The program comes first because a narrow Tab truncates its
 - The header gains a "Command" part after the container, in the same style,
   with the line as the user typed it. A default session shows none.
 - The line is part of the Tab's params, as `commandLine`, so Start again,
-  Try again, and a Tab restored after a reload run the same command. It is
+  Try again, and a Tab restored after a reload run the same command. Since
+  ADR-0026 a restored Tab attaches to the process the line started instead,
+  and the line runs again only when the user starts the session again. It is
   split into words when the session starts. A line that no longer splits,
   such as one edited in the settings file, fails to start with the reason.
 - The header must not change height while a session is live (`AGENTS.md`,

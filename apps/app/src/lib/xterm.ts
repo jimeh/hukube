@@ -79,6 +79,9 @@ export function createExecTerminal(): ExecTerminal {
   terminal.loadAddon(search);
   let opened = false;
   let ended = false;
+  let attached = false;
+  let held = true;
+  let sized = false;
   let visible = false;
   let wantedFocus = false;
   let findColor = "#000000";
@@ -209,7 +212,7 @@ export function createExecTerminal(): ExecTerminal {
       .catch(() => {});
   };
   terminal.attachCustomKeyEventHandler((event) => {
-    const action = execKey(mac, event, terminal.hasSelection(), !ended);
+    const action = execKey(mac, event, terminal.hasSelection(), !ended && attached && !held);
     if (action === "terminal") return true;
     // The browser's paste event supplies clipboard text, including on plain HTTP.
     if (action === "leave" || action === "paste" || action === "goToResource") return false;
@@ -225,6 +228,32 @@ export function createExecTerminal(): ExecTerminal {
   return {
     element,
     ready,
+    get inputHeld() {
+      return held || ended || !attached;
+    },
+    get sized() {
+      return sized;
+    },
+    size: (cols, rows) => {
+      if (sized) return;
+      terminal.resize(cols, rows);
+      sized = true;
+    },
+    holdInput: (value) => {
+      held = value;
+      terminal.options.disableStdin = held || ended || !attached;
+    },
+    setAttached: (value) => {
+      attached = value;
+      terminal.options.disableStdin = held || ended || !attached;
+      element.style.transition = value ? "opacity 150ms" : "opacity 150ms 400ms";
+      element.style.opacity = ended || !attached ? "0.6" : "1";
+    },
+    restoreOptions: () => {
+      terminal.options.cursorBlink = !ended;
+      terminal.options.cursorInactiveStyle = ended ? "none" : "outline";
+      theme();
+    },
     get cols() {
       return terminal.cols;
     },
@@ -252,10 +281,10 @@ export function createExecTerminal(): ExecTerminal {
       if (value === ended) return;
       terminal.write(value ? "\x1b[?25l" : "\x1b[?25h");
       ended = value;
-      terminal.options.disableStdin = value;
+      terminal.options.disableStdin = value || held || !attached;
       terminal.options.cursorBlink = !value;
       terminal.options.cursorInactiveStyle = value ? "none" : "outline";
-      element.style.opacity = value ? "0.6" : "1";
+      element.style.opacity = value || !attached ? "0.6" : "1";
       theme();
     },
     focus,
@@ -294,6 +323,7 @@ export function createExecTerminal(): ExecTerminal {
           const size = fit.proposeDimensions();
           if (!size || size.cols < 2 || size.rows < 2) return;
           fit.fit();
+          sized = true;
           fitted?.();
         } catch {
           // A scrollback resize can throw; the next resize tries again.
@@ -349,6 +379,10 @@ export function createExecTerminal(): ExecTerminal {
       const d = terminal.onData(fn);
       return () => d.dispose();
     },
+    onUserInput: (fn) => {
+      const d = terminal.onKey(fn);
+      return () => d.dispose();
+    },
     onBinary: (fn) => {
       const d = terminal.onBinary(fn);
       return () => d.dispose();
@@ -360,7 +394,7 @@ export function createExecTerminal(): ExecTerminal {
     hasSelection: () => terminal.hasSelection(),
     copy,
     paste: (text) => {
-      if (!ended) terminal.paste(text);
+      if (!ended && attached && !held) terminal.paste(text);
     },
     selectAll: () => terminal.selectAll(),
     clear: () => terminal.clear(),

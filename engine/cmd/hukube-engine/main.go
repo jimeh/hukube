@@ -35,17 +35,19 @@ func (l *stringList) String() string     { return strings.Join(*l, ",") }
 func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 
 type options struct {
-	listen           string
-	token            string
-	allowOrigins     stringList
-	allowHosts       stringList
-	web              bool
-	readOnly         bool
-	uiDir            string
-	kubeconfig       string
-	dataDir          string
-	exitOnStdinClose bool
-	logLevel         string
+	listen                string
+	token                 string
+	allowOrigins          stringList
+	allowHosts            stringList
+	web                   bool
+	readOnly              bool
+	uiDir                 string
+	kubeconfig            string
+	dataDir               string
+	exitOnStdinClose      bool
+	execBuffer            int
+	execUnattachedTimeout time.Duration
+	logLevel              string
 }
 
 func main() {
@@ -66,6 +68,8 @@ func registerOptions(o *options) {
 	flag.StringVar(&o.kubeconfig, "kubeconfig", "", "kubeconfig `path` (default $KUBECONFIG or ~/.kube/config)")
 	flag.StringVar(&o.dataDir, "data-dir", "", "`directory` for stored settings (default: user config dir)")
 	flag.BoolVar(&o.exitOnStdinClose, "exit-on-stdin-close", false, "exit when stdin closes, so the Engine dies with its parent")
+	flag.IntVar(&o.execBuffer, "exec-buffer", 262144, "bytes of recent output kept per Exec Session (16384 to 4194304)")
+	flag.DurationVar(&o.execUnattachedTimeout, "exec-unattached-timeout", 10*time.Minute, "time before hanging up an unattached Exec Session (at least 10s)")
 	flag.StringVar(&o.logLevel, "log-level", "info", "log `level`: debug, info, warn, or error")
 }
 
@@ -74,6 +78,9 @@ func run() error {
 	registerOptions(&o)
 	flag.Parse()
 
+	if err := validateExecOptions(o); err != nil {
+		return err
+	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(o.logLevel)); err != nil {
 		return fmt.Errorf("invalid --log-level: %w", err)
@@ -123,15 +130,17 @@ func run() error {
 	}
 	source := kubeconfig.NewFileSource(o.kubeconfig)
 	srv := server.New(server.Config{
-		Token:          o.token,
-		ReadOnly:       o.readOnly,
-		AllowedOrigins: o.allowOrigins,
-		AllowedHosts:   o.allowHosts,
-		UIDir:          uiDir,
-		Source:         source,
-		Clusters:       cluster.NewManager(ctx, source, log),
-		Settings:       store,
-		Log:            log,
+		Token:                 o.token,
+		ExecBuffer:            o.execBuffer,
+		ExecUnattachedTimeout: o.execUnattachedTimeout,
+		ReadOnly:              o.readOnly,
+		AllowedOrigins:        o.allowOrigins,
+		AllowedHosts:          o.allowHosts,
+		UIDir:                 uiDir,
+		Source:                source,
+		Clusters:              cluster.NewManager(ctx, source, log),
+		Settings:              store,
+		Log:                   log,
 	})
 	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
@@ -180,4 +189,14 @@ func randomToken() (string, error) {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func validateExecOptions(o options) error {
+	if o.execBuffer < 16384 || o.execBuffer > 4194304 {
+		return errors.New("--exec-buffer must be between 16384 and 4194304 bytes")
+	}
+	if o.execUnattachedTimeout < 10*time.Second {
+		return errors.New("--exec-unattached-timeout must be at least 10s")
+	}
+	return nil
 }

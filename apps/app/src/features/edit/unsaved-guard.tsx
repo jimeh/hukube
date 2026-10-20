@@ -8,9 +8,17 @@ import {
 } from "@hukube/ui/components/alert-dialog";
 import { Button } from "@hukube/ui/components/button";
 import { useUnsavedEdits } from "./unsaved-edits.ts";
-import { isRunning, useExecSessions } from "../exec/sessions.ts";
+import { holdsSession, useExecSessions } from "../exec/sessions.ts";
+
+import { useHost } from "@/lib/host.tsx";
 
 export function UnsavedGuard() {
+  const host = useHost();
+  const edits = useUnsavedEdits((state) => state.entries.size);
+  const sessions = useExecSessions(
+    (state) => [...state.entries.values()].filter(holdsSession).length,
+  );
+  useEffect(() => host.reportOpenWork({ edits, sessions }), [host, edits, sessions]);
   const guard = useUnsavedEdits((state) => state.guard);
   const dismiss = useUnsavedEdits((state) => state.dismiss);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -18,7 +26,10 @@ export function UnsavedGuard() {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (
         !useUnsavedEdits.getState().entries.size &&
-        ![...useExecSessions.getState().entries.values()].some(isRunning)
+        !(
+          host.kind === "desktop" &&
+          [...useExecSessions.getState().entries.values()].some(holdsSession)
+        )
       )
         return;
       event.preventDefault();
@@ -26,7 +37,7 @@ export function UnsavedGuard() {
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, []);
+  }, [host]);
   return (
     <AlertDialog
       open={!!guard}

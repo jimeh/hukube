@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -34,14 +35,17 @@ type fakeCluster struct {
 	pod      *corev1.Pod
 	err      error
 	access   protocol.Access
-	built    int
+	built    atomic.Int32
 	reads    atomic.Int32
 }
 
 func (c *fakeCluster) ExecAccess(context.Context, string, string) (protocol.Access, error) {
 	return c.access, nil
 }
-func (c *fakeCluster) Exec(protocol.ExecParams) (Executor, error) { c.built++; return c.executor, nil }
+func (c *fakeCluster) Exec(protocol.ExecParams) (Executor, error) {
+	c.built.Add(1)
+	return c.executor, nil
+}
 func (c *fakeCluster) ReadPod(context.Context, string, string) (*corev1.Pod, error) {
 	c.reads.Add(1)
 	return c.pod, c.err
@@ -213,8 +217,8 @@ func TestExecPreflight(t *testing.T) {
 				want = protocol.StreamEndReasonError
 			}
 			end := Run(context.Background(), c, idx, testParams, NewInput(nil), NewSizes(), testOutput{io.Discard}, testTiming)
-			if c.built != 0 || end.Reason != want {
-				t.Fatalf("preflight built=%d end=%+v", c.built, end)
+			if c.built.Load() != 0 || end.Reason != want {
+				t.Fatalf("preflight built=%d end=%+v", c.built.Load(), end)
 			}
 			if kind == "denied" && (end.Error == nil || end.Error.Code != protocol.ErrorCodeForbidden || end.Error.Message != "review says no") {
 				t.Fatalf("denial=%+v", end)
@@ -371,62 +375,30 @@ func TestExecInputWindow(t *testing.T) {
 	}
 }
 
-// blockedOutput holds every write until its context ends, as a full window does.
-type blockedOutput struct{ entered chan struct{} }
-
-func (o blockedOutput) WriteContext(ctx context.Context, _ []byte) (int, error) {
-	select {
-	case o.entered <- struct{}{}:
-	default:
-	}
-	<-ctx.Done()
-	return 0, ctx.Err()
-}
-
-func TestExecHangupDiscardsOutput(t *testing.T) {
-	entered := make(chan struct{}, 1)
-	// A process that cannot write its output never reads its input.
-	c, idx := fixture(func(_ context.Context, o remotecommand.StreamOptions) error {
-		if _, err := o.Stdout.Write([]byte("output")); err != nil {
-			return err
-		}
-		data := make([]byte, 1)
-		if _, err := o.Stdin.Read(data); err != nil {
-			return err
-		}
-		if data[0] != 4 {
-			return errors.New("expected end-of-transmission")
-		}
-		_, err := o.Stdout.Write([]byte("exit"))
-		return err
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// The executor must return by itself, well before the hang-up gives up.
-	timing := testTiming
-	timing.Hangup = time.Minute
-	done := make(chan protocol.StreamEnd, 1)
-	go func() {
-		done <- Run(ctx, c, idx, testParams, NewInput(nil), NewSizes(), blockedOutput{entered}, timing)
-	}()
-	receive(t, entered)
-	cancel()
-	if end := receive(t, done); end.Reason != protocol.StreamEndReasonComplete || end.ExitCode == nil || *end.ExitCode != 0 {
-		t.Fatalf("end=%+v", end)
-	}
-}
-
 func TestInputDuringHangupIsDropped(t *testing.T) {
-	input := NewInput(nil)
-	defer input.Close()
-	input.Hangup()
-	if !input.Write([]byte("late")) {
-		t.Fatal("input during a hang-up was refused")
-	}
-	data := make([]byte, 8)
-	if n, err := input.Read(data); err != nil || !bytes.Equal(data[:n], []byte{4}) {
-		t.Fatalf("read=%v error=%v", data[:n], err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		input := NewInput(nil)
+		defer input.Close()
+		input.Hangup()
+		input.Attach(nil)
+		if !input.Write([]byte("late")) {
+			t.Fatal("input during a hang-up was refused")
+		}
+		type readResult struct {
+			data []byte
+			err  error
+		}
+		read := make(chan readResult, 1)
+		go func() { data := make([]byte, 8); n, err := input.Read(data); read <- readResult{data[:n], err} }()
+		select {
+		case got := <-read:
+			if got.err != nil || !bytes.Equal(got.data, []byte{4}) {
+				t.Fatalf("read=%v error=%v", got.data, got.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("read=0 after hang-up deadline")
+		}
+	})
 }
 
 func TestExecChosenCommandNotFound(t *testing.T) {

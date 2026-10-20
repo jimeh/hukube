@@ -1,5 +1,9 @@
 # An Exec Session is a Tab of its own, and one that ended stays ended
 
+Superseded in part by ADR-0026: the Engine now owns a session, and a window
+attaches to it again after a reload or a lost connection. The two sections
+that said otherwise are marked below. The rest stands.
+
 An Exec Session opens in its own Tab, not as a Facet of its Pod. A Facet is a
 way of looking at a Resource, and it is there for as long as the Resource is.
 A session is something a user starts and that ends. A Pod can have several
@@ -9,38 +13,35 @@ The Tab opens in the Pane of the Pod's tab and is an ordinary Tab from then
 on. Its header names the Cluster, Namespace, Pod, and container in the
 Cluster's color, because what is typed into it takes effect there.
 
-## A session is owned by the window, not by a component
+## A session's view is owned by the window, not by a component
 
-The window keeps its sessions in one store: each session's stream, its
-terminal, and the element the terminal renders into. The Tab's component
-attaches that element and reads the session's state. A session is ended only
-by its stream ending, its Tab closing, its Workspace closing, or the window
-unloading. A component that mounts again, as it may when a Tab moves between
-Panes, ends nothing and starts nothing.
+The Engine owns the session (ADR-0026). The window keeps what shows it in
+one store: each session's stream, its terminal, and the element the terminal
+renders into. The Tab's component attaches that element and reads the
+session's state. A component that mounts again, as it may when a Tab moves
+between Panes, ends nothing and starts nothing.
 
-Closing a Tab, a Cluster tab, or the window with a live session asks first,
-through the dialog that guards unsaved edits (ADR-0019).
+Closing a session's Tab ends the session, and asks first, through the dialog
+that guards unsaved edits (ADR-0019). Closing its Workspace or its window
+only detaches.
 
-## A session cannot be resumed
+## A Tab attaches to its session, and never starts one
 
-A session's socket that closes without an `end` is the end of the session.
-The client does not open the stream again as it does for a Log Stream
-(ADR-0016), because that would start a second shell and present it as the
-first.
+This section said a session cannot be resumed. ADR-0026 replaces it.
 
-A stored Workspace layout can hold a session's Tab. After a reload, or in a
-second window on the same Workspace, that Tab has no session. It says so and
-offers to start a new one. It never starts one by itself, and it does not
-claim the session ended, which it cannot know.
+A stored Workspace layout holds a session's Tab. After a reload the Tab
+attaches to the session with its ID. If the Engine no longer has it, the Tab
+says so and offers to start a new one. It never starts one by itself.
 
 An ended session keeps its scrollback, dimmed and without a cursor, with the
 reason it ended. Starting again in the same Tab clears it.
 
 ## Sessions share the stream cap
 
-A session holds one of the window's 8 stream sockets from the moment it
-starts until it ends, visible or not. A Log Stream gives its socket up while
-hidden and takes one again when shown, which a session cannot do. A stream
+A session holds one of the window's 8 stream sockets for as long as the
+window is attached to it, visible or not. A Log Stream gives its socket up
+while hidden and takes one again when shown. A session does not, because a
+session with no window attached is ended after a time. A stream
 opened beyond the cap waits and says so.
 
 ## Considered Options

@@ -14,6 +14,8 @@ import type { DockviewPanelApi } from "dockview-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
+import { createBrowserHost } from "@hukube/host";
+import { HostProvider } from "@/lib/host.tsx";
 import { UnsavedGuard } from "../edit/unsaved-guard.tsx";
 import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { ResourcePanel } from "./resource-panel.tsx";
@@ -583,7 +585,9 @@ it("pins Edit, preserves unsaved YAML across Facets and live changes, and guards
         api={api}
         params={{ uri: formatResourceUri({ ...address, facet }), preview: true }}
       />
-      <UnsavedGuard />
+      <HostProvider host={createBrowserHost()}>
+        <UnsavedGuard />
+      </HostProvider>
     </WorkspaceContext>
   );
   const object = {

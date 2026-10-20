@@ -1,0 +1,356 @@
+{
+  "safe": "gP//////////////Awb8/x8wFCSS////////////SUASkP8kIH4S8CcB8ZOA/yQgfhLwPwmInwT8JwHxk4A/CUgC8n8SEH8S8CQg/iTgSUD8ScCTgPiTgCcB8ScBTwLiTwKeBMSfBDwJiD8JOAlIJgFJQP6fBMT/ScCfBMT/ScBPAuL/JOAnAfF/EvB/EpBMApJPApKA/D8JiP+TgD8JiP+TgJ8ExP9JwE8C4v8k4P8kIAnIOf7///////////+TgJz8////////////JwE5+f///////////08CcvL///////////+fBOTk////////////PwnISfz///////////8nATlJ/v//////////JwFJQP4/CYg/CXgSEH8S8CQg/iTgSUD8ScCTgPiTgCcB8ScBTwLiTwKeBMSfBJwEJJOAJCB//j+J/////////////yQgJ8n///////////8kIAnI/ycB8ScBTwLiTwKeBMSfBDwJiD8JeBIQfxLwJCD+JOBJQPxJwJOA+JOAk4BkEpAE5M//nyT///////////+TgCQg/58ExJ8EPAmIPwl4EhB/EvAkIP4k4ElA/EnAk4D4k4AnAfEnAU8C4k8CTgKSSUASkP8nAfF/EvAnAfF/EvCTgPg/CfhJQPyfBPyfBCSTgOSTgCQg/08C4v8k4E8C4v8k4CcB8X8S8JOA+D8J+D8JSAJy/v8k+f//////////nwQkAflPAuInAX8SED8J+E8C4icB/5OA+EnAfxIQPwn4k4AkIP8nAfEnAU8C4k8CngTEnwQ8CYg/CXgSEH8S8CQg/iTgSUD8ScCTgPiTgJOAZBKQBOT/SUD8nwT8SUD8nwT8JCD+TwJ+EhD/JwH/JwHJJCD5JCAJyP+TgPg/CfiTgPg/CfhJQPyfBPwkIP5PAv5PApKAnOP///////////8/CcjJ////////////fxKQk/////////////8kICf/////////////SUBO/v///////////5OAnMT///////////9/EpCT5P//////////fxKQBOT/k4D4k4AnAfEnAU8C4k8CngTEnwQ8CYg/CXgSEH8S8CQg/iTgSUD8ScBJQDIJSALy5/9Pkv///////////0lAEpD/JCB+EvAnAfGTgP8kIH4S8D8JiJ8E/CcB8ZOAPwlIAvJ/EhB/EvAkIP4k4ElA/EnAk4D4k4AnAfEnAU8C4k8CngTEnwQ8CYg/CTgJSCYBSUD+nwTE/0nAnwTE/0nATwLi/yTgJwHxfxLwfxKQTAKSTwKSgPw/CYj/k4A/CYj/k4CfBMT/ScBPAuL/JOD/JCAJyDn+////////////k4Cc/P///////////ycBOfn///////////9PAnLy////////////nwTk5P///////////z8JyEn8////////////JwE5Sf7//////////ycBSUD+PwmIPwl4EhB/EvAkIP4k4ElA/EnAk4D4k4AnAfEnAU8C4k8CngTEnwScBCSTgCQg/08C4v8k4E8C4v8k4CcB8X8S8JOA+D8J+D8JSCYByScBSUD+nwTE/0nAnwTE/0nATwLi/yTgJwHxfxLwfxKQBOT8/0ny//////////8/CUgC8p8ExE8C/iQgfhLwnwTETwL+JwHxk4D/JCB+EvAnAUlA/k8C4k8CngTEnwQ8CYg/CXgSEH8S8CQg/iTgSUD8ScCTgPiTgCcB8ScBJwHJJCAJyP+TgPg/CfiTgPg/CfhJQPyfBPwkIP5PAv5PApJJQPJJQBKQ/ycB8X8S8CcB8X8S8JOA+D8J+ElA/J8E/J8EJAE5x////////////38SkJP/////////////JCAn/////////////0lATv7///////////+TgJz8////////////JwE5if////////////8kICfJ////////////JCAJyH8SED8J+JOA+EnAfxIQPwn4nwTETwL+k4D4ScCfBCQB+T8JiD8JeBIQfxLwJCD+JOBJQPxJwJOA+JOAJwHxJwFPAuJPAp4ExJ8EnAQkk4AkIP9PAuL/JOBPAuL/JOAnAfF/EvCTgPg/Cfg/CUgmAcknAUlA/p8ExP9JwJ8ExP9JwE8C4v8k4CcB8X8S8H8SkATkHP////////////9JQE7+////////////k4Cc/P///////////ycBOfn///////////9PAnLy////////////nwTkJP7///////////+TgJxQ4CBIwP8f8A8=",
+  "samples": [
+    {
+      "at": 8,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 9,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 10,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 11,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 12,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 13,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 14,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 15,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 16,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 17,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 18,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 19,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 20,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 21,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 22,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 23,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 24,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 25,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 26,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 27,
+      "restore": "\u001b[?25h\u001b[?2004h"
+    },
+    {
+      "at": 1995,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "at": 4986,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "at": 5983,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "at": 8974,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "at": 12962,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "at": 13620,
+      "restore": "\u001b[?12l\u001b[?25h"
+    }
+  ],
+  "attachments": [
+    {
+      "mark": "painted",
+      "at": 3248,
+      "ring": 512,
+      "cut": 2736,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "painted",
+      "at": 3248,
+      "ring": 2048,
+      "cut": 1200,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "painted",
+      "at": 3248,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 3248,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "painted",
+      "at": 3248,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3248,
+      "ring": 512,
+      "cut": 2736,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3248,
+      "ring": 2048,
+      "cut": 1200,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3248,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3248,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "before-same",
+      "at": 3248,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 4291,
+      "ring": 512,
+      "cut": 3781,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-same",
+      "at": 4291,
+      "ring": 2048,
+      "cut": 2244,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-same",
+      "at": 4291,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 4291,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-same",
+      "at": 4291,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6743,
+      "ring": 512,
+      "cut": 6231,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6743,
+      "ring": 2048,
+      "cut": 4695,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6743,
+      "ring": 8192,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6743,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-shrink",
+      "at": 6743,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9708,
+      "ring": 512,
+      "cut": 9198,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9708,
+      "ring": 2048,
+      "cut": 7662,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9708,
+      "ring": 8192,
+      "cut": 1516,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9708,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-restore",
+      "at": 9708,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 13552,
+      "ring": 512,
+      "cut": 13040,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 13552,
+      "ring": 2048,
+      "cut": 11505,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 13552,
+      "ring": 8192,
+      "cut": 5360,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 13552,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "after-nudge",
+      "at": 13552,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 13599,
+      "ring": 512,
+      "cut": 13087,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "left",
+      "at": 13599,
+      "ring": 2048,
+      "cut": 11551,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "left",
+      "at": 13599,
+      "ring": 8192,
+      "cut": 5408,
+      "restore": "\u001b[?1h\u001b[?25l\u001b[?66h"
+    },
+    {
+      "mark": "left",
+      "at": 13599,
+      "ring": 65536,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    },
+    {
+      "mark": "left",
+      "at": 13599,
+      "ring": 13620,
+      "cut": 0,
+      "restore": "\u001b[?25h"
+    }
+  ]
+}

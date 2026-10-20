@@ -82,7 +82,7 @@ func execPod(t *testing.T) *corev1.Pod {
 	return createLogPod(t, cs, logNamespace(t, cs), "exec")
 }
 func execParams(p *corev1.Pod) protocol.ExecParams {
-	return protocol.ExecParams{Cluster: testenv.ClusterID, Namespace: p.Namespace, Pod: p.Name, UID: string(p.UID), Container: "main", Cols: 80, Rows: 24}
+	return protocol.ExecParams{Cluster: testenv.ClusterID, Namespace: p.Namespace, Pod: p.Name, UID: string(p.UID), Container: "main", Session: "session", Window: "window", Start: true, Cols: 80, Rows: 24}
 }
 func openExec(c *streamClient, p protocol.ExecParams) {
 	c.send(protocol.StreamClientMessage{Type: protocol.StreamClientTypeOpen, Method: protocol.StreamPodExec.Name, Params: params(p)})
@@ -160,21 +160,21 @@ func TestPodExecWireInputAndResize(t *testing.T) {
 	}
 }
 func TestPodExecInputWindowDoesNotBlockAcks(t *testing.T) {
-	started, progress := make(chan struct{}), make(chan struct{})
+	next := make(chan struct{})
 	replaceExecutor(t, func(*cluster.Cluster, protocol.ExecParams) (execsession.Executor, error) {
 		return sessionExecutor(func(ctx context.Context, o remotecommand.StreamOptions) error {
-			close(started)
-			// Fill the output window exactly, including each channel byte.
 			chunk := make([]byte, (32<<10)-1)
 			for range 32 {
 				if _, err := o.Stdout.Write(chunk); err != nil {
 					return err
 				}
+				select {
+				case <-next:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
-			if _, err := o.Stdout.Write([]byte("after ack")); err != nil {
-				return err
-			}
-			close(progress)
+			_, _ = o.Stdout.Write([]byte("after ack"))
 			<-ctx.Done()
 			return ctx.Err()
 		}), nil
@@ -183,22 +183,33 @@ func TestPodExecInputWindowDoesNotBlockAcks(t *testing.T) {
 	_, ts := execServer(t, p)
 	c := dialStream(t, ts)
 	openExec(c, execParams(p))
-	awaitSignal(t, started)
 	for range 32 {
-		_, frame := c.read(false)
-		if len(frame) != 32<<10 {
-			t.Fatalf("output frame=%d", len(frame))
+		for {
+			_, frame := c.read(false)
+			if len(frame) == 0 {
+				continue
+			}
+			if len(frame) != 32<<10 {
+				t.Fatalf("output frame=%d", len(frame))
+			}
+			break
 		}
+		next <- struct{}{}
 	}
 	for range protocol.ExecInputWindow / protocol.ExecInputFrame {
 		sendInput(c, make([]byte, protocol.ExecInputFrame))
 	}
 	c.send(protocol.StreamClientMessage{Type: protocol.StreamClientTypeAck, Bytes: c.consumed})
-	_, frame := c.read(true)
-	if string(frame[1:]) != "after ack" {
-		t.Fatalf("output acknowledgement was blocked: %q", frame)
+	for {
+		_, frame := c.read(true)
+		if len(frame) == 0 {
+			continue
+		}
+		if string(frame[1:]) != "after ack" {
+			t.Fatalf("output acknowledgement was blocked: %q", frame)
+		}
+		break
 	}
-	awaitSignal(t, progress)
 	sendInput(c, []byte{42})
 	end := awaitLogEnd(c)
 	if end.Error == nil || end.Error.Code != protocol.ErrorCodeBadRequest {
@@ -244,6 +255,9 @@ func TestPodExecHangupAndShutdown(t *testing.T) {
 				}
 			} else {
 				_ = c.conn.CloseNow()
+				if err := srv.execs.End(protocol.ExecEndParams{Cluster: testenv.ClusterID, Session: "session"}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			select {
 			case b := <-hangup:
