@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,15 @@ func dial(t *testing.T, ts *httptest.Server, subprotocols []string, origin strin
 		return nil, status, err
 	}
 	t.Cleanup(func() { _ = conn.CloseNow() })
+	if conn.Subprotocol() == protocol.Subprotocol {
+		var hello protocol.ServerMessage
+		if err := wsjson.Read(ctx, conn, &hello); err != nil {
+			t.Fatal(err)
+		}
+		if hello.ID != 0 || hello.Type != protocol.ServerTypeHello || hello.Hello == nil || hello.Hello.Protocol != protocol.Hash {
+			t.Fatalf("first message = %+v, want hello with hash %q", hello, protocol.Hash)
+		}
+	}
 	return &client{t: t, conn: conn}, status, nil
 }
 
@@ -183,13 +193,25 @@ func TestUnknownMethodsReturnBadRequest(t *testing.T) {
 	}
 }
 
+func TestClustersListIgnoresParams(t *testing.T) {
+	c := mustDial(t, newTestServer(t))
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeRequest, Method: protocol.RequestClustersList.Name,
+		Params: json.RawMessage(`[]`)})
+	c.await(1, func(m protocol.ServerMessage, _ json.RawMessage) bool {
+		if m.Type != protocol.ServerTypeResult {
+			t.Fatalf("clusters.list response = %+v, want result", m)
+		}
+		return true
+	})
+}
+
 // Settings written by one client reach every client watching them, which is
 // how windows share Workspace state (ADR-0009).
 func TestSettingsAreSharedAcrossClients(t *testing.T) {
 	ts := newTestServer(t)
 	watcher, writer := mustDial(t, ts), mustDial(t, ts)
 
-	watcher.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodSettingsWatch,
+	watcher.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicSettingsWatch.Name,
 		Params: params(protocol.SettingKey{Key: "workspace/a"})})
 	watcher.await(1, func(m protocol.ServerMessage, data json.RawMessage) bool {
 		var s protocol.Setting
@@ -197,9 +219,17 @@ func TestSettingsAreSharedAcrossClients(t *testing.T) {
 		return m.Type == protocol.ServerTypeData && string(s.Value) == "null"
 	})
 
-	writer.send(protocol.ClientMessage{ID: 7, Type: protocol.ClientTypeRequest, Method: protocol.MethodSettingsPut,
+	writer.send(protocol.ClientMessage{ID: 7, Type: protocol.ClientTypeRequest, Method: protocol.RequestSettingsPut.Name,
 		Params: params(protocol.Setting{Key: "workspace/a", Value: json.RawMessage(`{"panes":2}`)})})
-	writer.await(7, func(m protocol.ServerMessage, _ json.RawMessage) bool { return m.Type == protocol.ServerTypeResult })
+	writer.await(7, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		if m.Type != protocol.ServerTypeResult {
+			return false
+		}
+		if len(data) != 0 {
+			t.Fatalf("settings.put result has data: %s", data)
+		}
+		return true
+	})
 
 	watcher.await(1, func(m protocol.ServerMessage, data json.RawMessage) bool {
 		var s protocol.Setting
@@ -226,7 +256,7 @@ func TestQuerySubscriptionFollowsTheCluster(t *testing.T) {
 		}},
 		Limit: 1,
 	}
-	c.send(protocol.ClientMessage{ID: 3, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+	c.send(protocol.ClientMessage{ID: 3, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicResourcesQuery.Name, Params: params(query)})
 
 	result := func(data json.RawMessage) protocol.QueryResult {
 		var r protocol.QueryResult
@@ -303,11 +333,11 @@ func TestQuerySubscriptionServesColumns(t *testing.T) {
 
 	// Wait until both are indexed, so that only the Table is still missing
 	// when the next subscription starts.
-	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicResourcesQuery.Name, Params: params(query)})
 	awaitRows(1, "[] alpha=[] beta=[]")
 
 	query.Columns = true
-	c.send(protocol.ClientMessage{ID: 2, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+	c.send(protocol.ClientMessage{ID: 2, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicResourcesQuery.Name, Params: params(query)})
 	awaitRows(2, "[{Name:Data Type:string Priority:0}] alpha=[1] beta=[0]")
 
 	alpha.Data["b"] = "2"
@@ -327,7 +357,7 @@ func TestQuerySubscriptionServesColumns(t *testing.T) {
 		4: nil,
 	} {
 		query.Where = where
-		c.send(protocol.ClientMessage{ID: id, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourcesQuery, Params: params(query)})
+		c.send(protocol.ClientMessage{ID: id, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicResourcesQuery.Name, Params: params(query)})
 		c.await(id, func(m protocol.ServerMessage, _ json.RawMessage) bool {
 			return m.Type == protocol.ServerTypeError && m.Error.Code == protocol.ErrorCodeBadRequest
 		})
@@ -363,11 +393,82 @@ func TestOutboxKeepsOnlyLatestSubscriptionData(t *testing.T) {
 func TestResourceGetWaitsForDiscovery(t *testing.T) {
 	c := mustDial(t, newTestServer(t))
 	ref := protocol.ResourceRef{Cluster: testenv.ClusterID, Type: "namespaces", Name: "default"}
-	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.MethodResourceGet, Params: params(ref)})
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicResourceGet.Name, Params: params(ref)})
 	c.await(1, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		if m.Type != protocol.ServerTypeData {
+			return false
+		}
 		var d protocol.ResourceData
-		_ = json.Unmarshal(data, &d)
-		return m.Type == protocol.ServerTypeData && len(d.Object) > 0
+		if err := json.Unmarshal(data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.Object) == 0 {
+			t.Fatalf("resource.get sent data before a Manifest: %s", data)
+		}
+		return true
+	})
+}
+
+func TestUIServesIndexWithoutValidators(t *testing.T) {
+	dir := t.TempDir()
+	const index = "<html>current UI</html>"
+	const asset = "current asset"
+	for name, body := range map[string]string{"index.html": index, "asset.js": asset} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := New(Config{Token: testToken, UIDir: dir, Log: slog.New(slog.DiscardHandler)}).Handler()
+	for _, route := range []string{"/", "/c/some-cluster"} {
+		for header, value := range map[string]string{
+			"If-Modified-Since": time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat),
+			"If-None-Match":     "*",
+		} {
+			t.Run(route+"/"+header, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "http://localhost"+route, nil)
+				req.Header.Set(header, value)
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status %d, want 200", rec.Code)
+				}
+				if got := rec.Body.String(); got != index {
+					t.Errorf("body %q, want %q", got, index)
+				}
+				if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+					t.Errorf("Cache-Control %q, want no-cache", got)
+				}
+				for _, validator := range []string{"Last-Modified", "ETag"} {
+					if got := rec.Header().Get(validator); got != "" {
+						t.Errorf("%s %q, want no validator", validator, got)
+					}
+				}
+			})
+		}
+	}
+	t.Run("asset", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "http://localhost/asset.js", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200", rec.Code)
+		}
+		if got := rec.Body.String(); got != asset {
+			t.Errorf("body %q, want %q", got, asset)
+		}
+	})
+	t.Run("missing index", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(dir, "index.html")); err != nil {
+			t.Fatal(err)
+		}
+		for _, route := range []string{"/", "/c/some-cluster"} {
+			req := httptest.NewRequest(http.MethodGet, "http://localhost"+route, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s: status %d, want 404", route, rec.Code)
+			}
+		}
 	})
 }
 
@@ -412,7 +513,7 @@ func TestRejectsRequestsForNonLoopbackHosts(t *testing.T) {
 func TestOutboxErrorSupersedesPendingData(t *testing.T) {
 	o := newOutbox()
 	o.latest(protocol.ServerMessage{ID: 5, Type: protocol.ServerTypeData, Data: "stale"})
-	o.error(5, errors.New("watch failed"))
+	o.error(5, 0, errors.New("watch failed"))
 
 	var got []string
 	for _, m := range o.take() {
@@ -424,7 +525,7 @@ func TestOutboxErrorSupersedesPendingData(t *testing.T) {
 
 	// Data recovered after the error, before the next write, is sent once.
 	o.latest(protocol.ServerMessage{ID: 5, Type: protocol.ServerTypeData, Data: "stale"})
-	o.error(5, errors.New("watch failed"))
+	o.error(5, 0, errors.New("watch failed"))
 	o.latest(protocol.ServerMessage{ID: 5, Type: protocol.ServerTypeData, Data: "recovered"})
 	got = got[:0]
 	for _, m := range o.take() {
@@ -432,5 +533,29 @@ func TestOutboxErrorSupersedesPendingData(t *testing.T) {
 	}
 	if want := "5:error:<nil> 5:data:recovered"; strings.Join(got, " ") != want {
 		t.Errorf("take() after recovery = %v, want %s", got, want)
+	}
+}
+
+func TestControlSocketHelloFirst(t *testing.T) {
+	// dial checks the first message before this client sends anything.
+	c := mustDial(t, newTestServer(t))
+	c.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeRequest, Method: protocol.RequestClustersList.Name})
+	c.await(1, func(m protocol.ServerMessage, _ json.RawMessage) bool { return m.Type == protocol.ServerTypeResult })
+}
+
+func TestSubscribeRefusalCarriesRevision(t *testing.T) {
+	c := mustDial(t, newTestServer(t))
+	for i, method := range []protocol.Method{"unknown", protocol.TopicClusterStatus.Name} {
+		id := uint64(i + 1)
+		c.send(protocol.ClientMessage{ID: id, Type: protocol.ClientTypeSubscribe, Method: method, Rev: 7})
+		c.await(id, func(m protocol.ServerMessage, _ json.RawMessage) bool {
+			if m.Type != protocol.ServerTypeError {
+				return false
+			}
+			if m.Rev != 7 || m.Error.Code != protocol.ErrorCodeBadRequest {
+				t.Fatalf("error = %+v, want bad_request with rev 7", m)
+			}
+			return true
+		})
 	}
 }

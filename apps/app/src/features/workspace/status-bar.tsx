@@ -5,6 +5,7 @@ import { useWorkspace } from "./workspace-context.tsx";
 const connectionLabels = {
   connecting: "Connecting to the Engine",
   reconnecting: "Reconnecting to the Engine",
+  outdated: "Out of date",
   closed: "Disconnected from the Engine",
 } as const;
 

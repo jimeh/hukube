@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -144,14 +145,24 @@ func (s *Server) tokenValid(r *http.Request) bool {
 }
 
 // spaHandler serves files from dir, falling back to index.html so client-side
-// routes load the app.
+// routes load the app. index.html has no validators and ignores conditional
+// requests so reloading always fetches the current UI, even after a rollback.
 func spaHandler(dir string) http.Handler {
 	files := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := filepath.Join(dir, filepath.FromSlash(path.Clean("/"+r.URL.Path)))
 		if _, err := os.Stat(name); errors.Is(err, fs.ErrNotExist) || r.URL.Path == "/" {
+			index, err := os.Open(filepath.Join(dir, "index.html"))
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			defer index.Close()
 			w.Header().Set("Cache-Control", "no-cache")
-			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+			r = r.Clone(r.Context())
+			r.Header.Del("If-Modified-Since")
+			r.Header.Del("If-None-Match")
+			http.ServeContent(w, r, "index.html", time.Time{}, index)
 			return
 		}
 		files.ServeHTTP(w, r)
