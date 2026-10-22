@@ -1,17 +1,17 @@
 [tools]
-bun = "1.4.2"
-go = "1.27.1"
+bun = "1.4.3"
+go = "1.27.2"
 # Vitest, Playwright, and electron-builder run on Node.
-node = "24.21.0"
+node = "24.22.0"
 golangci-lint = "2.14.0"
 k3d = "5.9.0"
 kubectl = "1.37.1"
 "go:github.com/gzuidhof/tygo" = "0.2.21"
-"go:sigs.k8s.io/controller-runtime/tools/setup-envtest" = "0.25.1"
+"go:sigs.k8s.io/controller-runtime/tools/setup-envtest" = "0.25.2"
 actionlint = "1.7.12"
-lefthook = "2.1.14"
+lefthook = "2.2.2"
 pinact = "5.0.0"
-zizmor = "1.30.1"
+zizmor = "1.31.0"
 
 [env]
 # Kubernetes version used for envtest's kube-apiserver and etcd binaries.

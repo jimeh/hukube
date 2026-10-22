@@ -973,7 +973,7 @@ both-theme visual review described above.
   and Escape drop the repeated request. This cannot undo a write already sent.
 - The envtest API server reports a wrong type on `patch`, quoting the whole
   Resource, followed by `json: cannot unmarshal string into Go struct field
-DeploymentSpec.spec.replicas of type int32`. The shared mapper extracts
+  DeploymentSpec.spec.replicas of type int32`. The shared mapper extracts
   `spec.replicas: expected int32, got string`. It also splits strict decoding
   problems into field causes and bounds every message without cutting UTF-8.
 - Base UI's correctly configured modal roots redirect their hidden Tab guards
