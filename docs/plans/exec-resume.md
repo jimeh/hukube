@@ -439,11 +439,11 @@ connection to the Engine" no longer exists.
 
 - **Skipped output** is one dim line at the top of the cleared terminal:
   - a new terminal: `[hukube: 1.2 MiB of earlier output is not shown. The
-Engine keeps only a session's most recent output.]`
+    Engine keeps only a session's most recent output.]`
   - after a lost connection: `[hukube: 1.2 MiB of output was skipped while
-this window was disconnected]`
+    this window was disconnected]`
   - while attached: `[hukube: 1.2 MiB of output was skipped because this
-window was not keeping up]`
+    window was not keeping up]`
 
   Amounts under 1 MiB are given in KiB. The terminal's own scrollback is
   cleared with it. A window that far behind would have lost most of it to

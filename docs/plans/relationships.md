@@ -469,7 +469,7 @@ heading so it is not covered.
 - **Types that cannot be listed.** When the Cluster has types in state
   `forbidden`, a muted line under the last section says
   `Resources of 12 Resource Types your credentials cannot list are not
-shown.` The count comes from the Workspace's types. In the empty state,
+  shown.` The count comes from the Workspace's types. In the empty state,
   this qualification is part of the notice's description instead of a
   separate line.
 

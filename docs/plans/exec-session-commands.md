@@ -165,7 +165,7 @@ opens a menu.
 - **"Run a command…"** opens a dialog, "Run a command in `<pod>`", with:
   - a container select, when the Pod has more than one;
   - the command field, focused, with the placeholder `Default shell: bash,
-or sh`;
+    or sh`;
   - the words it will run, under the field, as the user types, or the reason
     it cannot run;
   - the recent commands, up to 10, as buttons that fill the field;
@@ -228,7 +228,7 @@ and new Pod names, which a key by Pod or container name would not.
 
 - The title is `<program>: <container> in <pod>` for a chosen command,
   where the program is the last part of its first word: `python3: app in
-web-7d9f`. The program comes first because a narrow Tab truncates its
+  web-7d9f`. The program comes first because a narrow Tab truncates its
   end. A default session keeps `<container> in <pod>`.
 - The header gains a "Command" part after the container, in the same style,
   with the line as the user typed it. A default session shows none.

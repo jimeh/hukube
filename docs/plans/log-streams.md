@@ -971,7 +971,7 @@ experience review does the same.
 - **A previous run ends with an `exited` record too,** and ignores `resume`,
   because it is sent whole each time.
 - **A refused log request ends the stream with hukube's own words:** `Your
-credentials cannot read Pod logs in the <Namespace> Namespace.`
+  credentials cannot read Pod logs in the <Namespace> Namespace.`
 - **The first batch is also sent when it reaches 256 KiB,** so a large
   history does not wait for the slowest container.
 
@@ -1041,7 +1041,7 @@ and a list of rough edges. These were fixed:
 - **Notices say what is true.** The Pod limit shows only at the limit, not
   whenever fewer Pods are read than exist for a moment. A deleted Resource
   keeps its container's name and loses the limit notice. `1 of 4 containers
-is not running`. A container that is not running shows its reason in one
+  is not running`. A container that is not running shows its reason in one
   line and the kubelet's message as a tooltip.
 - **A previous run whose logs are gone says so,** in place of "Lines appear
   here as it does".
@@ -1051,7 +1051,7 @@ is not running`. A container that is not running shows its reason in one
   and yellow.
 - **The YAML Facet has a Search button** beside `Show managed fields`.
 - **A view that is first shown after its Resource was deleted** says `Not
-found`, where it showed a loading state for 10 seconds.
+  found`, where it showed a loading state for 10 seconds.
 
 Left as follow-ups: a marker that older lines exist and a way to load them,
 blank frames when scrolled away during a burst, a hover with a line's full

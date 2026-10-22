@@ -212,7 +212,7 @@ segment resolves, case-insensitively, as follows:
    scoped with `{op: "in", field: "type", values: [...]}`.
 2. Otherwise a Namespace, when it exactly matches an existing Namespace's
    name. The find is scoped with `{op: "in", field: "namespace", values:
-[...]}`, which excludes cluster-scoped Resources.
+   [...]}`, which excludes cluster-scoped Resources.
 3. Otherwise the palette shows "No resource type or namespace named
    `segment`" instead of searching names for the slash. When the palette
    does not know every Namespace, because the list was cut off at 1,000 or

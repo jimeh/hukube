@@ -538,7 +538,7 @@ uses. It takes focus when the session starts and when its Tab is activated.
 
 - **Output dropped:** the terminal prints a line in a dim color where the
   output is missing: `[hukube: 1.2 MiB of output was dropped while this
-window was not reading]`.
+  window was not reading]`.
 - **Start again** resets the terminal and starts a new session in the same
   Tab. It is absent when the Pod is gone or has another UID, and disabled
   with a reason while the connection to the Engine is down or no session may
