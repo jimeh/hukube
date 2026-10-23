@@ -85,3 +85,17 @@ it("removes only newly introduced empty ancestors and safely removes absent fiel
     ),
   ).toBe(empty);
 });
+
+it.each([
+  { name: "a scalar cell", leaf: ["port"] },
+  { name: "a nested cell", leaf: ["nested", "port"] },
+])("keeps draft-only rows and their indexes when reverting $name", ({ leaf }) => {
+  const original = "spec: {ports: [{port: 1}]}\n";
+  const draft = "spec: {ports: [{port: 1}, {}, {port: 3}]}\n";
+  const path = ["spec", "ports", 1, ...leaf];
+  const control = { type: "integer" as const, remove: true };
+  const edited = updateDraft(draft, original, path, 2, control);
+  const reverted = parseManifest(updateDraft(edited, original, path, undefined, control));
+  expect(reverted.issues).toEqual([]);
+  expect(valueAt(reverted.object, ["spec", "ports"])).toEqual([{ port: 1 }, {}, { port: 3 }]);
+});

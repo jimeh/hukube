@@ -149,6 +149,8 @@ export function updateDraft(
     document.deleteIn(path);
     const original = parseManifest(restoreText).document;
     for (let length = path.length - 1; length > 0; length--) {
+      // Removing a field must keep every existing list row and index.
+      if (typeof path[length - 1] === "number") break;
       const ancestor = path.slice(0, length);
       const node = document.getIn(ancestor, true);
       if (original.hasIn(ancestor) || !isMap(node) || node.items.length) break;
