@@ -49,7 +49,11 @@ Host a 404 during a test.
   own.
 - **Review the running app before calling a feature done.** Use it as a new
   user would, in both themes and at more than one width. Fix what would
-  confuse or slow a user, or looks unfinished. Tests do not judge this.
+  confuse or slow a user, or looks unfinished. Tests do not judge this. For a
+  feature a user sees or touches, also run the `ux-review` skill before the
+  code review: a fresh reviewer finds the feature without being told where it
+  is, covers the not-permitted, Cluster-unreachable, and Engine-lost states,
+  and re-checks the fixes. Your own check does not replace it.
 - **Ask before adding a key binding.** Shortcuts are scarce, and one taken
   casually is not there for the feature that needs it.
 
