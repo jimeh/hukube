@@ -9,9 +9,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dnd-kit/collision": "0.5.0",
-    "@dnd-kit/dom": "0.5.0",
-    "@dnd-kit/react": "0.5.0",
+    "@dnd-kit/collision": "0.5.1",
+    "@dnd-kit/dom": "0.5.1",
+    "@dnd-kit/react": "0.5.1",
     "@hugeicons/core-free-icons": "^4.3.5",
     "@hugeicons/react": "^1.1.10",
     "@hukube/engine-client": "workspace:*",
@@ -20,7 +20,7 @@
     "@hukube/ui": "workspace:*",
     "@tanstack/react-router": "^1.170.44",
     "@tanstack/react-table": "^9.3.1",
-    "@tanstack/react-virtual": "^3.14.19",
+    "@tanstack/react-virtual": "^3.14.20",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-search": "0.16.0",
     "@xterm/addon-webgl": "0.19.0",
