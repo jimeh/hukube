@@ -38,10 +38,12 @@ export default function YamlEditor({
   onReview,
   baseText,
   editGroup,
+  editUid,
 }: {
   value: string;
   baseText?: string;
   editGroup?: string;
+  editUid?: string;
   ref?: Ref<YamlEditorHandle>;
   editing?: boolean;
   dirty?: boolean;
@@ -126,23 +128,27 @@ export default function YamlEditor({
   }, []);
 
   const wasEditing = useRef(false);
+  const previousBase = useRef({ baseText, editUid });
   useEffect(() => {
     const editor = editorRef.current;
     const starting = editing && !wasEditing.current;
+    const rebased =
+      previousBase.current.baseText !== baseText || previousBase.current.editUid !== editUid;
+    previousBase.current = { baseText, editUid };
     wasEditing.current = editing;
     if (!editor) return;
     editor.updateOptions({ readOnly: !editing });
     const position = starting
       ? caretInEditableManifest(editor.getValue(), value, editor.getPosition())
       : undefined;
-    if (editor.getValue() === value) {
+    if (editor.getValue() === value && !rebased) {
       if (starting) editor.focus();
       return;
     }
     const viewState = editor.saveViewState();
     setting.current = true;
     const model = editor.getModel();
-    if (editing && !starting && model) {
+    if (editing && !starting && !rebased && model) {
       const change = replacement(editor.getValue(), value);
       const start = model.getPositionAt(change.start);
       const end = model.getPositionAt(change.end);
@@ -161,7 +167,10 @@ export default function YamlEditor({
       ]);
       if (!editGroup) editor.pushUndoStop();
       group.current = editGroup;
-    } else editor.setValue(value);
+    } else {
+      editor.setValue(value);
+      group.current = undefined;
+    }
     setting.current = false;
     if (viewState) editor.restoreViewState(viewState);
     if (starting && position) {
@@ -169,7 +178,7 @@ export default function YamlEditor({
       editor.revealLineInCenterIfOutsideViewport(position.lineNumber);
       editor.focus();
     }
-  }, [value, editing, editGroup]);
+  }, [value, editing, editGroup, baseText, editUid]);
 
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly: !editing });

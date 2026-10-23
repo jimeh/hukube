@@ -12,9 +12,9 @@ const fake = vi.hoisted(() => {
   let position = { lineNumber: 1, column: 1 };
   return {
     getValue: () => text,
-    setValue: (value: string) => {
+    setValue: vi.fn<(value: string) => void>((value) => {
       text = value;
-    },
+    }),
     getPosition: () => position,
     setPosition: vi.fn<(value: typeof position) => void>((value) => {
       position = value;
@@ -100,3 +100,25 @@ it("uses minimal replacement edits after editable entry, with undo stops for a f
   ]);
   expect(fake.pushUndoStop).toHaveBeenCalled();
 });
+
+it.each(["base", "uid"])(
+  "resets Undo when the edit %s changes, including identical text",
+  (changed) => {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load: () => Promise.resolve() },
+    });
+    const view = render(<YamlEditor editing editUid="u" baseText={"a: 1\n"} value={"a: 1\n"} />);
+    fake.setValue.mockClear();
+    view.rerender(
+      <YamlEditor
+        editing
+        editUid={changed === "uid" ? "replacement" : "u"}
+        baseText={changed === "base" ? "a: 2\n" : "a: 1\n"}
+        value={"a: 1\n"}
+      />,
+    );
+    expect(fake.setValue).toHaveBeenCalledExactlyOnceWith("a: 1\n");
+    expect(fake.executeEdits).not.toHaveBeenCalled();
+  },
+);

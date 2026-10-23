@@ -17,6 +17,7 @@ function harness(value: unknown = null) {
   let beforeWrite: (() => void) | undefined;
   let lost = false;
   let failure = false;
+  let hold = false;
   let connection = "open";
   const stateListeners = new Set<() => void>();
   const puts: { value: unknown; ifRevision?: string }[] = [];
@@ -29,7 +30,8 @@ function harness(value: unknown = null) {
       const watch = { closed: false, listener };
       watches.push(watch);
       queueMicrotask(() => {
-        if (!watch.closed) listener.data({ key: "overview/definitions", value: stored, revision });
+        if (!hold && !watch.closed)
+          listener.data({ key: "overview/definitions", value: stored, revision });
       });
       return {
         close: () => {
@@ -80,6 +82,9 @@ function harness(value: unknown = null) {
     },
     lose: () => {
       lost = true;
+    },
+    hold: () => {
+      hold = true;
     },
     fail: () => {
       failure = true;
@@ -167,4 +172,62 @@ it("custom definitions override bundled matches, removal restores them, and reco
   await h.ready();
   expect(h.store.getSnapshot().definitions.has("widgets.test.dev")).toBe(true);
   h.stop();
+});
+
+it("retains the settled snapshot during refresh and reports readback errors", async () => {
+  const h = harness();
+  await h.ready();
+  const previous = h.store.getSnapshot();
+  h.store.retry();
+  expect(h.store.getSnapshot().status).toBe("ready");
+  expect(h.store.getSnapshot().definitions).toBe(previous.definitions);
+  expect(h.store.getSnapshot().registry).toBe(previous.registry);
+  h.watches.at(-1)!.listener.error({ code: "unavailable", message: "refresh failed" });
+  expect(h.store.getSnapshot().error).toContain("refresh failed");
+  expect(h.store.getSnapshot().definitions).toBe(previous.definitions);
+  h.stop();
+});
+
+it("waits for actual save readback and rejects its failure while retaining the display snapshot", async () => {
+  for (const failure of [false, true]) {
+    const h = harness();
+    await h.ready();
+    const previous = h.store.getSnapshot();
+    h.hold();
+    let settled = false;
+    const source = widget("widgets.test.dev");
+    const saving = h.store.install(source, undefined);
+    void saving.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    // The reopened watch is an observable boundary after the put completed.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.watches).toHaveLength(2);
+    expect(h.store.getSnapshot()).toBe(previous);
+    h.watches[0]!.listener.data({ key: "overview/definitions", value: null, revision: "" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const outcome = saving.then(
+      () => undefined,
+      (error) => String(error),
+    );
+    if (failure)
+      h.watches.at(-1)!.listener.error({ code: "unavailable", message: "readback failed" });
+    else
+      h.watches.at(-1)!.listener.data({
+        key: "overview/definitions",
+        value: { version: 1, entries: { "widgets.test.dev": source } },
+        revision: "1",
+      });
+    expect(await outcome).toBe(failure ? "readback failed" : undefined);
+    expect(h.store.getSnapshot().error).toBe(failure ? "readback failed" : undefined);
+    expect(h.store.getSnapshot().definitions.has("widgets.test.dev")).toBe(!failure);
+    h.stop();
+  }
 });

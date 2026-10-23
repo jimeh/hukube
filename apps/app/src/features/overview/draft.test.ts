@@ -57,3 +57,31 @@ it.each([
 ] as const)("rejects invalid input %s for %s", (raw, type) =>
   expect(() => parseInput(raw, { type, min: 0 })).toThrow(/./),
 );
+
+it("removes only newly introduced empty ancestors and safely removes absent fields", () => {
+  const original = "metadata: {name: test}\nspec: {list: [{}], keep: {}}\n";
+  const added = updateDraft(original, original, ["data", "key"], "value", string);
+  expect(updateDraft(added, original, ["data", "key"], undefined, string)).toBe(original);
+  expect(updateDraft(original, original, ["missing", "key"], undefined, string)).toBe(original);
+  const inList = updateDraft(original, original, ["spec", "list", 0, "nested", "key"], "v", string);
+  expect(
+    updateDraft(inList, original, ["spec", "list", 0, "nested", "key"], undefined, string),
+  ).toBe(original);
+  const withSibling = updateDraft(added, original, ["data", "other"], "newer", string);
+  expect(
+    valueAt(
+      parseManifest(updateDraft(withSibling, original, ["data", "key"], undefined, string)).object,
+      ["data"],
+    ),
+  ).toEqual({ other: "newer" });
+  const empty = "data: {}\n";
+  expect(
+    updateDraft(
+      updateDraft(empty, empty, ["data", "key"], "v", string),
+      empty,
+      ["data", "key"],
+      undefined,
+      string,
+    ),
+  ).toBe(empty);
+});

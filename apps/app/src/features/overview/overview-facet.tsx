@@ -11,7 +11,14 @@ import { fieldIssue } from "../edit/field-paths.ts";
 import { isRecord } from "../edit/yaml.ts";
 import type { FacetProps } from "../resource/facet-props.ts";
 import { Notice } from "../resource/notice.tsx";
-import { fieldReason, valueAt, semanticEqual, changedPaths, isLivePath } from "./draft.ts";
+import {
+  secretPath,
+  fieldReason,
+  valueAt,
+  semanticEqual,
+  changedPaths,
+  isLivePath,
+} from "./draft.ts";
 import type { Definition, EditControl, FieldPath, OverviewField } from "./definition.ts";
 import type { PanelEdit } from "../edit/use-panel-edit.ts";
 
@@ -26,9 +33,6 @@ function display(value: unknown, format: string): string {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? String(value)
     : JSON.stringify(value, null, 2);
-}
-function secretPath(type: string, path: FieldPath) {
-  return type === "secrets" && ["data", "stringData"].includes(String(path[0]));
 }
 function revealed(value: unknown, encoded: boolean) {
   if (typeof value !== "string") return "Binary value";
@@ -167,7 +171,9 @@ function Field(
   const { field: f, edit, definition, object, lastObject } = props;
   const reasonId = useId();
   const value = valueAt(isLivePath(f.path) ? lastObject : object, f.path);
-  const sensitive = secretPath(props.address.type, f.path) || (f.type === "map" && f.sensitive);
+  const sensitive =
+    (props.address.type === "secrets" && ["data", "stringData"].includes(String(f.path[0]))) ||
+    (f.type === "map" && f.sensitive);
   if (f.type === "field")
     return (
       <Value
@@ -191,7 +197,9 @@ function Field(
         <h4 className="text-xs font-medium text-muted-foreground">{f.label}</h4>
         {value !== undefined && !isRecord(value) ? (
           <p className="break-all text-xs">
-            {sensitive ? "Masked value" : display(value, "text")}{" "}
+            {sensitive || secretPath(props.address.type, f.path)
+              ? "Masked value"
+              : display(value, "text")}{" "}
             <span className="text-muted-foreground">Edit in YAML.</span>
           </p>
         ) : (
@@ -279,7 +287,7 @@ function Field(
       {!rows.length ? (
         <p className="text-xs text-muted-foreground">
           {value !== undefined && !Array.isArray(value)
-            ? sensitive
+            ? sensitive || secretPath(props.address.type, f.path)
               ? "Masked value. Edit in YAML."
               : `${display(value, "text")}. Edit in YAML.`
             : (f.empty ?? "No rows")}
@@ -334,7 +342,7 @@ function Value({
   format,
   control,
   compact,
-  sensitive,
+  sensitive: definedSensitive,
   ...props
 }: FacetProps & {
   definition: Definition;
@@ -348,6 +356,7 @@ function Value({
   sensitive?: boolean;
 }) {
   const { edit, definition, object, lastObject } = props;
+  const sensitive = definedSensitive || secretPath(props.address.type, path);
   const input = useRef<HTMLInputElement & HTMLTextAreaElement & HTMLSelectElement>(null);
   const fieldRoot = useRef<HTMLDivElement>(null);
   const reasonId = useId();
@@ -385,7 +394,9 @@ function Value({
     });
   const text = sensitive
     ? reveal
-      ? revealed(value, props.address.type === "secrets" && path[0] === "data")
+      ? props.address.type === "secrets" && path[0] === "data"
+        ? revealed(value, true)
+        : display(value, "text")
       : value === undefined
         ? "Not set"
         : "••••••••"

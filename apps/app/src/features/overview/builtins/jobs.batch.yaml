@@ -24,9 +24,6 @@ sections:
           - spec
           - completions
         format: number
-        edit:
-          type: integer
-          min: 0
       - id: backoff
         type: field
         label: Backoff limit
@@ -56,19 +53,11 @@ sections:
             path:
               - image
             format: text
-            edit:
-              type: string
           - id: pullPolicy
             label: Pull policy
             path:
               - imagePullPolicy
             format: badge
-            edit:
-              type: enum
-              choices:
-                - Always
-                - IfNotPresent
-                - Never
         empty: No containers
       - id: initContainers
         type: table
@@ -89,8 +78,6 @@ sections:
             path:
               - image
             format: text
-            edit:
-              type: string
         empty: No init containers
       - id: serviceAccount
         type: field
@@ -101,8 +88,6 @@ sections:
           - spec
           - serviceAccountName
         format: text
-        edit:
-          type: string
       - id: restartPolicy
         type: field
         label: Restart policy

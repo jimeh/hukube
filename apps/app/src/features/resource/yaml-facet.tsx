@@ -15,7 +15,6 @@ import { lazy, Suspense, useMemo, useRef, useState, useEffect, useLayoutEffect }
 import { createPortal } from "react-dom";
 
 import { usePanelEdit, type PanelEdit } from "../edit/use-panel-edit.ts";
-import { parseManifest } from "../edit/yaml.ts";
 import { fieldIssue, refusalLines } from "../edit/field-paths.ts";
 import { copyText } from "../edit/clipboard.ts";
 import { ReviewDialog } from "../edit/review-dialog.tsx";
@@ -63,24 +62,18 @@ function SharedYamlFacet({
     const timer = setTimeout(() => setCopied(false), 2000);
     return () => clearTimeout(timer);
   }, [copied]);
-  const [parsedText, setParsedText] = useState("");
-  useEffect(() => {
-    const timer = setTimeout(() => setParsedText(session?.text ?? ""), 200);
-    return () => clearTimeout(timer);
-  }, [session?.text]);
-  const parsed = useMemo(() => parseManifest(parsedText), [parsedText]);
+  const parsed = edit.parsed;
   const refusalIssues =
     session?.refusal?.causes?.flatMap((cause) => {
-      const issue = cause.field ? fieldIssue(parsed, cause.field, cause.message) : undefined;
+      const issue = cause.field ? fieldIssue(parsed!, cause.field, cause.message) : undefined;
       return issue ? [issue] : [];
     }) ?? [];
-  const issues = session ? [...parsed.issues, ...refusalIssues] : [];
+  const issues = session ? [...(parsed?.issues ?? []), ...refusalIssues] : [];
   const reviewChanges = () => {
-    if (session) setParsedText(session.text);
-    edit.reviewChanges(() => editor.current?.focus(parseManifest(session?.text ?? "").issues[0]));
+    edit.reviewChanges(() => editor.current?.focus(parsed?.issues[0]));
   };
   const refusal = session?.refusal;
-  const yamlError = parsedText === session?.text && !!parsed.issues.length;
+  const yamlError = !!parsed?.issues.length;
   const unconfirmed = review.unknownOutcome && !review.pending;
   const noticeKind = unconfirmed
     ? "warning"
@@ -250,7 +243,7 @@ function SharedYamlFacet({
                   <p>and {refusalLines(refusal).length - 3} more</p>
                 )}
               </>
-            ) : parsedText === session.text && parsed.issues.length ? (
+            ) : parsed?.issues.length ? (
               `${parsed.issues[0]!.message} (line ${parsed.issues[0]!.line})`
             ) : (
               (notice ??
@@ -298,10 +291,11 @@ function SharedYamlFacet({
               ref={editor}
               value={session?.text ?? yaml}
               baseText={session?.baseText}
+              editUid={session?.uid}
               editGroup={edit.field ? JSON.stringify(edit.field.path) : undefined}
               editing={!!session}
               dirty={dirty && !reviewReason}
-              issues={parsedText === session?.text ? issues : []}
+              issues={issues}
               onChange={changeText}
               onReview={reviewChanges}
             />

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { DockviewPanelApi } from "dockview-react";
 import type { ResourceData } from "@hukube/engine-client";
 import { formatResourceUri, type Facet } from "@hukube/k8s";
@@ -10,10 +10,14 @@ import { WorkspaceContext } from "../workspace/workspace-context.tsx";
 import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { bundledDefinitions } from "./bundled.ts";
 import { parseDefinition } from "./definition.ts";
-import type { RegistrySnapshot } from "./registry.ts";
+import { createRegistryStore, type RegistrySnapshot } from "./registry.ts";
+import type * as RegistryModule from "./registry.ts";
+import type { EngineClient, Setting } from "@hukube/engine-client";
 const state = vi.hoisted(() => ({
   manifest: { object: {} } as ResourceData,
   snapshot: {} as RegistrySnapshot,
+  error: undefined as string | undefined,
+  store: undefined as ReturnType<typeof createRegistryStore> | undefined,
   client: {
     subscribe: () => ({ close: () => {}, update: () => {} }),
     request: () => Promise.resolve({ edit: { allowed: true }, delete: { allowed: true } }),
@@ -25,10 +29,23 @@ vi.mock("@hukube/engine-client/react", () => ({
   useEngine: () => state.client,
   useConnectionState: () => "open",
   useSubscription: (method: string) =>
-    method === "resource.get" ? { stale: false, data: state.manifest } : { stale: false },
+    method === "resource.get"
+      ? {
+          stale: false,
+          data: state.manifest,
+          error: state.error ? { code: "unavailable", message: state.error } : undefined,
+        }
+      : { stale: false },
 }));
-vi.mock("./registry.ts", () => ({
-  useRegistry: () => ({ snapshot: state.snapshot, store: { retry: () => {} } }),
+vi.mock("./registry.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof RegistryModule>()),
+  useRegistry: () => ({
+    snapshot: useSyncExternalStore(
+      state.store?.subscribe ?? (() => () => {}),
+      state.store?.getSnapshot ?? (() => state.snapshot),
+    ),
+    store: state.store ?? { retry: () => {} },
+  }),
 }));
 vi.mock("../resource/yaml-editor.tsx", () => ({
   default: ({
@@ -75,6 +92,8 @@ beforeEach(() => {
     },
   );
   state.manifest = { object: deployment };
+  state.error = undefined;
+  state.store = undefined;
   state.snapshot = {
     status: "ready",
     definitions: new Map(bundledDefinitions),
@@ -354,4 +373,140 @@ it("offers YAML for a changed read-only field rather than an inert revert action
   fireEvent.click(screen.getByRole("button", { name: "View YAML" }));
   expect(screen.getByRole("tab", { name: /^YAML/ }).getAttribute("aria-selected")).toBe("true");
   expect(yaml.value).toBe(JSON.stringify(changed));
+});
+
+it("keeps a mounted Overview repairable when YAML becomes cyclic, including while hidden", async () => {
+  render(<Harness />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Replicas" }));
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  fireEvent.click(screen.getByRole("tab", { name: /^YAML/ }));
+  const yaml = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "YAML draft" });
+  const original = yaml.value;
+  const cyclic = "apiVersion: apps/v1\nmetadata: {name: web}\nspec: &spec {replicas: *spec}\n";
+  fireEvent.change(yaml, { target: { value: cyclic } });
+  expect(yaml.value).toBe(cyclic);
+  fireEvent.click(screen.getByRole("tab", { name: /^Overview/ }));
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review changes" }).disabled).toBe(
+    true,
+  );
+  expect(
+    screen.getByText(/Fix invalid YAML in the YAML Facet before editing inline/),
+  ).toBeDefined();
+  fireEvent.click(screen.getByRole("tab", { name: /^YAML/ }));
+  fireEvent.change(yaml, { target: { value: original.replace("replicas: 1", "replicas: 3") } });
+  fireEvent.click(screen.getByRole("tab", { name: /^Overview/ }));
+  expect(screen.getByRole("button", { name: "Edit Replicas" }).textContent).toBe("3");
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review changes" }).disabled).toBe(
+    false,
+  );
+});
+
+it.each([
+  [undefined, "deleted"],
+  ["overview", "deleted"],
+  [undefined, "error"],
+  ["overview", "error"],
+] as const)("releases unresolved Overview %s on a terminal Manifest %s", (facet, terminal) => {
+  state.manifest = {};
+  const view = render(<Harness facet={facet} />);
+  expect(screen.getByText("Loading Overview")).toBeDefined();
+  if (terminal === "deleted") state.manifest = { deleted: true };
+  else state.error = "Manifest access denied";
+  view.rerender(<Harness facet={facet} />);
+  expect(screen.queryByText("Loading Overview")).toBeNull();
+  expect(screen.getByRole("tab", { name: /^YAML/ })).toBeDefined();
+  expect(screen.getByRole("tab", { name: /^Events/ })).toBeDefined();
+  expect(
+    screen.getAllByText(terminal === "deleted" ? "Not found" : "Manifest access denied").length,
+  ).toBeGreaterThan(0);
+});
+
+it.each(["normal", "exact", "annotations", "metadata"])(
+  "masks Secret last-applied through %s definitions without hiding safe annotations",
+  (selection) => {
+    const credential = "credential-from-last-applied";
+    const annotation = "kubectl.kubernetes.io/last-applied-configuration";
+    state.manifest = {
+      object: {
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: {
+          uid: "u",
+          annotations: {
+            [annotation]: JSON.stringify({ stringData: { password: credential } }),
+            note: "useful annotation",
+          },
+        },
+      },
+    };
+    if (selection !== "normal") {
+      const path =
+        selection === "exact"
+          ? `[metadata, annotations, ${annotation}]`
+          : selection === "annotations"
+            ? "[metadata, annotations]"
+            : "[metadata]";
+      state.snapshot = {
+        ...state.snapshot,
+        definitions: new Map([
+          [
+            "secrets",
+            parseDefinition(
+              `version: 1\nresourceType: secrets\ntitle: Secret\nsections:\n  - id: main\n    title: Main\n    fields:\n      - {id: selected, type: field, label: Selected, path: ${path}, format: text}\n`,
+            ),
+          ],
+        ]),
+      };
+    }
+    render(<Harness type="secrets" />);
+    const overview = screen.getByRole("tabpanel", { name: /^Overview/ });
+    expect(overview.textContent).not.toContain(credential);
+    expect(overview.innerHTML).not.toContain(credential);
+    expect(screen.queryByRole("button", { name: `Edit ${annotation}` })).toBeNull();
+    const before = useUnsavedEdits.getState().entries.size;
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: selection === "normal" ? `Reveal ${annotation}` : "Reveal Selected",
+      }),
+    );
+    expect(document.body.textContent).toContain(credential);
+    expect(useUnsavedEdits.getState().entries.size).toBe(before);
+  },
+);
+
+it("keeps the actual ResourcePanel YAML mounted during registry reload and refresh failure", async () => {
+  state.manifest = { object: { apiVersion: "sample/v1", metadata: { uid: "u" } } };
+  const watches: {
+    data(setting: Setting): void;
+    error(error: { code: string; message: string }): void;
+  }[] = [];
+  state.store = createRegistryStore({
+    ...state.client,
+    subscribe: (_method: string, _params: unknown, listener: (typeof watches)[number]) => {
+      watches.push(listener);
+      return { close: () => {}, update: () => {} };
+    },
+  } as unknown as EngineClient);
+  render(<Harness type="custom.sample" />);
+  expect(screen.getByText("Loading Overview")).toBeDefined();
+  act(() => watches.at(-1)!.data({ key: "overview/definitions", value: null, revision: "" }));
+  const yaml = await screen.findByRole("textbox", { name: "YAML draft" });
+  fireEvent.click(screen.getByRole("button", { name: "Show managed fields" }));
+  act(() => state.store!.retry());
+  expect(screen.getByRole("textbox", { name: "YAML draft" })).toBe(yaml);
+  expect(screen.getByRole("button", { name: "Hide managed fields" })).toBeDefined();
+  act(() => watches.at(-1)!.error({ code: "unavailable", message: "refresh unavailable" }));
+  expect(screen.getByText(/refresh unavailable/)).toBeDefined();
+  expect(screen.getByRole("textbox", { name: "YAML draft" })).toBe(yaml);
+});
+
+it("keeps normal Secret annotations visible", () => {
+  state.manifest = {
+    object: {
+      apiVersion: "v1",
+      metadata: { uid: "u", annotations: { note: "useful annotation" } },
+    },
+  };
+  render(<Harness type="secrets" />);
+  expect(screen.getByText("useful annotation")).toBeDefined();
 });

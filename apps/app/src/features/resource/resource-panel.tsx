@@ -97,6 +97,8 @@ export function ResourcePanel({
   const definition = edit.definition ?? (match ? candidate : undefined);
   const defaultPending =
     !edit.session &&
+    !manifest.error &&
+    !manifest.data?.deleted &&
     ((!address?.facet && !candidate && registry.status === "loading") ||
       ((!address?.facet || address.facet === "overview") && !!candidate && match === undefined));
   const [latched, setLatched] = useState<Facet>();

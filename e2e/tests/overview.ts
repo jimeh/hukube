@@ -38,6 +38,7 @@ export function overviewTests(namespace: string) {
     await expect(panel.locator(".monaco-editor:visible .view-lines")).toContainText("replicas: 1");
     await panel.getByRole("tab", { name: /^Overview/ }).click();
     await panel.getByRole("button", { name: "Edit Replicas", exact: true }).click();
+    await panel.getByRole("textbox", { name: "Replicas", exact: true }).fill("20");
     await panel.getByRole("textbox", { name: "Replicas", exact: true }).fill("2");
     await panel.getByRole("button", { name: "Done", exact: true }).click();
     await expect(panel.getByText("Unsaved changes", { exact: true })).toBeVisible();
@@ -49,6 +50,26 @@ export function overviewTests(namespace: string) {
     await page.keyboard.press("ControlOrMeta+Z");
     await panel.getByRole("tab", { name: /^Overview/ }).click();
     await expect(panel.getByRole("button", { name: "Edit Replicas", exact: true })).toHaveText("1");
+    // A clean live rebase must clear even the prior undoable form edit.
+    kubectl(
+      "-n",
+      namespace,
+      "patch",
+      "deployment",
+      name,
+      "--type=merge",
+      "--patch",
+      '{"spec":{"replicas":3}}',
+    );
+    await expect(panel.getByRole("button", { name: "Edit Replicas", exact: true })).toHaveText("3");
+    await panel.getByRole("tab", { name: /^YAML/ }).click();
+    await expect(editor.locator(".view-lines")).toContainText("replicas: 3");
+    await editor.getByRole("textbox", { name: "Resource YAML", exact: true }).focus();
+    await page.keyboard.press("ControlOrMeta+Z");
+    await expect(editor.locator(".view-lines")).toContainText("replicas: 3");
+    await expect(panel.getByText("Unsaved changes", { exact: true })).toBeHidden();
+    await panel.getByRole("tab", { name: /^Overview/ }).click();
+    await expect(panel.getByRole("button", { name: "Edit Replicas", exact: true })).toHaveText("3");
     // YAML-origin changes are reflected in the same Overview session.
     await panel.getByRole("tab", { name: /^YAML/ }).click();
     const manifest = `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\nspec:\n  replicas: 2\n  selector:\n    matchLabels: {app: ${name}}\n  template:\n    metadata:\n      labels: {app: ${name}}\n    spec:\n      containers:\n        - name: mirrored-pause\n          image: rancher/mirrored-pause:3.6\n`;
@@ -121,22 +142,7 @@ export function overviewTests(namespace: string) {
     );
     // Only this disposable e2e Cluster is addressed by env.ts. Preserve an existing fixture CRD.
     let createdCRD = false;
-    if (!crd) {
-      kubectl("apply", "-f", "../docs/overview/widget-crd.yaml");
-      createdCRD = true;
-      kubectl(
-        "wait",
-        "--for=condition=established",
-        "--timeout=30s",
-        "crd/widgets.sample.hukube.dev",
-      );
-    }
-    kubectlCreate({
-      apiVersion: "sample.hukube.dev/v1",
-      kind: "Widget",
-      metadata: { name, namespace },
-      spec: { size: 3 },
-    });
+    let createdResource = false;
     let installed = false;
     let saved = false;
     page.on("websocket", (socket) => {
@@ -162,6 +168,23 @@ export function overviewTests(namespace: string) {
       });
     });
     try {
+      if (!crd) {
+        kubectl("create", "-f", "../docs/overview/widget-crd.yaml");
+        createdCRD = true;
+      }
+      kubectl(
+        "wait",
+        "--for=condition=established",
+        "--timeout=30s",
+        "crd/widgets.sample.hukube.dev",
+      );
+      kubectlCreate({
+        apiVersion: "sample.hukube.dev/v1",
+        kind: "Widget",
+        metadata: { name, namespace },
+        spec: { size: 3 },
+      });
+      createdResource = true;
       await page.goto(`/#token=${engineToken}`);
       await page.getByRole("button", { name: new RegExp(clusterId) }).click();
       const panel = await openResource(page, namespace, "widgets.sample.hukube.dev", name);
@@ -188,7 +211,10 @@ export function overviewTests(namespace: string) {
       await expect(review).toBeHidden();
       await expect
         .poll(
-          () => JSON.parse(kubectl("-n", namespace, "get", "widget", name, "-o", "json")).spec.size,
+          () =>
+            JSON.parse(
+              kubectl("-n", namespace, "get", "widgets.sample.hukube.dev", name, "-o", "json"),
+            ).spec.size,
         )
         .toBe(4);
       await expect.poll(() => saved, { message: "Resource Tab layout acknowledged" }).toBe(true);
@@ -229,7 +255,15 @@ export function overviewTests(namespace: string) {
           ).toBeVisible();
         }
       } finally {
-        kubectl("-n", namespace, "delete", "widget", name, "--ignore-not-found");
+        if (createdResource)
+          kubectl(
+            "-n",
+            namespace,
+            "delete",
+            "widgets.sample.hukube.dev",
+            name,
+            "--ignore-not-found",
+          );
         if (createdCRD) {
           kubectl("delete", "-f", "../docs/overview/widget-crd.yaml", "--ignore-not-found");
         }

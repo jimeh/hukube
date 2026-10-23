@@ -2,7 +2,7 @@ import { useEngine, useConnectionState } from "@hukube/engine-client/react";
 import type { Access, ResourceData } from "@hukube/engine-client";
 import type { SubscriptionState } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   startSession,
   followManifest,
@@ -14,6 +14,7 @@ import { metadata, parseManifest } from "./yaml.ts";
 import { guardPanel, useUnsavedEdits } from "./unsaved-edits.ts";
 import { useReview } from "./use-review.ts";
 import {
+  secretPath,
   fieldReason,
   inlineReason,
   parseInput,
@@ -30,6 +31,7 @@ export interface PendingField {
   raw: string;
   error?: string;
   original: unknown;
+  openingText: string;
   lastWritten: unknown;
   newKey?: boolean;
 }
@@ -92,15 +94,11 @@ export function usePanelEdit({
       ),
   );
   const [seenLive, setSeenLive] = useState({ live, deleted });
-  if (seenLive.live !== live || seenLive.deleted !== deleted) {
+  const frozen =
+    !!state.field || review.pending || review.unknownOutcome || review.state?.phase === "applying";
+  if (!frozen && (seenLive.live !== live || seenLive.deleted !== deleted)) {
     setSeenLive({ live, deleted });
-    if (
-      state.session &&
-      !state.field &&
-      !review.pending &&
-      !review.unknownOutcome &&
-      review.state?.phase !== "applying"
-    ) {
+    if (state.session) {
       const session = followManifest(state.session, live, deleted);
       setState({ ...state, session, definition: session ? state.definition : undefined });
     }
@@ -130,11 +128,21 @@ export function usePanelEdit({
             : !isDirty(state.session)
               ? "No unsaved edits"
               : undefined;
-  const parsed = state.session ? parseManifest(state.session.text) : undefined;
-  const inlineBlocked = state.session ? inlineReason(state.session.text) : undefined;
-  const notice = state.session
-    ? sessionNotice(state.session, live, deleted, label, kind)
-    : undefined;
+  const draftText = state.session?.text;
+  const parsed = useMemo(
+    () => (draftText === undefined ? undefined : parseManifest(draftText)),
+    [draftText],
+  );
+  const inlineBlocked = useMemo(() => (parsed ? inlineReason(parsed) : undefined), [parsed]);
+  const uid = state.session?.uid;
+  const baseText = state.session?.baseText;
+  const notice = useMemo(
+    () =>
+      uid !== undefined && baseText !== undefined
+        ? sessionNotice({ uid, baseText }, live, deleted, label, kind)
+        : undefined,
+    [uid, baseText, live, deleted, label, kind],
+  );
   const endReview = review.end;
   const hadSession = useRef(false);
   useLayoutEffect(() => {
@@ -191,10 +199,12 @@ export function usePanelEdit({
   const changeText = (text: string) => {
     setState((previous) => {
       if (!previous.session) return previous;
-      const object = parseManifest(text).object;
       const field =
         previous.field &&
-        semanticEqual(valueAt(object, previous.field.path), previous.field.lastWritten)
+        semanticEqual(
+          valueAt(parseManifest(text).object, previous.field.path),
+          previous.field.lastWritten,
+        )
           ? previous.field
           : undefined;
       return {
@@ -211,11 +221,18 @@ export function usePanelEdit({
     control: EditControl,
     definition: Definition,
   ) => {
-    if (current.current.field?.error || current.current.field?.newKey || !start()) return false;
+    if (
+      secretPath(address?.type ?? "", path) ||
+      current.current.field?.error ||
+      current.current.field?.newKey ||
+      !start()
+    )
+      return false;
     const previous = current.current;
     const session = previous.session!;
-    const object = parseManifest(session.text).object;
-    if (inlineReason(session.text) || fieldReason(object, path, control)) return false;
+    const analysis = parsed && session.text === draftText ? parsed : parseManifest(session.text);
+    const object = analysis.object;
+    if (inlineReason(analysis) || fieldReason(object, path, control)) return false;
     const original = valueAt(object, path);
     const next = {
       ...previous,
@@ -234,6 +251,7 @@ export function usePanelEdit({
               ? String(original)
               : "",
         original,
+        openingText: session.text,
         lastWritten: original,
       },
       generation: previous.generation + 1,
@@ -247,13 +265,15 @@ export function usePanelEdit({
     if (!previous.field || !previous.session) return;
     if (previous.field.newKey) {
       const map = valueAt(parseManifest(previous.session.text).object, previous.field.path);
-      const error = !raw
-        ? "Enter a non-empty key."
-        : ["__proto__", "prototype", "constructor"].includes(raw)
-          ? "This key is not supported inline."
-          : map && typeof map === "object" && Object.hasOwn(map, raw)
-            ? "This key already exists."
-            : undefined;
+      const error = secretPath(address?.type ?? "", [...previous.field.path, raw])
+        ? "Sensitive values are read-only in Overview."
+        : !raw
+          ? "Enter a non-empty key."
+          : ["__proto__", "prototype", "constructor"].includes(raw)
+            ? "This key is not supported inline."
+            : map && typeof map === "object" && Object.hasOwn(map, raw)
+              ? "This key already exists."
+              : undefined;
       const next = {
         ...previous,
         field: { ...previous.field, raw, error },
@@ -294,6 +314,7 @@ export function usePanelEdit({
             previous.field.path,
             previous.field.original,
             { ...previous.field.control, remove: true },
+            previous.field.openingText,
           ),
           refusal: undefined,
         };
@@ -319,6 +340,7 @@ export function usePanelEdit({
         raw: "",
         error: "Enter a non-empty key.",
         original: undefined,
+        openingText: previous.session!.text,
         lastWritten: valueAt(parseManifest(previous.session!.text).object, path),
         newKey: true,
       },
@@ -362,7 +384,7 @@ export function usePanelEdit({
     control: EditControl,
     definition: Definition,
   ) => {
-    if (!start()) return;
+    if (secretPath(address?.type ?? "", path) || !start()) return;
     const previous = current.current;
     if (!previous.session) return;
     const text = updateDraft(

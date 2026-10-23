@@ -67,6 +67,7 @@ export function createRegistryStore(
   const listeners = new Set<() => void>();
   let watch: { close(): void } | undefined;
   let epoch = 0;
+  let freshSnapshot = false;
   let stopState: (() => void) | undefined;
   let readWaiters: { resolve(value: RegistrySnapshot): void; reject(error: unknown): void }[] = [];
   const show = (next: RegistrySnapshot) => {
@@ -74,11 +75,10 @@ export function createRegistryStore(
     for (const listener of listeners) listener();
   };
   const fail = (error: unknown) => {
+    freshSnapshot = false;
     show({
       ...current,
       status: "error",
-      registry: undefined,
-      revision: undefined,
       error: String(error),
     });
     for (const waiter of readWaiters.splice(0)) waiter.reject(error);
@@ -86,13 +86,8 @@ export function createRegistryStore(
   const open = () => {
     watch?.close();
     const generation = ++epoch;
-    show({
-      ...current,
-      status: "loading",
-      registry: undefined,
-      revision: undefined,
-      error: undefined,
-    });
+    freshSnapshot = false;
+    if (current.status === "loading") show({ ...current, error: undefined });
     watch = client.subscribe(
       "settings.watch",
       { key },
@@ -101,6 +96,7 @@ export function createRegistryStore(
           if (generation !== epoch) return;
           try {
             const next = snapshot(setting);
+            freshSnapshot = true;
             show(next);
             for (const waiter of readWaiters.splice(0)) waiter.resolve(next);
           } catch (error) {
@@ -122,6 +118,7 @@ export function createRegistryStore(
   const change = (type: string, source: string | undefined, observed: unknown): Promise<void> => {
     const run = async () => {
       let state = current;
+      if (!freshSnapshot && state.registry) state = await fresh();
       if (state.status !== "ready" || !state.registry || state.revision === undefined)
         throw new Error("Load the persisted definitions successfully before saving.");
       for (let attempt = 0; attempt < 4; attempt++) {

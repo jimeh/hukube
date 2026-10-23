@@ -1,7 +1,26 @@
-import { isAlias, isScalar, visit, parseDocument } from "yaml";
-import { isRecord, parseManifest, stringifyManifest, yamlOptions } from "../edit/yaml.ts";
+import { isAlias, isScalar, isMap, visit, parseDocument } from "yaml";
+import {
+  isRecord,
+  parseManifest,
+  stringifyManifest,
+  yamlOptions,
+  type ParsedManifest,
+} from "../edit/yaml.ts";
 import { protectedPath, type EditControl, type FieldPath } from "./definition.ts";
 
+/** Secret values stay protected regardless of the installed definition. */
+export function secretPath(type: string, path: FieldPath): boolean {
+  const annotation = [
+    "metadata",
+    "annotations",
+    "kubectl.kubernetes.io/last-applied-configuration",
+  ];
+  return (
+    type === "secrets" &&
+    (["data", "stringData"].includes(String(path[0])) ||
+      annotation.slice(0, path.length).every((key, i) => path[i] === key))
+  );
+}
 export function valueAt(value: unknown, path: readonly (string | number)[]): unknown {
   for (const key of path) {
     if (value === null || typeof value !== "object" || !Object.hasOwn(value, key)) return undefined;
@@ -20,8 +39,8 @@ export function semanticEqual(a: unknown, b: unknown): boolean {
     );
   return false;
 }
-export function inlineReason(text: string): string | undefined {
-  const parsed = parseManifest(text);
+export function inlineReason(source: string | ParsedManifest): string | undefined {
+  const parsed = typeof source === "string" ? parseManifest(source) : source;
   if (!parsed.object) return "Fix invalid YAML in the YAML Facet before editing inline.";
   let unsafe = false;
   visit(parsed.document, {
@@ -114,18 +133,28 @@ export function updateDraft(
   path: FieldPath,
   value: unknown,
   control: EditControl,
+  restoreText = baseText,
 ): string {
-  const reason = inlineReason(text);
-  if (reason) throw new Error(reason);
   const parsed = parseManifest(text);
+  const reason = inlineReason(parsed);
+  if (reason) throw new Error(reason);
   const blocked = fieldReason(parsed.object, path, control);
   if (blocked) throw new Error(blocked);
   if (value === undefined && !control.remove) throw new Error("This field cannot be removed.");
   // Preserve untouched integer lexemes beyond JavaScript precision while changing the AST.
   // The controller's JSON values still follow the Engine's existing number-aware patch contract.
   const document = parseDocument(text, { ...yamlOptions, intAsBigInt: true });
-  if (value === undefined) document.deleteIn(path);
-  else document.setIn(path, document.createNode(value));
+  if (value === undefined) {
+    if (!document.hasIn(path)) return text;
+    document.deleteIn(path);
+    const original = parseManifest(restoreText).document;
+    for (let length = path.length - 1; length > 0; length--) {
+      const ancestor = path.slice(0, length);
+      const node = document.getIn(ancestor, true);
+      if (original.hasIn(ancestor) || !isMap(node) || node.items.length) break;
+      document.deleteIn(ancestor);
+    }
+  } else document.setIn(path, document.createNode(value));
   const next = stringifyManifest(document);
   return semanticEqual(parseManifest(next).object, parseManifest(baseText).object)
     ? baseText

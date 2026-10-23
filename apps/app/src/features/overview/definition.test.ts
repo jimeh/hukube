@@ -112,3 +112,30 @@ describe("invalid definitions", () => {
     expect(() => parseDefinition("{a: ".repeat(20) + "1" + "}".repeat(20))).toThrow(/nesting/);
   });
 });
+
+it("bundles only supported Pod and Job inline edits and retains controller template edits", () => {
+  const pod = bundledDefinitions.get("pods")!;
+  const job = bundledDefinitions.get("jobs.batch")!;
+  const fields = (selected: typeof pod) => selected.sections.flatMap((s) => s.fields);
+  const podFields = fields(pod);
+  expect(podFields.find((f) => f.id === "serviceAccount")).not.toHaveProperty("edit");
+  const containers = podFields.find((f) => f.type === "table" && f.id === "containers");
+  if (containers?.type !== "table") throw new Error("Missing containers");
+  expect(containers.columns.find((c) => c.id === "pullPolicy")).not.toHaveProperty("edit");
+  expect(containers.columns.find((c) => c.id === "image")?.edit).toEqual({ type: "string" });
+  expect(fields(job).find((f) => f.id === "completions")).not.toHaveProperty("edit");
+  const templateFields = fields(job).filter((field) => field.path.includes("template"));
+  for (const field of templateFields) expect(field).not.toHaveProperty("edit");
+  const templateColumns = templateFields.flatMap((field) =>
+    field.type === "table" ? field.columns : [],
+  );
+  for (const column of templateColumns) expect(column).not.toHaveProperty("edit");
+  for (const id of ["parallelism", "backoff"])
+    expect(fields(job).find((f) => f.id === id)).toHaveProperty("edit");
+  for (const type of ["deployments.apps", "cronjobs.batch"])
+    expect(
+      fields(bundledDefinitions.get(type)!).some(
+        (f) => f.type === "table" && f.columns.some((c) => c.id === "image" && c.edit),
+      ),
+    ).toBe(true);
+});

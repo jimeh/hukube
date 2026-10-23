@@ -31,12 +31,6 @@ sections:
             path:
               - imagePullPolicy
             format: badge
-            edit:
-              type: enum
-              choices:
-                - Always
-                - IfNotPresent
-                - Never
         empty: No containers
       - id: initContainers
         type: table
@@ -65,8 +59,6 @@ sections:
           - spec
           - serviceAccountName
         format: text
-        edit:
-          type: string
       - id: restartPolicy
         type: field
         label: Restart policy

@@ -80,8 +80,9 @@ The application refuses edits to `status`, `apiVersion`, `kind`, identity
 metadata (`name`, `namespace`), and server metadata (`managedFields`,
 `resourceVersion`, `uid`, `generation`, creation/deletion timestamps, deletion
 grace period, `selfLink`). Ancestor paths and full table/column paths are checked.
-Core Secret `data` and `stringData` are always masked and read-only, including
-custom definitions. Reveal is explicit; valid UTF-8 base64 is decoded, while
+Core Secret `data`, `stringData`, and the
+`kubectl.kubernetes.io/last-applied-configuration` annotation are always masked
+and read-only, including custom definitions and fields containing the annotation. Reveal is explicit; valid UTF-8 base64 is decoded, while
 binary values are labeled. Secret values are excluded from accessible names and
 tooltips. Definition exports contain definition source, never Resource values.
 
@@ -121,8 +122,17 @@ history when the editor has mounted. No new app shortcut is added.
 ## Widget example
 
 [widget.yaml](widget.yaml) is the installable definition.
-[widget-crd.yaml](widget-crd.yaml) is a complete CRD plus example Resource for a
-disposable Cluster. Apply the CRD and Resource to that Cluster using its explicit
-kubeconfig, then import `widget.yaml` through Settings. Open the Widget and edit
+[widget-crd.yaml](widget-crd.yaml) defines the CRD, and
+[widget-resource.yaml](widget-resource.yaml) is its example Resource. Install
+these into a disposable Cluster using its explicit kubeconfig, waiting for the
+CRD to become Established before creating the Resource:
+
+```sh
+kubectl --kubeconfig "$DISPOSABLE_KUBECONFIG" apply -f docs/overview/widget-crd.yaml
+kubectl --kubeconfig "$DISPOSABLE_KUBECONFIG" wait --for=condition=Established --timeout=30s crd/widgets.sample.hukube.dev
+kubectl --kubeconfig "$DISPOSABLE_KUBECONFIG" apply -f docs/overview/widget-resource.yaml
+```
+
+Then import `widget.yaml` through Settings. Open the Widget and edit
 Size, Message, Replicas, Enabled, Options, or an existing endpoint URL. Remove
 the custom definition to restore YAML fallback.

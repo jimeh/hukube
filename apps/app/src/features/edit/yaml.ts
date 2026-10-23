@@ -98,7 +98,20 @@ export function parseManifest(text: string): ParsedManifest {
   let object: Record<string, unknown> | undefined;
   if (!issues.length) {
     try {
-      object = document.toJS({ maxAliasCount: 100 }) as Record<string, unknown>;
+      const candidate = document.toJS({ maxAliasCount: 100 }) as Record<string, unknown>;
+      const active = new Set<object>();
+      const visited = new Set<object>();
+      const check = (value: unknown) => {
+        if (!value || typeof value !== "object") return;
+        if (active.has(value)) throw new Error("A Manifest cannot contain cyclic aliases.");
+        if (visited.has(value)) return;
+        active.add(value);
+        for (const child of Object.values(value)) check(child);
+        active.delete(value);
+        visited.add(value);
+      };
+      check(candidate);
+      object = candidate;
     } catch (error) {
       issues.push({ message: String(error), line: 1, column: 1, endLine: 1, endColumn: 2 });
     }

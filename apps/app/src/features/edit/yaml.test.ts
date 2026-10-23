@@ -104,3 +104,12 @@ describe("kubectl YAML", () => {
     );
   });
 });
+
+it("rejects cyclic aliases but accepts shared acyclic aliases", () => {
+  const cyclic = parseManifest("data: &data { self: *data }\n");
+  expect(cyclic.object).toBeUndefined();
+  expect(cyclic.issues[0]?.message).toMatch(/cyclic/i);
+  const shared = parseManifest("data: &data { greeting: hello }\nother: *data\n");
+  expect(shared.issues).toEqual([]);
+  expect(shared.object?.["data"]).toEqual(shared.object?.["other"]);
+});
