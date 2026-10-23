@@ -354,13 +354,19 @@ export function usePanelEdit({
     const field = previous.field;
     if (!field?.newKey || field.error || !previous.session) return;
     const path = [...field.path, field.raw];
-    const text = updateDraft(
-      previous.session.text,
-      previous.session.baseText,
-      path,
-      "",
-      field.control,
-    );
+    let text: string;
+    try {
+      text = updateDraft(previous.session.text, previous.session.baseText, path, "", field.control);
+    } catch (error) {
+      const next = {
+        ...previous,
+        field: { ...field, error: error instanceof Error ? error.message : String(error) },
+        generation: previous.generation + 1,
+      };
+      current.current = next;
+      setState(next);
+      return;
+    }
     const next = {
       ...previous,
       session: { ...previous.session, text },

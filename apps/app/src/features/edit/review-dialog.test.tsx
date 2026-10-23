@@ -349,7 +349,8 @@ it.each([
 });
 it("explains an unsent apply and keeps the accepted review usable", async () => {
   const h = harness(ready, failure("not_connected"));
-  fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+  await screen.findByText("The Cluster accepts this edit.");
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
   expect(await screen.findByText("Not connected to the Engine. Nothing was sent.")).toBeDefined();
   expect(h.refused).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Apply" }).hasAttribute("disabled")).toBe(false);
@@ -365,7 +366,8 @@ it("names a refusal without an API server reason as hukube's refusal", async () 
 
 it("keeps a lost apply outcome unknown when a repeat conflicts with the dialog open", async () => {
   const h = harness(ready, failure("disconnected"));
-  fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+  await screen.findByText("The Cluster accepts this edit.");
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
   await screen.findByText(/Lost the connection/);
   h.setApply(failure("conflict"));
   h.reconnect();
@@ -385,7 +387,8 @@ it.each(["forbidden", "invalid", "not_found"] as const)(
   "keeps a lost apply outcome unknown when a repeat is refused with %s",
   async (code) => {
     const h = harness(ready, failure("disconnected"));
-    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+    await screen.findByText("The Cluster accepts this edit.");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await screen.findByText(/Lost the connection/);
     h.setApply(failure(code));
     h.reconnect();

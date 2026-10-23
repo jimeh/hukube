@@ -325,3 +325,32 @@ it.each([false, true])(
     expect(h.result.current.dirty).toBe(existed);
   },
 );
+
+it.each([
+  { name: "invalid YAML", suffix: "extra: [\n", error: /Fix invalid YAML/ },
+  {
+    name: "aliased YAML",
+    suffix: "extra: &value {name: example}\ncopy: *value\n",
+    error: /Edit aliases, anchors, or merge keys in YAML/,
+  },
+])("reports an add-key error after $name and recovers after repair", async ({ suffix, error }) => {
+  const h = setup();
+  await act(async () => h.result.current.beginNewKey(["data"], "Data", definition));
+  await act(async () => h.result.current.input("key"));
+  const original = h.result.current.session!.text;
+  const unsafe = original + suffix;
+  await act(async () => h.result.current.changeText(unsafe));
+  expect(h.result.current.field).toMatchObject({ newKey: true, raw: "key", error: undefined });
+  await act(async () => expect(() => h.result.current.addKey()).not.toThrow());
+  expect(h.result.current.field?.error).toMatch(error);
+  expect(h.result.current.field).toMatchObject({ newKey: true, raw: "key" });
+  expect(h.result.current.session?.text).toBe(unsafe);
+  expect(useUnsavedEdits.getState().entries.size).toBe(1);
+  expect(h.request).not.toHaveBeenCalled();
+
+  await act(async () => h.result.current.changeText(original));
+  await act(async () => h.result.current.input("key"));
+  await act(async () => h.result.current.addKey());
+  expect(h.result.current.parsed?.object?.["data"]).toEqual({ key: "" });
+  expect(h.result.current.field).toMatchObject({ newKey: false, error: undefined });
+});
