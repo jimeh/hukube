@@ -112,7 +112,7 @@ export function FacetSwitcher({
               })}
             >
               {label}
-              {id === "yaml" && dirty && (
+              {(id === "yaml" || id === "overview") && dirty && (
                 <span className="size-1.5 rounded-full bg-foreground" aria-label="Unsaved edits" />
               )}
               {Badge && (
@@ -144,7 +144,7 @@ export function FacetSwitcher({
                   })}
                 >
                   {label}
-                  {id === "yaml" && dirty && (
+                  {(id === "yaml" || id === "overview") && dirty && (
                     <span
                       className="size-1.5 rounded-full bg-foreground"
                       aria-label="Unsaved edits"

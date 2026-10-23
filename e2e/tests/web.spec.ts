@@ -8,6 +8,8 @@ import { createHash } from "node:crypto";
 
 import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
+import { overviewTests } from "./overview.ts";
+
 import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
@@ -1659,3 +1661,5 @@ test("shows a readable unknown-field refusal and keeps the YAML editor usable", 
   await discard.getByRole("button", { name: "Discard edits" }).click();
   await expect(edit).toBeFocused();
 });
+
+overviewTests(namespace);

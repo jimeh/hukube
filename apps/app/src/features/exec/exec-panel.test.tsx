@@ -43,7 +43,7 @@ vi.mock("@hukube/engine-client/react", () => {
       let closed = false;
       const value = mocked.setting;
       queueMicrotask(() => {
-        if (!closed) listener.data({ key: "exec/commands", value });
+        if (!closed) listener.data({ revision: "", key: "exec/commands", value });
       });
       return {
         close: () => {

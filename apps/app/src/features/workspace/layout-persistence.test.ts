@@ -53,7 +53,11 @@ afterEach(() => vi.useRealTimers());
 describe("persistLayout", () => {
   it("restores the stored layout and saves later changes after a pause", () => {
     const s = setup();
-    s.deliver({ key: "workspace/c", value: { version: 1, dockview: layout("stored") } });
+    s.deliver({
+      revision: "",
+      key: "workspace/c",
+      value: { version: 1, dockview: layout("stored") },
+    });
     expect(s.current()).toEqual(layout("stored"));
 
     s.change("a");
@@ -73,7 +77,7 @@ describe("persistLayout", () => {
 
   it("writes a pending change when stopped instead of dropping it", () => {
     const s = setup();
-    s.deliver({ key: "workspace/c", value: null });
+    s.deliver({ revision: "", key: "workspace/c", value: null });
     s.change("rearranged");
     s.dispose();
     expect(s.puts).toEqual([

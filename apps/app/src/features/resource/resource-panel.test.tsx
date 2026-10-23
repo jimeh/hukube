@@ -107,7 +107,7 @@ it("keeps the last Manifest and a Deleted badge across Facets, or marks never-fo
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
-  const panel = (facet?: "yaml" | "events") => (
+  const panel = (facet: "yaml" | "events" = "yaml") => (
     <WorkspaceContext value={workspace}>
       <ResourcePanel
         api={api}
@@ -142,7 +142,7 @@ it("chooses a Facet with complete params and keeps YAML mounted without its cont
     openList: vi.fn<() => void>(),
     openResource: vi.fn<() => void>(),
   };
-  const panel = (facet?: "yaml" | "events") => (
+  const panel = (facet: "yaml" | "events" = "yaml") => (
     <WorkspaceContext value={workspace}>
       <ResourcePanel
         api={api}
@@ -180,7 +180,16 @@ function subscriptionPanel(type = "pods") {
   };
   return (
     <WorkspaceContext value={workspace}>
-      <ResourcePanel api={api} params={{ uri: formatResourceUri(address), preview: true }} />
+      <ResourcePanel
+        api={api}
+        params={{
+          uri: formatResourceUri({
+            ...address,
+            facet: "yaml",
+          }),
+          preview: true,
+        }}
+      />
     </WorkspaceContext>
   );
 }
@@ -288,7 +297,16 @@ it("offers every Facet in More Facets only while overflowing and changes the URI
   };
   const { container } = render(
     <WorkspaceContext value={workspace}>
-      <ResourcePanel api={api} params={{ uri: formatResourceUri(address), preview: true }} />
+      <ResourcePanel
+        api={api}
+        params={{
+          uri: formatResourceUri({
+            ...address,
+            facet: address.facet,
+          }),
+          preview: true,
+        }}
+      />
     </WorkspaceContext>,
   );
   expect(screen.queryByRole("button", { name: "More Facets" })).toBeNull();
@@ -649,6 +667,7 @@ it("updates a clean editor when the live editable Manifest changes", async () =>
           uri: formatResourceUri({
             cluster: "c",
             type: "configmaps",
+            facet: "yaml",
             namespace: "ns",
             name: "web",
           }),

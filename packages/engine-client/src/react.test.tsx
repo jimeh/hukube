@@ -74,7 +74,7 @@ describe("useSubscription", () => {
     expect(result.current.stale).toBe(false);
     expect(result.current.data).toBeUndefined();
 
-    const data = { key: "a", value: 1 };
+    const data = { revision: "", key: "a", value: 1 };
     act(() => client.listener!.data(data));
     expect(result.current.stale).toBe(false);
     expect(result.current.data).toEqual(data);
@@ -82,7 +82,7 @@ describe("useSubscription", () => {
 
   it("is stale in the params-changing render until new data arrives", () => {
     const { client, renders, result, rerender } = renderSubscription();
-    const oldData = { key: "a", value: 1 };
+    const oldData = { revision: "", key: "a", value: 1 };
     act(() => client.listener!.data(oldData));
 
     const firstChangedRender = renders.length;
@@ -93,7 +93,7 @@ describe("useSubscription", () => {
     expect(client.updates).toEqual([{ key: "b" }]);
     expect(client.subscriptions).toHaveLength(1);
 
-    const newData = { key: "b", value: 2 };
+    const newData = { revision: "", key: "b", value: 2 };
     act(() => client.listener!.data(newData));
     expect(result.current.stale).toBe(false);
     expect(result.current.data).toEqual(newData);
@@ -101,7 +101,7 @@ describe("useSubscription", () => {
 
   it("is not stale when params return to those answered by the held data", () => {
     const { client, renders, result, rerender } = renderSubscription();
-    const data = { key: "a", value: 1 };
+    const data = { revision: "", key: "a", value: 1 };
     act(() => client.listener!.data(data));
 
     rerender({ key: "b" });
@@ -116,7 +116,7 @@ describe("useSubscription", () => {
 
   it("keeps old data stale when an update receives an error", () => {
     const { client, result, rerender } = renderSubscription();
-    const data = { key: "a", value: 1 };
+    const data = { revision: "", key: "a", value: 1 };
     act(() => client.listener!.data(data));
 
     rerender({ key: "b" });

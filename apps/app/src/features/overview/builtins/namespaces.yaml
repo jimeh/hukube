@@ -1,0 +1,53 @@
+version: 1
+resourceType: namespaces
+apiVersions:
+  - v1
+title: Namespace
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: phase
+        type: field
+        label: Phase
+        path:
+          - status
+          - phase
+        format: badge
+      - id: finalizers
+        type: field
+        label: Finalizers
+        path:
+          - spec
+          - finalizers
+        format: multiline
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

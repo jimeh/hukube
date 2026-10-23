@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jimeh/hukube/engine/internal/settings"
+
 	"github.com/jimeh/hukube/engine/internal/cluster"
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
@@ -99,8 +101,12 @@ func init() {
 	handleRequest(protocol.RequestClustersList, func(_ context.Context, srv *Server, _ protocol.None) ([]protocol.Cluster, error) {
 		return srv.cfg.Source.Clusters()
 	})
-	handleRequest(protocol.RequestSettingsPut, func(_ context.Context, srv *Server, p protocol.Setting) (protocol.None, error) {
-		return protocol.None{}, srv.cfg.Settings.Put(p.Key, p.Value)
+	handleRequest(protocol.RequestSettingsPut, func(_ context.Context, srv *Server, p protocol.SettingPut) (protocol.None, error) {
+		err := srv.cfg.Settings.CompareAndPut(p.Key, p.Value, p.IfRevision)
+		if errors.Is(err, settings.ErrConflict) {
+			return protocol.None{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeConflict, Message: err.Error()}
+		}
+		return protocol.None{}, err
 	})
 	handleTopic(protocol.TopicClusterStatus, func(ctx context.Context, srv *Server, p protocol.ClusterParams, notify func()) (*live[protocol.ClusterStatus], error) {
 		c, err := srv.cfg.Clusters.Get(p.Cluster)
@@ -204,11 +210,11 @@ func init() {
 	handleTopic(protocol.TopicSettingsWatch, func(ctx context.Context, srv *Server, p protocol.SettingKey, notify func()) (*live[protocol.Setting], error) {
 		return &live[protocol.Setting]{
 			compute: func() (protocol.Setting, bool, error) {
-				v, err := srv.cfg.Settings.Get(p.Key)
+				v, revision, err := srv.cfg.Settings.Snapshot(p.Key)
 				if err != nil {
 					return protocol.Setting{}, false, err
 				}
-				return protocol.Setting{Key: p.Key, Value: v}, true, nil
+				return protocol.Setting{Key: p.Key, Value: v, Revision: revision}, true, nil
 			},
 			stop: forward(ctx, notify, func() (<-chan struct{}, func()) { return srv.cfg.Settings.Watch(p.Key) }),
 		}, nil

@@ -13,7 +13,7 @@ function setup() {
       expect(params.key).toBe("exec/commands");
       const watch = {
         closed: false,
-        data: (value: unknown) => listener.data({ key: params.key, value }),
+        data: (value: unknown) => listener.data({ revision: "", key: params.key, value }),
         fail: () => listener.error({ code: "internal", message: "failed" }),
       };
       watches.push(watch);

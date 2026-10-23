@@ -6,13 +6,16 @@ import type {
   ResourceType,
 } from "@hukube/engine-client";
 import type { SubscriptionState } from "@hukube/engine-client/react";
-import type { ResourceAddress, TypeKey } from "@hukube/k8s";
+import type { PanelEdit } from "../edit/use-panel-edit.ts";
+import type { Definition } from "../overview/definition.ts";
+import type { Facet, ResourceAddress, TypeKey } from "@hukube/k8s";
 
 /** The Resource Type used to decide which Facets apply. */
 export interface FacetTarget {
   type: TypeKey;
   resourceType?: ResourceType;
   logs?: boolean;
+  overview?: boolean;
 }
 
 /** Resource state and switcher controls shared by a Facet and its badge. */
@@ -37,6 +40,9 @@ export interface FacetProps {
   visible: boolean;
   /** The switcher row element for the showing Facet's own controls. */
   controls: HTMLElement | null;
+  edit?: PanelEdit;
+  definition?: Definition;
+  onFacet?: (facet: Facet) => void;
   editAccess?: Access;
   onEdit?: () => void;
 }

@@ -13,6 +13,8 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import type { DragEvent } from "react";
 
+import { OverviewSettings } from "../overview/definition-manager.tsx";
+
 import { guardWorkspace } from "../edit/unsaved-edits.ts";
 
 import { useHost } from "@/lib/host.tsx";
@@ -115,6 +117,7 @@ export function ClusterTabs() {
         <TooltipContent>Open a cluster</TooltipContent>
       </Tooltip>
       <div className="ml-auto flex items-center pr-1">
+        <OverviewSettings />
         <ThemeToggle />
       </div>
     </nav>

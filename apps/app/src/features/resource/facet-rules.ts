@@ -2,6 +2,7 @@ import type { ResourceData, ResourceEventsParams } from "@hukube/engine-client";
 import type { SubscriptionState } from "@hukube/engine-client/react";
 import { formatResourceUri, parseResourceUri, type ResourceAddress } from "@hukube/k8s";
 
+import type { FacetTarget } from "./facet-props.ts";
 import { resolveFacet } from "./facets.ts";
 
 /** Wait for the Manifest's first answer and keep the last incarnation after deletion. */
@@ -34,14 +35,17 @@ export function resourceEventsParams(
 }
 
 /** A new Resource tab inherits the Pane's active tab's Facet unless its address names one. */
-export function newResourceUri(uri: string, activeUri: string | undefined): string {
+export function newResourceUri(
+  uri: string,
+  activeUri: string | undefined,
+  target?: FacetTarget,
+  source?: FacetTarget,
+): string {
   const address = parseResourceUri(uri);
   const active = activeUri ? parseResourceUri(activeUri) : undefined;
-  if (!address || address.facet || !active) return uri;
-  return formatResourceUri({
-    ...address,
-    facet: resolveFacet(resolveFacet(active.facet, { type: active.type }), {
-      type: address.type,
-    }),
-  });
+  if (!address || address.facet || !active?.facet) return uri;
+  if (resolveFacet(active.facet, source ?? { type: active.type }) !== active.facet) return uri;
+  const destination = target ?? { type: address.type };
+  if (resolveFacet(active.facet, destination) !== active.facet) return uri;
+  return formatResourceUri({ ...address, facet: active.facet });
 }

@@ -14,19 +14,10 @@ import { Skeleton } from "@hukube/ui/components/skeleton";
 import { lazy, Suspense, useMemo, useRef, useState, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 
-import { useEngine, useConnectionState } from "@hukube/engine-client/react";
-import {
-  isDirty,
-  startSession,
-  followManifest,
-  sessionNotice,
-  type EditSession,
-} from "../edit/session.ts";
-import { parseManifest, metadata } from "../edit/yaml.ts";
+import { usePanelEdit, type PanelEdit } from "../edit/use-panel-edit.ts";
+import { parseManifest } from "../edit/yaml.ts";
 import { fieldIssue, refusalLines } from "../edit/field-paths.ts";
-import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { copyText } from "../edit/clipboard.ts";
-import { useReview } from "../edit/use-review.ts";
 import { ReviewDialog } from "../edit/review-dialog.tsx";
 
 import type { FacetProps } from "./facet-props.ts";
@@ -37,78 +28,36 @@ import type { YamlEditorHandle } from "./yaml-editor.tsx";
 const YamlEditor = lazy(() => import("./yaml-editor.tsx"));
 
 /** Shows the last Manifest and places its controls in the switcher while visible. */
-export function YamlFacet({
+function SharedYamlFacet({
   address,
   kind,
   manifest,
   lastObject,
   showing,
   controls,
-  panelId,
-  editAccess,
-  onEdit,
-}: FacetProps) {
+  edit,
+}: FacetProps & { edit: PanelEdit }) {
   const [showManagedFields, setShowManagedFields] = useState(false);
   const editor = useRef<YamlEditorHandle>(null);
   const editButton = useRef<HTMLButtonElement>(null);
-  const focusEdit = useRef(false);
   const [copied, setCopied] = useState(false);
-  const client = useEngine();
-  const connection = useConnectionState();
-  const [session, setSession] = useState<EditSession>();
-  const [applied, setApplied] = useState(false);
+  const {
+    session,
+    applied,
+    dirty,
+    review,
+    gone,
+    notice,
+    reviewReason,
+    editReason,
+    changeText,
+    cancel,
+  } = edit;
   const [copyError, setCopyError] = useState<string>();
-  const dirty = isDirty(session);
-  const label = `${kind} ${address.name}`;
-  const live = manifest.data?.object;
-  const deleted = !!manifest.data?.deleted;
-  const [seenLive, setSeenLive] = useState({ live, deleted });
-  if (seenLive.live !== live || seenLive.deleted !== deleted) {
-    setSeenLive({ live, deleted });
-    if (session) setSession(followManifest(session, live, deleted));
-  }
-  useEffect(() => {
-    if (!applied) return;
-    const timer = setTimeout(() => setApplied(false), 4000);
-    return () => clearTimeout(timer);
-  }, [applied]);
-  const submittedText = useRef<string | undefined>(undefined);
-  const review = useReview(
-    client,
-    live,
-    () => {
-      setSession((previous) => {
-        if (previous?.text !== submittedText.current) return previous;
-        focusEdit.current = true;
-        return undefined;
-      });
-      setApplied(true);
-    },
-    (refusal) => setSession((previous) => (previous ? { ...previous, refusal } : previous)),
-  );
-  useEffect(() => {
-    if ((!dirty && !review.pending && !review.unknownOutcome) || !session) {
-      useUnsavedEdits.getState().set(panelId);
-      return;
-    }
-    useUnsavedEdits.getState().set(panelId, {
-      cluster: address.cluster,
-      label,
-      read: () => session.text,
-      pendingApply: review.pending || review.unknownOutcome,
-    });
-    return () => useUnsavedEdits.getState().set(panelId);
-  }, [dirty, session, panelId, address.cluster, label, review.pending, review.unknownOutcome]);
-  const endReview = review.end;
-  const hadSession = useRef(false);
   useLayoutEffect(() => {
-    if (hadSession.current && !session) endReview();
-    hadSession.current = !!session;
-    if (!session && focusEdit.current) {
-      focusEdit.current = false;
-      editButton.current?.focus();
-    }
-  }, [session, endReview]);
+    if (showing)
+      edit.setFocus(() => (session ? editor.current?.focus() : editButton.current?.focus()));
+  }, [showing, edit, session]);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 2000);
@@ -126,63 +75,10 @@ export function YamlFacet({
       return issue ? [issue] : [];
     }) ?? [];
   const issues = session ? [...parsed.issues, ...refusalIssues] : [];
-  const gone = !!session && (deleted || (!!live && metadata(live)["uid"] !== session.uid));
-  const writing =
-    review.state?.phase === "applying" ||
-    review.state?.phase === "disconnected" ||
-    review.state?.phase === "applied";
-  const reviewReason = writing
-    ? "Waiting for the apply result"
-    : gone
-      ? "Your edits cannot be applied."
-      : connection !== "open"
-        ? "Reconnecting to the Engine"
-        : !dirty
-          ? "No unsaved edits"
-          : undefined;
   const reviewChanges = () => {
-    if (!session || reviewReason) return;
-    const current = parseManifest(session.text);
-    setParsedText(session.text);
-    if (!current.object) {
-      editor.current?.focus(current.issues[0]);
-      return;
-    }
-    submittedText.current = session.text;
-    review.begin({
-      cluster: address.cluster,
-      type: address.type,
-      namespace: address.namespace,
-      name: address.name,
-      uid: session.uid,
-      base: session.base,
-      manifest: current.object,
-    });
+    if (session) setParsedText(session.text);
+    edit.reviewChanges(() => editor.current?.focus(parseManifest(session?.text ?? "").issues[0]));
   };
-  const cancel = () =>
-    guardPanel(panelId, () => {
-      review.end();
-      focusEdit.current = true;
-      setSession(undefined);
-    });
-  const editReason =
-    !live || deleted
-      ? "The Manifest is not available."
-      : editAccess?.allowed === false
-        ? (editAccess.reason ?? "Not permitted")
-        : undefined;
-  const changeText = (text: string) =>
-    setSession((previous) => (previous ? { ...previous, text, refusal: undefined } : previous));
-  const sessionUid = session?.uid;
-  const baseText = session?.baseText;
-  // Not on every keystroke: the notice depends on what the edit started from, not on its text.
-  const notice = useMemo(
-    () =>
-      sessionUid === undefined || baseText === undefined
-        ? undefined
-        : sessionNotice({ uid: sessionUid, baseText }, live, deleted, label, kind),
-    [sessionUid, baseText, live, deleted, label, kind],
-  );
   const refusal = session?.refusal;
   const yamlError = parsedText === session?.text && !!parsed.issues.length;
   const unconfirmed = review.unknownOutcome && !review.pending;
@@ -295,10 +191,7 @@ export function YamlFacet({
                         aria-disabled={!!editReason}
                         className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
                         onClick={() => {
-                          if (live && !editReason) {
-                            setSession(startSession(live));
-                            onEdit?.();
-                          }
+                          edit.start();
                         }}
                       />
                     }
@@ -388,13 +281,6 @@ export function YamlFacet({
           {copyError && <p role="alert">{copyError}</p>}
         </div>
       )}
-      <ReviewDialog
-        review={review}
-        cluster={address.cluster}
-        label={label}
-        namespace={address.namespace}
-        onBack={() => editor.current?.focus()}
-      />
       <div className="relative min-h-0 flex-1">
         {applied && (
           <output className="pointer-events-none absolute top-2 right-3 z-10 flex items-center gap-1 rounded-full border border-success/30 bg-popover px-2 py-1 text-xs text-foreground shadow-sm">
@@ -411,6 +297,8 @@ export function YamlFacet({
             <YamlEditor
               ref={editor}
               value={session?.text ?? yaml}
+              baseText={session?.baseText}
+              editGroup={edit.field ? JSON.stringify(edit.field.path) : undefined}
               editing={!!session}
               dirty={dirty && !reviewReason}
               issues={parsedText === session?.text ? issues : []}
@@ -438,5 +326,29 @@ function EditorSkeleton() {
       <Skeleton className="h-3 w-64" />
       <Skeleton className="h-3 w-52" />
     </div>
+  );
+}
+
+/** Standalone ownership is retained for embedders; ResourcePanel supplies its shared owner. */
+export function YamlFacet(props: FacetProps) {
+  return props.edit ? (
+    <SharedYamlFacet {...props} edit={props.edit} />
+  ) : (
+    <StandaloneYamlFacet {...props} />
+  );
+}
+function StandaloneYamlFacet(props: FacetProps) {
+  const edit = usePanelEdit(props);
+  return (
+    <>
+      <SharedYamlFacet {...props} edit={edit} />
+      <ReviewDialog
+        review={edit.review}
+        cluster={props.address.cluster}
+        label={`${props.kind} ${props.address.name}`}
+        namespace={props.address.namespace}
+        onBack={() => edit.returnFocus()}
+      />
+    </>
   );
 }

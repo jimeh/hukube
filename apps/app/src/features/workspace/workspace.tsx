@@ -1,4 +1,4 @@
-import { formatResourceUri, type TypeKey } from "@hukube/k8s";
+import { formatResourceUri, parseResourceUri, type TypeKey } from "@hukube/k8s";
 import { useEngine, useSubscription } from "@hukube/engine-client/react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import {
@@ -7,11 +7,13 @@ import {
   type DockviewTheme,
   type IDockviewPanelProps,
 } from "dockview-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 
 import { clusterScope } from "@/features/clusters/cluster-color.ts";
 import { GoToResource } from "@/features/go-to-resource/go-to-resource.tsx";
 import { ResourceListPanel } from "@/features/resource-list/resource-list-panel.tsx";
+import { useRegistry } from "../overview/registry.ts";
+import { matches } from "../overview/definition.ts";
 import { newResourceUri } from "@/features/resource/facet-rules.ts";
 import { ResourcePanel } from "@/features/resource/resource-panel.tsx";
 import { TypeSidebar } from "@/features/resource-types/type-sidebar.tsx";
@@ -59,6 +61,7 @@ const tabComponents = { tab: PanelTab };
  */
 export function Workspace({ cluster, active }: { cluster: string; active: boolean }) {
   const engine = useEngine();
+  const { snapshot: overviewRegistry } = useRegistry();
   const { data: status } = useSubscription("cluster.status", { cluster });
   const { data: typeList } = useSubscription("cluster.types", { cluster });
   const types = useMemo(() => new Map((typeList ?? []).map((t) => [t.key, t])), [typeList]);
@@ -107,6 +110,22 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
     return () => d.dispose();
   }, [api]);
 
+  const targetFor = useCallback(
+    (key: TypeKey) => {
+      const resourceType = types.get(key);
+      const definition = overviewRegistry.definitions.get(key);
+      const version = resourceType
+        ? `${resourceType.group ? resourceType.group + "/" : ""}${resourceType.version}`
+        : undefined;
+      return {
+        type: key,
+        resourceType,
+        overview: !!definition && matches(definition, key, version) === true,
+      };
+    },
+    [types, overviewRegistry.definitions],
+  );
+
   const value = useMemo<WorkspaceValue>(
     () => ({
       cluster,
@@ -145,25 +164,32 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
           component: "resource",
           title: address.name,
           params: { uri },
-          deriveActiveTabParams: (params, activeParams) => ({
-            ...params,
-            uri: newResourceUri(
-              params.uri,
+          deriveActiveTabParams: (params, activeParams) => {
+            const activeUri =
               activeParams &&
-                typeof activeParams === "object" &&
-                "uri" in activeParams &&
-                typeof activeParams.uri === "string"
+              typeof activeParams === "object" &&
+              "uri" in activeParams &&
+              typeof activeParams.uri === "string"
                 ? activeParams.uri
-                : undefined,
-            ),
-          }),
+                : undefined;
+            const activeAddress = activeUri ? parseResourceUri(activeUri) : undefined;
+            return {
+              ...params,
+              uri: newResourceUri(
+                params.uri,
+                activeUri,
+                targetFor(address.type),
+                activeAddress ? targetFor(activeAddress.type) : undefined,
+              ),
+            };
+          },
           preview: options?.preview ?? false,
           ...(options?.beside ? { beside: options.beside } : {}),
           ...(options?.pane ? { pane: options.pane } : {}),
         });
       },
     }),
-    [api, engine, cluster, active, status, types, activeListType],
+    [api, engine, cluster, active, status, types, activeListType, targetFor],
   );
 
   return (

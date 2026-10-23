@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "7d63fa4f263cf7ed";
+export const Hash = "7ca954f53ae545bf";
 
 //////////
 // source: protocol.go
@@ -549,8 +549,17 @@ export interface SettingKey {
  * Setting is a stored JSON value. A missing setting has a null Value.
  */
 export interface Setting {
+  revision: string;
   key: string;
   value: unknown;
+}
+/**
+ * SettingPut optionally guards a write against the revision read by its caller.
+ */
+export interface SettingPut {
+  key: string;
+  value: unknown;
+  ifRevision?: string;
 }
 
 //////////

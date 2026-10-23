@@ -1,0 +1,176 @@
+version: 1
+resourceType: jobs.batch
+apiVersions:
+  - batch/v1
+title: Job
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: parallelism
+        type: field
+        label: Parallelism
+        path:
+          - spec
+          - parallelism
+        format: number
+        edit:
+          type: integer
+          min: 0
+      - id: completions
+        type: field
+        label: Completions
+        path:
+          - spec
+          - completions
+        format: number
+        edit:
+          type: integer
+          min: 0
+      - id: backoff
+        type: field
+        label: Backoff limit
+        path:
+          - spec
+          - backoffLimit
+        format: number
+        edit:
+          type: integer
+          min: 0
+      - id: containers
+        type: table
+        label: Containers
+        path:
+          - spec
+          - template
+          - spec
+          - containers
+        columns:
+          - id: containerName
+            label: Name
+            path:
+              - name
+            format: text
+          - id: image
+            label: Image
+            path:
+              - image
+            format: text
+            edit:
+              type: string
+          - id: pullPolicy
+            label: Pull policy
+            path:
+              - imagePullPolicy
+            format: badge
+            edit:
+              type: enum
+              choices:
+                - Always
+                - IfNotPresent
+                - Never
+        empty: No containers
+      - id: initContainers
+        type: table
+        label: Init containers
+        path:
+          - spec
+          - template
+          - spec
+          - initContainers
+        columns:
+          - id: initName
+            label: Name
+            path:
+              - name
+            format: text
+          - id: initImage
+            label: Image
+            path:
+              - image
+            format: text
+            edit:
+              type: string
+        empty: No init containers
+      - id: serviceAccount
+        type: field
+        label: Service account
+        path:
+          - spec
+          - template
+          - spec
+          - serviceAccountName
+        format: text
+        edit:
+          type: string
+      - id: restartPolicy
+        type: field
+        label: Restart policy
+        path:
+          - spec
+          - template
+          - spec
+          - restartPolicy
+        format: badge
+  - id: health
+    title: Health
+    hideEmpty: true
+    fields:
+      - id: conditions
+        type: table
+        label: Conditions
+        path:
+          - status
+          - conditions
+        columns:
+          - id: conditionType
+            label: Type
+            path:
+              - type
+            format: text
+          - id: conditionStatus
+            label: Status
+            path:
+              - status
+            format: badge
+          - id: conditionReason
+            label: Reason
+            path:
+              - reason
+            format: text
+          - id: conditionMessage
+            label: Message
+            path:
+              - message
+            format: multiline
+        empty: No conditions
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

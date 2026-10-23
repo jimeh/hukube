@@ -1,0 +1,63 @@
+version: 1
+resourceType: configmaps
+apiVersions:
+  - v1
+title: ConfigMap
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: data
+        type: map
+        label: Data
+        path:
+          - data
+        empty: No data
+        edit:
+          type: string
+          remove: true
+          multiline: true
+      - id: binaryData
+        type: map
+        label: Binary data
+        path:
+          - binaryData
+        empty: No binary data
+      - id: immutable
+        type: field
+        label: Immutable
+        path:
+          - immutable
+        format: boolean
+        edit:
+          type: boolean
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

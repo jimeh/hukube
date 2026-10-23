@@ -1,7 +1,15 @@
 import "monaco-editor/languages/definitions/yaml/register";
 
 import { monaco } from "@/lib/monaco.ts";
-import { useEffect, useLayoutEffect, useImperativeHandle, useRef, type Ref } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useImperativeHandle,
+  useRef,
+  useMemo,
+  useId,
+  type Ref,
+} from "react";
 
 import { useTheme } from "@/lib/theme.ts";
 
@@ -9,6 +17,8 @@ import { caretInEditableManifest } from "../edit/caret.ts";
 import type { YamlIssue } from "../edit/yaml.ts";
 
 import { applyEditorTheme } from "./editor-theme.ts";
+
+import { gutterChanges, replacement } from "./gutter.ts";
 
 const monoFont = "JetBrains Mono Variable";
 
@@ -26,8 +36,12 @@ export default function YamlEditor({
   issues = [],
   onChange,
   onReview,
+  baseText,
+  editGroup,
 }: {
   value: string;
+  baseText?: string;
+  editGroup?: string;
   ref?: Ref<YamlEditorHandle>;
   editing?: boolean;
   dirty?: boolean;
@@ -38,6 +52,10 @@ export default function YamlEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const theme = useTheme();
+  const description = useId();
+  const gutter = useMemo(() => gutterChanges(baseText ?? value, value), [baseText, value]);
+  const decorations = useRef<monaco.editor.IEditorDecorationsCollection | undefined>(undefined);
+  const group = useRef<string | undefined>(undefined);
   const callbacks = useRef({ onChange, onReview });
   useLayoutEffect(() => {
     callbacks.current = { onChange, onReview };
@@ -83,6 +101,7 @@ export default function YamlEditor({
       stickyScroll: { enabled: true },
     });
     editorRef.current = editor;
+    decorations.current = editor.createDecorationsCollection();
     const changes = editor.onDidChangeModelContent(() => {
       if (!setting.current) callbacks.current.onChange?.(editor.getValue());
     });
@@ -99,6 +118,8 @@ export default function YamlEditor({
     void document.fonts.load(`12px "${monoFont}"`).then(() => monaco.editor.remeasureFonts());
     return () => {
       changes.dispose();
+      decorations.current?.clear();
+      decorations.current = undefined;
       editor.dispose();
       editorRef.current = null;
     };
@@ -120,7 +141,27 @@ export default function YamlEditor({
     }
     const viewState = editor.saveViewState();
     setting.current = true;
-    editor.setValue(value);
+    const model = editor.getModel();
+    if (editing && !starting && model) {
+      const change = replacement(editor.getValue(), value);
+      const start = model.getPositionAt(change.start);
+      const end = model.getPositionAt(change.end);
+      if (group.current !== editGroup || !editGroup) editor.pushUndoStop();
+      editor.executeEdits("hukube.overview", [
+        {
+          range: {
+            startLineNumber: start.lineNumber,
+            startColumn: start.column,
+            endLineNumber: end.lineNumber,
+            endColumn: end.column,
+          },
+          text: change.text,
+          forceMoveMarkers: true,
+        },
+      ]);
+      if (!editGroup) editor.pushUndoStop();
+      group.current = editGroup;
+    } else editor.setValue(value);
     setting.current = false;
     if (viewState) editor.restoreViewState(viewState);
     if (starting && position) {
@@ -128,7 +169,7 @@ export default function YamlEditor({
       editor.revealLineInCenterIfOutsideViewport(position.lineNumber);
       editor.focus();
     }
-  }, [value, editing]);
+  }, [value, editing, editGroup]);
 
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly: !editing });
@@ -157,5 +198,57 @@ export default function YamlEditor({
       return applyEditorTheme(monaco, containerRef.current, theme === "dark");
   }, [theme]);
 
-  return <div ref={containerRef} className="h-full min-h-0" />;
+  useEffect(() => {
+    const editor = editorRef.current;
+    const collection = decorations.current;
+    const model = editor?.getModel();
+    if (!editor || !collection || !model) return;
+    collection.set(
+      gutter.changes.map((change) => ({
+        range: {
+          startLineNumber: change.line,
+          startColumn: 1,
+          endLineNumber: Math.min(
+            model.getLineCount(),
+            change.line + (change.kind === "deleted" ? 0 : change.count - 1),
+          ),
+          endColumn: 1,
+        },
+        options: {
+          isWholeLine: true,
+          linesDecorationsClassName: `yaml-change-${change.kind}${change.before ? " yaml-change-before" : ""}`,
+          linesDecorationsTooltip: `${change.count} ${change.kind} ${change.count === 1 ? "line" : "lines"}`,
+        },
+      })),
+    );
+    editor
+      .getDomNode()
+      ?.querySelector("textarea, [role=textbox]")
+      ?.setAttribute("aria-describedby", description);
+    // setValue on entry/exit clears decorations even when the diff is unchanged.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [gutter, description, value, editing]);
+
+  useEffect(() => {
+    if (group.current !== editGroup) {
+      editorRef.current?.pushUndoStop();
+      group.current = editGroup;
+    }
+  }, [editGroup]);
+
+  return (
+    <div className="relative h-full min-h-0">
+      <p
+        id={description}
+        className={
+          gutter.limited
+            ? "absolute bottom-2 right-3 z-10 max-w-64 rounded border bg-popover px-2 py-1 text-xs"
+            : "sr-only"
+        }
+      >
+        {gutter.summary}
+      </p>
+      <div ref={containerRef} className="h-full min-h-0" />
+    </div>
+  );
 }
