@@ -1,0 +1,85 @@
+version: 1
+resourceType: persistentvolumeclaims
+apiVersions:
+  - v1
+title: PersistentVolumeClaim
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: storage
+        type: field
+        label: Requested storage
+        path:
+          - spec
+          - resources
+          - requests
+          - storage
+        format: text
+        edit:
+          type: string
+      - id: storageClass
+        type: field
+        label: Storage class
+        path:
+          - spec
+          - storageClassName
+        format: text
+      - id: volume
+        type: field
+        label: Volume
+        path:
+          - spec
+          - volumeName
+        format: text
+      - id: accessModes
+        type: field
+        label: Access modes
+        path:
+          - spec
+          - accessModes
+        format: multiline
+      - id: phase
+        type: field
+        label: Phase
+        path:
+          - status
+          - phase
+        format: badge
+      - id: capacity
+        type: map
+        label: Capacity
+        path:
+          - status
+          - capacity
+        empty: No capacity
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

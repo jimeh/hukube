@@ -140,7 +140,9 @@ it("attaches every restored Tab including a hidden panel, without starting or at
   // A newly opened Tab already has an entry before dockview adds it.
   await startSession(engine as never, "c", params("visible"), async () => fakeTerminal().terminal);
   render(<Workspace cluster="c" active />);
-  act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+  act(() =>
+    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+  );
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(2));
   expect(mocks.streams[0]!.params).toMatchObject({ session: "visible", start: true });
   expect(mocks.streams[1]!.params).toMatchObject({ session: "hidden" });
@@ -160,7 +162,9 @@ it("detaches held sessions on a failed layout clear and keeps their window recor
   mocks.broken = true;
   const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
   const view = render(<Workspace cluster="c" active />);
-  act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+  act(() =>
+    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+  );
   expect(mocks.request).not.toHaveBeenCalledWith("exec.end", expect.anything());
   expect(readSessionTabs("c").map((tab) => tab.params.sessionId)).toEqual(["visible", "hidden"]);
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(3));
@@ -221,7 +225,9 @@ it("recovers this window's missing session Tab after the shared layout restores,
   rememberSessionTab("c", { params: params("local"), title: "My session" });
   const view = render(<Workspace cluster="c" active />);
   expect(mocks.panels).toHaveLength(0);
-  act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+  act(() =>
+    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+  );
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(3));
   expect(mocks.panels.find((panel) => panel.id === "exec:local")?.api.title).toBe("My session");
   expect(mocks.addOptions).toMatchObject([
@@ -246,7 +252,9 @@ it("recovers this window's missing session Tab after the shared layout restores,
   mocks.addOptions = [];
   mocks.streams = [];
   render(<Workspace cluster="c" active />);
-  act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+  act(() =>
+    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+  );
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(3));
   expect(mocks.panels.some((panel) => panel.id === "exec:local")).toBe(true);
 });
@@ -257,7 +265,9 @@ it.each(["broken JSON", "null", "{}", '[null, {"title": "bad", "params": {"sessi
     sessionStorage.setItem("hukube.exec.tabs/c", stored);
     expect(readSessionTabs("c")).toEqual([]);
     render(<Workspace cluster="c" active />);
-    act(() => mocks.watch!.data({ key: "workspace/c", value: { version: 1, dockview: {} } }));
+    act(() =>
+      mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+    );
     await vi.waitFor(() => expect(mocks.streams).toHaveLength(2));
     expect(mocks.panels).toHaveLength(2);
   },

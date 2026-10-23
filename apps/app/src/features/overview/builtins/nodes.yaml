@@ -1,0 +1,115 @@
+version: 1
+resourceType: nodes
+apiVersions:
+  - v1
+title: Node
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: unschedulable
+        type: field
+        label: Unschedulable
+        path:
+          - spec
+          - unschedulable
+        format: boolean
+        edit:
+          type: boolean
+      - id: provider
+        type: field
+        label: Provider ID
+        path:
+          - spec
+          - providerID
+        format: text
+      - id: capacity
+        type: map
+        label: Capacity
+        path:
+          - status
+          - capacity
+        empty: No capacity
+      - id: allocatable
+        type: map
+        label: Allocatable
+        path:
+          - status
+          - allocatable
+        empty: No allocatable
+      - id: conditions
+        type: table
+        label: Conditions
+        path:
+          - status
+          - conditions
+        columns:
+          - id: conditionType
+            label: Type
+            path:
+              - type
+            format: text
+          - id: conditionStatus
+            label: Status
+            path:
+              - status
+            format: badge
+          - id: conditionReason
+            label: Reason
+            path:
+              - reason
+            format: text
+          - id: conditionMessage
+            label: Message
+            path:
+              - message
+            format: multiline
+        empty: No conditions
+      - id: addresses
+        type: table
+        label: Addresses
+        path:
+          - status
+          - addresses
+        columns:
+          - id: addressType
+            label: Type
+            path:
+              - type
+            format: text
+          - id: address
+            label: Address
+            path:
+              - address
+            format: text
+        empty: No addresses
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

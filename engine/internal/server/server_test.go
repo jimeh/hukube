@@ -561,3 +561,21 @@ func TestSubscribeRefusalCarriesRevision(t *testing.T) {
 		})
 	}
 }
+
+func TestSettingsCASExplicitEmptyRevision(t *testing.T) {
+	ts := newTestServer(t)
+	first, second := mustDial(t, ts), mustDial(t, ts)
+	empty := ""
+	first.send(protocol.ClientMessage{ID: 1, Type: protocol.ClientTypeRequest, Method: protocol.RequestSettingsPut.Name, Params: params(protocol.SettingPut{Key: "overview/definitions", Value: json.RawMessage(`{"version":1,"entries":{}}`), IfRevision: &empty})})
+	first.await(1, func(m protocol.ServerMessage, _ json.RawMessage) bool { return m.Type == protocol.ServerTypeResult })
+	second.send(protocol.ClientMessage{ID: 2, Type: protocol.ClientTypeRequest, Method: protocol.RequestSettingsPut.Name, Params: params(protocol.SettingPut{Key: "overview/definitions", Value: json.RawMessage(`null`), IfRevision: &empty})})
+	second.await(2, func(m protocol.ServerMessage, _ json.RawMessage) bool {
+		return m.Type == protocol.ServerTypeError && m.Error.Code == protocol.ErrorCodeConflict
+	})
+	second.send(protocol.ClientMessage{ID: 3, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicSettingsWatch.Name, Params: params(protocol.SettingKey{Key: "overview/definitions"})})
+	second.await(3, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		var setting protocol.Setting
+		_ = json.Unmarshal(data, &setting)
+		return m.Type == protocol.ServerTypeData && setting.Revision != "" && string(setting.Value) == `{"version":1,"entries":{}}`
+	})
+}

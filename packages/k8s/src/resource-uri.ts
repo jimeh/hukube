@@ -1,7 +1,7 @@
 import type { TypeKey } from "./type-key.ts";
 
 /** A way of looking at a Resource. */
-export const facetNames = ["yaml", "logs", "events", "related"] as const;
+export const facetNames = ["overview", "yaml", "logs", "events", "related"] as const;
 export type Facet = (typeof facetNames)[number];
 
 /** The parts of a Resource URI. `namespace` is empty for cluster-scoped Resources. */

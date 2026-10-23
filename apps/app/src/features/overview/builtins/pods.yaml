@@ -1,0 +1,151 @@
+version: 1
+resourceType: pods
+apiVersions:
+  - v1
+title: Pod
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: containers
+        type: table
+        label: Containers
+        path:
+          - spec
+          - containers
+        columns:
+          - id: containerName
+            label: Name
+            path:
+              - name
+            format: text
+          - id: image
+            label: Image
+            path:
+              - image
+            format: text
+            edit:
+              type: string
+          - id: pullPolicy
+            label: Pull policy
+            path:
+              - imagePullPolicy
+            format: badge
+        empty: No containers
+      - id: initContainers
+        type: table
+        label: Init containers
+        path:
+          - spec
+          - initContainers
+        columns:
+          - id: initName
+            label: Name
+            path:
+              - name
+            format: text
+          - id: initImage
+            label: Image
+            path:
+              - image
+            format: text
+            edit:
+              type: string
+        empty: No init containers
+      - id: serviceAccount
+        type: field
+        label: Service account
+        path:
+          - spec
+          - serviceAccountName
+        format: text
+      - id: restartPolicy
+        type: field
+        label: Restart policy
+        path:
+          - spec
+          - restartPolicy
+        format: badge
+      - id: node
+        type: field
+        label: Node
+        path:
+          - spec
+          - nodeName
+        format: text
+      - id: phase
+        type: field
+        label: Phase
+        path:
+          - status
+          - phase
+        format: badge
+      - id: podIP
+        type: field
+        label: Pod IP
+        path:
+          - status
+          - podIP
+        format: text
+  - id: health
+    title: Health
+    hideEmpty: true
+    fields:
+      - id: conditions
+        type: table
+        label: Conditions
+        path:
+          - status
+          - conditions
+        columns:
+          - id: conditionType
+            label: Type
+            path:
+              - type
+            format: text
+          - id: conditionStatus
+            label: Status
+            path:
+              - status
+            format: badge
+          - id: conditionReason
+            label: Reason
+            path:
+              - reason
+            format: text
+          - id: conditionMessage
+            label: Message
+            path:
+              - message
+            format: multiline
+        empty: No conditions
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

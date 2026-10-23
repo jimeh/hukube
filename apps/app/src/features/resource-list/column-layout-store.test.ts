@@ -30,7 +30,7 @@ function setup(type = "pods") {
       const watch: Watch = {
         key: params.key,
         closed: false,
-        deliver: (value) => listener.data({ key: params.key, value }),
+        deliver: (value) => listener.data({ revision: "", key: params.key, value }),
         fail: () => listener.error({ code: "internal", message: "watch failed" }),
       };
       watches.push(watch);

@@ -1,0 +1,79 @@
+# Install this file through Settings > Overview definitions.
+version: 1
+resourceType: widgets.sample.hukube.dev
+apiVersions:
+  - sample.hukube.dev/v1
+title: Widget
+sections:
+  - id: widget
+    title: Widget
+    fields:
+      - id: size
+        type: field
+        label: Size
+        path:
+          - spec
+          - size
+        format: number
+        edit:
+          type: integer
+          min: 0
+      - id: message
+        type: field
+        label: Message
+        path:
+          - spec
+          - message
+        format: text
+        edit:
+          type: string
+          multiline: true
+      - id: replicas
+        type: field
+        label: Replicas
+        path:
+          - spec
+          - replicas
+        format: number
+        edit:
+          type: integer
+          min: 0
+      - id: enabled
+        type: field
+        label: Enabled
+        path:
+          - spec
+          - enabled
+        format: boolean
+        edit:
+          type: boolean
+      - id: endpoints
+        type: table
+        label: Endpoints
+        path:
+          - spec
+          - endpoints
+        columns:
+          - id: endpointName
+            label: Name
+            path:
+              - name
+            format: text
+          - id: endpointURL
+            label: URL
+            path:
+              - url
+            format: text
+            edit:
+              type: string
+        empty: No endpoints
+      - id: options
+        type: map
+        label: Options
+        path:
+          - spec
+          - options
+        empty: No options
+        edit:
+          type: string
+          remove: true

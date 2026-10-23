@@ -79,7 +79,7 @@ var (
 	RequestResourceReview = DeclareRequest[ResourceEdit, EditReview]("resource.review")
 	RequestResourceApply  = DeclareRequest[ResourceEdit, ApplyResult]("resource.apply")
 	RequestResourceDelete = DeclareRequest[DeleteParams, None]("resource.delete")
-	RequestSettingsPut    = DeclareRequest[Setting, None]("settings.put")
+	RequestSettingsPut    = DeclareRequest[SettingPut, None]("settings.put")
 
 	TopicClusterStatus   = DeclareTopic[ClusterParams, ClusterStatus]("cluster.status")
 	TopicClusterTypes    = DeclareTopic[ClusterParams, []ResourceType]("cluster.types")

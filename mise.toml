@@ -394,3 +394,7 @@ else
   bunx playwright test
 fi
 '''
+
+[tasks."gen:overview"]
+description = "Generate the Overview definition JSON Schema"
+run = "bun scripts/gen-overview-schema.ts"

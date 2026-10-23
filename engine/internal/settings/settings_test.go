@@ -1,7 +1,10 @@
 package settings
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,4 +86,63 @@ func TestShortKeyKeepsFileName(t *testing.T) {
 	if err != nil || string(got) != "null" {
 		t.Fatalf("ReadFile = %s, %v; want null", got, err)
 	}
+}
+
+func TestCompareAndPutInitialAndConcurrent(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, rev, err := store.Snapshot("overview/definitions")
+	if err != nil || value != nil || rev != "" {
+		t.Fatalf("unset snapshot = %s %q %v", value, rev, err)
+	}
+	changed, stop := store.Watch("overview/definitions")
+	defer stop()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, body := range []string{`{"a":1}`, `{"b":2}`} {
+		go func() { <-start; results <- store.CompareAndPut("overview/definitions", json.RawMessage(body), &rev) }()
+	}
+	close(start)
+	successes, conflicts := 0, 0
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrConflict):
+			conflicts++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+	<-changed
+	value, revision, err := store.Snapshot("overview/definitions")
+	expected := fmt.Sprintf("%x", sha256.Sum256(value))
+	if err != nil || revision != expected {
+		t.Fatalf("snapshot revision = %q, want %q: %v", revision, expected, err)
+	}
+	// A refused write neither notifies nor changes the exact byte snapshot.
+	next, stopNext := store.Watch("overview/definitions")
+	defer stopNext()
+	if err := store.CompareAndPut("overview/definitions", json.RawMessage(`null`), &rev); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	select {
+	case <-next:
+		t.Fatal("conflict notified watchers")
+	default:
+	}
+	value[0] = 'x'
+	stored, _, _ := store.Snapshot("overview/definitions")
+	if !json.Valid(stored) {
+		t.Fatal("snapshot allowed caller to mutate stored bytes")
+	}
+	if err := store.Put("overview/definitions", json.RawMessage(`null`)); err != nil {
+		t.Fatal(err)
+	}
+	<-next
 }

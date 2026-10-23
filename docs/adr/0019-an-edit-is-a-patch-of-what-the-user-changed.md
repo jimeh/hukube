@@ -77,7 +77,7 @@ hears the result, the UI does not know whether it happened.
   reserved for a sent request whose answer was lost.
 - A pending apply belongs to the edit. Its notice stays visible after the
   review closes. Ending or discarding the edit, closing its Tab, or unmounting
-  its Facet stops checking and drops the repeated request. The discard prompt
+  its Resource panel stops checking and drops the repeated request. The discard prompt
   explains that the apply may already have reached the Cluster.
 - After a lost apply answer, a conflicting repeat reviews again only while
   the dialog is open, warning that the edit may already have been applied.

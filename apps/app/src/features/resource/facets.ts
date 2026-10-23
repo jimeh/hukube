@@ -6,6 +6,7 @@ import type { FacetProps, FacetTarget } from "./facet-props.ts";
 import { RelatedFacet, RelatedBadge, relatedTabName } from "./related-facet.tsx";
 import { LogsFacet } from "./logs-facet.tsx";
 import { typeHasLogs } from "./logs-rule.ts";
+import { OverviewFacet } from "../overview/overview-facet.tsx";
 import { YamlFacet } from "./yaml-facet.tsx";
 
 export interface FacetEntry {
@@ -18,6 +19,12 @@ export interface FacetEntry {
 }
 
 const facets: readonly FacetEntry[] = [
+  {
+    id: "overview",
+    label: "Overview",
+    appliesTo: ({ overview }) => !!overview,
+    View: OverviewFacet,
+  },
   { id: "yaml", label: "YAML", appliesTo: () => true, View: YamlFacet },
   {
     id: "logs",
@@ -50,5 +57,8 @@ export function facetsFor(target: FacetTarget): readonly FacetEntry[] {
 
 /** Resolves an applicable requested Facet, falling back to YAML. */
 export function resolveFacet(requested: Facet | undefined, target: FacetTarget): Facet {
-  return facetsFor(target).find((facet) => facet.id === requested)?.id ?? "yaml";
+  return (
+    facetsFor(target).find((facet) => facet.id === requested)?.id ??
+    (requested ? "yaml" : target.overview ? "overview" : "yaml")
+  );
 }

@@ -16,7 +16,7 @@ beforeEach(() => {
       _params: unknown,
       listener: { data: (setting: Setting) => void },
     ) => {
-      deliver = (value) => listener.data({ key: "exec/commands", value });
+      deliver = (value) => listener.data({ revision: "", key: "exec/commands", value });
       return { close: () => {}, update: () => {} };
     },
     request: (_method: string, params: unknown) => {

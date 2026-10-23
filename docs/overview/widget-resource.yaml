@@ -1,0 +1,11 @@
+apiVersion: sample.hukube.dev/v1
+kind: Widget
+metadata:
+  name: example-widget
+spec:
+  size: 3
+  message: Hello from a custom Overview
+  replicas: 1
+  enabled: true
+  options: { color: blue }
+  endpoints: [{ name: primary, url: https://example.com }]

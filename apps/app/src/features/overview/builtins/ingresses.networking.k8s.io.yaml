@@ -1,0 +1,90 @@
+version: 1
+resourceType: ingresses.networking.k8s.io
+apiVersions:
+  - networking.k8s.io/v1
+title: Ingress
+sections:
+  - id: configuration
+    title: Configuration
+    fields:
+      - id: ingressClass
+        type: field
+        label: Ingress class
+        path:
+          - spec
+          - ingressClassName
+        format: text
+        edit:
+          type: string
+          remove: true
+      - id: rules
+        type: table
+        label: Rules
+        path:
+          - spec
+          - rules
+        columns:
+          - id: host
+            label: Host
+            path:
+              - host
+            format: text
+            edit:
+              type: string
+          - id: paths
+            label: Paths
+            path:
+              - http
+              - paths
+            format: multiline
+        empty: No rules
+      - id: tls
+        type: table
+        label: TLS
+        path:
+          - spec
+          - tls
+        columns:
+          - id: secretName
+            label: Secret
+            path:
+              - secretName
+            format: text
+            edit:
+              type: string
+          - id: hosts
+            label: Hosts
+            path:
+              - hosts
+            format: multiline
+        empty: No tls
+  - id: metadata
+    title: Metadata
+    fields:
+      - id: labels
+        type: map
+        label: Labels
+        path:
+          - metadata
+          - labels
+        empty: No labels
+        edit:
+          type: string
+          remove: true
+      - id: annotations
+        type: map
+        label: Annotations
+        path:
+          - metadata
+          - annotations
+        empty: No annotations
+        edit:
+          type: string
+          remove: true
+      - id: created
+        type: field
+        label: Created
+        path:
+          - metadata
+          - creationTimestamp
+        format: timestamp

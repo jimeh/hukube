@@ -5,6 +5,14 @@ import { Tabs, TabsContent } from "@hukube/ui/components/tabs";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useEffect, useState } from "react";
 
+import { usePanelEdit } from "../edit/use-panel-edit.ts";
+import { ReviewDialog } from "../edit/review-dialog.tsx";
+import { refusalLines } from "../edit/field-paths.ts";
+import { useRegistry } from "../overview/registry.ts";
+import { semanticEqual } from "../overview/draft.ts";
+import { matches } from "../overview/definition.ts";
+import { useDefinitionManager } from "../overview/definition-manager.tsx";
+import { createPortal } from "react-dom";
 import { useResourceAccess } from "../edit/use-access.ts";
 import { DeleteDialog } from "../edit/delete-dialog.tsx";
 import { metadata } from "../edit/yaml.ts";
@@ -66,8 +74,41 @@ export function ResourcePanel({
     const subscription = api.onDidVisibilityChange?.((event) => setPanelVisible(event.isVisible));
     return () => subscription?.dispose();
   }, [api]);
+  const { snapshot: registry, store: registryStore } = useRegistry();
+  const kind = types.get(address?.type ?? "")?.kind ?? address?.type ?? "Resource";
+  const edit = usePanelEdit({
+    address,
+    kind,
+    manifest,
+    panelId: api.id,
+    editAccess: access?.edit,
+    onEdit: () => pinPanel(api, params),
+  });
+  const discovered = types.get(address?.type ?? "");
+  const apiVersion = discovered
+    ? discovered.group
+      ? `${discovered.group}/${discovered.version}`
+      : discovered.version
+    : typeof lastObject?.["apiVersion"] === "string"
+      ? lastObject["apiVersion"]
+      : undefined;
+  const candidate = registry.definitions.get(address?.type ?? "");
+  const match = candidate && matches(candidate, address?.type ?? "", apiVersion);
+  const definition = edit.definition ?? (match ? candidate : undefined);
+  const defaultPending =
+    !edit.session &&
+    !manifest.error &&
+    !manifest.data?.deleted &&
+    ((!address?.facet && !candidate && registry.status === "loading") ||
+      ((!address?.facet || address.facet === "overview") && !!candidate && match === undefined));
+  const [latched, setLatched] = useState<Facet>();
   const [logs, setLogs] = useState(false);
-  const target = { type: address?.type ?? "", resourceType: types.get(address?.type ?? ""), logs };
+  const target = {
+    type: address?.type ?? "",
+    resourceType: types.get(address?.type ?? ""),
+    logs,
+    overview: !!definition,
+  };
   const available = facetsFor(target);
   const events = useSubscription(
     "resource.events",
@@ -75,7 +116,9 @@ export function ResourcePanel({
       ? resourceEventsParams(address, manifest, manifest.data?.object ?? lastObject)
       : undefined,
   );
-  const selected = resolveFacet(address?.facet, target);
+  const resolved = resolveFacet(address?.facet, target);
+  const selected = !address?.facet && edit.session && latched ? latched : resolved;
+  if (!edit.session && !defaultPending && latched !== resolved) setLatched(resolved);
   const related = useSubscription(
     "resource.related",
     address
@@ -99,7 +142,6 @@ export function ResourcePanel({
         description={`This tab points at "${params.uri}", which is not a Resource URI.`}
       />
     );
-  const kind = target.resourceType?.kind ?? address.type;
   const shared = {
     address,
     kind,
@@ -111,6 +153,10 @@ export function ResourcePanel({
     controls,
     editAccess: access?.edit,
     onEdit: () => pinPanel(api, params),
+    edit,
+    definition,
+    onFacet: (facet: Facet) =>
+      api.updateParameters({ ...params, uri: formatResourceUri({ ...address, facet }) }),
   };
   const meta = metadata(manifest.data?.object);
   const finalizers = Array.isArray(meta["finalizers"]) ? meta["finalizers"].map(String) : [];
@@ -139,7 +185,7 @@ export function ResourcePanel({
         openResource(opened, { preview: false, pane: api.id });
       }}
     >
-      <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
         <span className="text-muted-foreground">{kind}</span>
         <h2 className="truncate font-mono font-semibold">{address.name}</h2>
         {address.namespace && (
@@ -192,6 +238,119 @@ export function ResourcePanel({
           </Tooltip>
         </div>
       </header>
+      {dirty && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1 text-xs">
+          <span className="text-warning">Unsaved changes</span>
+          {selected !== "yaml" && selected !== "overview" && (
+            <Button
+              size="sm"
+              disabled={!!edit.reviewReason || !edit.parsed?.object}
+              title={
+                edit.reviewReason ??
+                (!edit.parsed?.object ? "Fix invalid YAML in the YAML Facet." : undefined)
+              }
+              onClick={(event) => {
+                const button = event.currentTarget;
+                edit.setFocus(() => button.focus());
+                edit.reviewChanges();
+              }}
+            >
+              Review changes
+            </Button>
+          )}
+          {edit.field?.error && (
+            <span>
+              {edit.field.label}: {edit.field.error}
+            </span>
+          )}
+        </div>
+      )}
+      {registry.errors.get(address.type) || registry.error ? (
+        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1 text-xs text-warning">
+          <span>{registry.errors.get(address.type) ?? registry.error}</span>
+          <Button
+            size="sm"
+            variant="link"
+            onClick={() => useDefinitionManager.getState().setOpen(true)}
+          >
+            Manage Overview definitions
+          </Button>
+          {registry.error && (
+            <Button size="sm" variant="link" onClick={registryStore.retry}>
+              Retry
+            </Button>
+          )}
+        </div>
+      ) : null}
+      {edit.definition && !semanticEqual(candidate, edit.definition) && (
+        <p className="border-b px-3 py-1 text-xs text-muted-foreground">
+          The Overview definition changed. It will refresh when this edit ends.
+        </p>
+      )}
+      {selected !== "yaml" && edit.session && (
+        <div
+          className="flex flex-col gap-1 border-b px-3 py-2 text-xs"
+          data-notice={edit.gone || edit.session.refusal ? "error" : "warning"}
+        >
+          {edit.review.unknownOutcome ? (
+            <p>
+              hukube could not confirm whether your apply went through. Review changes shows the
+              Cluster as it is now.
+            </p>
+          ) : edit.review.pending ? (
+            <p>
+              An apply of this edit was in flight when the connection to the Engine was lost. hukube
+              checks the result when it reconnects.
+            </p>
+          ) : (
+            <p>
+              {edit.notice ?? "Editing. Nothing changes on the Cluster until you review and apply."}
+            </p>
+          )}
+          {edit.session.refusal &&
+            refusalLines(edit.session.refusal).map((line, i) => (
+              <p key={i} className="text-destructive">
+                {line}
+              </p>
+            ))}
+          {!edit.parsed?.object && (
+            <p className="text-destructive">Fix invalid YAML in the YAML Facet before reviewing.</p>
+          )}
+        </div>
+      )}
+      {selected === "overview" &&
+        controls &&
+        edit.session &&
+        createPortal(
+          <>
+            <Button size="sm" variant="ghost" onClick={edit.cancel}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={!!edit.reviewReason || !edit.parsed?.object}
+              title={
+                edit.reviewReason ??
+                (!edit.parsed?.object ? "Fix invalid YAML in the YAML Facet." : undefined)
+              }
+              onClick={(event) => {
+                const button = event.currentTarget;
+                if (selected !== "overview") edit.setFocus(() => button.focus());
+                edit.reviewChanges();
+              }}
+            >
+              Review changes
+            </Button>
+          </>,
+          controls,
+        )}
+      <ReviewDialog
+        review={edit.review}
+        cluster={address.cluster}
+        label={`${kind} ${address.name}`}
+        namespace={address.namespace}
+        onBack={() => edit.returnFocus()}
+      />
       <DeleteDialog
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
@@ -200,37 +359,44 @@ export function ResourcePanel({
         object={lastObject}
         related={related.data}
       />
-      <Tabs value={selected} onValueChange={choose} className="min-h-0 flex-1 gap-0">
-        <FacetSwitcher
-          available={available}
-          selected={selected}
-          visible={panelVisible && active}
-          shared={shared}
-          onChoose={choose}
-          setControls={setControls}
-          dirty={dirty}
+      {defaultPending ? (
+        <Notice
+          title="Loading Overview"
+          description="Resolving the Resource Type and saved definitions…"
         />
-        {available.map(
-          ({ id, View }) =>
-            mounted.has(id) && (
-              <TabsContent
-                key={id}
-                value={id}
-                keepMounted
-                // Each Facet has its own focusable content, so the panel is not a second stop.
-                tabIndex={-1}
-                className="min-h-0 overflow-hidden"
-                hidden={selected !== id}
-              >
-                <View
-                  {...shared}
-                  showing={selected === id}
-                  visible={selected === id && panelVisible && active}
-                />
-              </TabsContent>
-            ),
-        )}
-      </Tabs>
+      ) : (
+        <Tabs value={selected} onValueChange={choose} className="min-h-0 flex-1 gap-0">
+          <FacetSwitcher
+            available={available}
+            selected={selected}
+            visible={panelVisible && active}
+            shared={shared}
+            onChoose={choose}
+            setControls={setControls}
+            dirty={dirty}
+          />
+          {available.map(
+            ({ id, View }) =>
+              mounted.has(id) && (
+                <TabsContent
+                  key={id}
+                  value={id}
+                  keepMounted
+                  // Each Facet has its own focusable content, so the panel is not a second stop.
+                  tabIndex={-1}
+                  className="min-h-0 overflow-hidden"
+                  hidden={selected !== id}
+                >
+                  <View
+                    {...shared}
+                    showing={selected === id}
+                    visible={selected === id && panelVisible && active}
+                  />
+                </TabsContent>
+              ),
+          )}
+        </Tabs>
+      )}
     </div>
   );
 }

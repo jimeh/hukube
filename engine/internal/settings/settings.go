@@ -43,8 +43,26 @@ func Open(dir string) (*Store, error) {
 
 // Get returns the value for key, or nil when it is not set.
 func (s *Store) Get(key string) (json.RawMessage, error) {
+	v, _, err := s.Snapshot(key)
+	return v, err
+}
+
+// Snapshot reads the value and its content revision atomically.
+func (s *Store) Snapshot(key string) (json.RawMessage, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	v, err := s.get(key)
+	return append(json.RawMessage(nil), v...), revision(v), err
+}
+
+func revision(v json.RawMessage) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(v))
+}
+
+func (s *Store) get(key string) (json.RawMessage, error) {
 	if v, ok := s.values[key]; ok {
 		return v, nil
 	}
@@ -63,18 +81,36 @@ func (s *Store) Get(key string) (json.RawMessage, error) {
 }
 
 // Put stores a JSON value for key and notifies its watchers.
+var ErrConflict = errors.New("setting changed since it was read")
+
 func (s *Store) Put(key string, value json.RawMessage) error {
+	return s.CompareAndPut(key, value, nil)
+}
+
+// CompareAndPut checks even an explicitly empty revision under the write mutex.
+func (s *Store) CompareAndPut(key string, value json.RawMessage, expected *string) error {
 	if !json.Valid(value) {
 		return fmt.Errorf("setting %q is not valid JSON", key)
 	}
 	s.mu.Lock()
+	if expected != nil {
+		current, err := s.get(key)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if revision(current) != *expected {
+			s.mu.Unlock()
+			return ErrConflict
+		}
+	}
 	if s.dir != "" {
 		if err := writeAtomic(s.path(key), value); err != nil {
 			s.mu.Unlock()
 			return fmt.Errorf("write setting %q: %w", key, err)
 		}
 	}
-	s.values[key] = value
+	s.values[key] = append(json.RawMessage(nil), value...)
 	sig := s.signal(key)
 	s.mu.Unlock()
 	sig.Notify()

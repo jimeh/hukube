@@ -90,8 +90,8 @@ describe("New Resource tab Facets", () => {
   });
   it("falls back when the inherited Facet does not apply", () => {
     const eventUri = formatResourceUri({ ...address, type: "events" });
-    expect(newResourceUri(eventUri, active)).toBe(`${eventUri}#yaml`);
-    expect(newResourceUri(uri, `${eventUri}#events`)).toBe(`${uri}#yaml`);
+    expect(newResourceUri(eventUri, active)).toBe(eventUri);
+    expect(newResourceUri(uri, `${eventUri}#events`)).toBe(uri);
   });
 });
 
@@ -99,4 +99,51 @@ it("inherits Related from the Pane's active Resource tab, even for Events", () =
   const uri = formatResourceUri({ ...address, type: "events" });
   const active = formatResourceUri({ ...address, facet: "related" });
   expect(newResourceUri(uri, active)).toBe(`${uri}#related`);
+});
+
+it("inherits Overview only when it applies to both source and destination, without persisting a fallback", () => {
+  const uri = formatResourceUri({
+    cluster: "c",
+    type: "configmaps",
+    namespace: "ns",
+    name: "next",
+  });
+  const active = formatResourceUri({
+    cluster: "c",
+    type: "widgets.sample.hukube.dev",
+    namespace: "ns",
+    name: "current",
+    facet: "overview",
+  });
+  expect(
+    newResourceUri(
+      uri,
+      active,
+      { type: "configmaps", overview: true },
+      { type: "widgets.sample.hukube.dev", overview: false },
+    ),
+  ).toBe(uri);
+  expect(
+    newResourceUri(
+      uri,
+      active,
+      { type: "configmaps", overview: true },
+      { type: "widgets.sample.hukube.dev", overview: true },
+    ),
+  ).toBe(`${uri}#overview`);
+  expect(
+    newResourceUri(
+      uri,
+      active,
+      { type: "configmaps", overview: false },
+      { type: "widgets.sample.hukube.dev", overview: true },
+    ),
+  ).toBe(uri);
+  expect(
+    newResourceUri(
+      uri,
+      formatResourceUri({ cluster: "c", type: "configmaps", namespace: "ns", name: "current" }),
+      { type: "configmaps", overview: true },
+    ),
+  ).toBe(uri);
 });

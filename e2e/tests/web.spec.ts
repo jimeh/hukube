@@ -8,6 +8,8 @@ import { createHash } from "node:crypto";
 
 import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 
+import { overviewTests } from "./overview.ts";
+
 import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
@@ -558,12 +560,14 @@ test("browses a live ConfigMap from the cluster picker to its YAML", async ({ pa
   await expect(row).toBeVisible();
 
   await row.click();
-  await expect(page.locator(".monaco-editor").getByText("hello-from-e2e")).toBeVisible();
+  const panel = page.getByRole("tabpanel", { name: "e2e-settings", exact: true });
+  await panel.getByRole("tab", { name: /^YAML/ }).click();
+  await expect(panel.locator(".monaco-editor").getByText("hello-from-e2e")).toBeVisible();
 
   // Deleting it keeps the last known Manifest and marks it deleted.
   kubectl("-n", namespace, "delete", "configmap", "e2e-settings");
-  await expect(page.getByText("Deleted", { exact: true })).toBeVisible();
-  await expect(page.locator(".monaco-editor").getByText("hello-from-e2e")).toBeVisible();
+  await expect(panel.getByText("Deleted", { exact: true })).toBeVisible();
+  await expect(panel.locator(".monaco-editor").getByText("hello-from-e2e")).toBeVisible();
   await expect(grid.getByRole("row")).toHaveCount(0);
 });
 
@@ -621,7 +625,9 @@ test("goes to a Resource and a Resource Type from the palette", async ({ page })
     "true",
   );
   await page.keyboard.press("Enter");
-  const editor = page.locator(".monaco-editor");
+  const panel = page.getByRole("tabpanel", { name: "e2e-palette", exact: true });
+  await panel.getByRole("tab", { name: /^YAML/ }).click();
+  const editor = panel.locator(".monaco-editor");
   await expect(editor.getByText("hello-from-palette")).toBeVisible();
 
   // The shortcut wins over the editor's own Ctrl+K handling.
@@ -1659,3 +1665,5 @@ test("shows a readable unknown-field refusal and keeps the YAML editor usable", 
   await discard.getByRole("button", { name: "Discard edits" }).click();
   await expect(edit).toBeFocused();
 });
+
+overviewTests(namespace);

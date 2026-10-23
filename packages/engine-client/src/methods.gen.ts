@@ -27,6 +27,7 @@ import type {
   ResourceType,
   Setting,
   SettingKey,
+  SettingPut,
 } from "./protocol.gen.ts";
 
 export interface Requests {
@@ -36,7 +37,7 @@ export interface Requests {
   "resource.review": { params: ResourceEdit; result: EditReview };
   "resource.apply": { params: ResourceEdit; result: ApplyResult };
   "resource.delete": { params: DeleteParams; result: undefined };
-  "settings.put": { params: Setting; result: undefined };
+  "settings.put": { params: SettingPut; result: undefined };
 }
 
 export interface Topics {

@@ -364,6 +364,14 @@ type SettingKey struct {
 
 // Setting is a stored JSON value. A missing setting has a null Value.
 type Setting struct {
-	Key   string          `json:"key"`
-	Value json.RawMessage `json:"value" tstype:"unknown"`
+	Revision string          `json:"revision"`
+	Key      string          `json:"key"`
+	Value    json.RawMessage `json:"value" tstype:"unknown"`
+}
+
+// SettingPut optionally guards a write against the revision read by its caller.
+type SettingPut struct {
+	Key        string          `json:"key"`
+	Value      json.RawMessage `json:"value" tstype:"unknown"`
+	IfRevision *string         `json:"ifRevision,omitempty"`
 }

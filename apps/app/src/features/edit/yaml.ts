@@ -31,8 +31,11 @@ export const yamlOptions: ParseOptions &
   aliasDuplicateObjects: false,
 };
 export function renderYaml(object: Record<string, unknown>): string {
-  // Rendering has literal keys; only user-typed YAML can contain merge keys.
-  const document = new Document(object, yamlOptions);
+  return stringifyManifest(new Document(object, yamlOptions));
+}
+
+/** Serialize literal keys consistently for both live Manifests and parsed drafts. */
+export function stringifyManifest(document: Document): string {
   document.schema.tags = document.schema.tags.filter(
     (tag) => tag.tag !== "tag:yaml.org,2002:merge",
   );
@@ -95,7 +98,20 @@ export function parseManifest(text: string): ParsedManifest {
   let object: Record<string, unknown> | undefined;
   if (!issues.length) {
     try {
-      object = document.toJS({ maxAliasCount: 100 }) as Record<string, unknown>;
+      const candidate = document.toJS({ maxAliasCount: 100 }) as Record<string, unknown>;
+      const active = new Set<object>();
+      const visited = new Set<object>();
+      const check = (value: unknown) => {
+        if (!value || typeof value !== "object") return;
+        if (active.has(value)) throw new Error("A Manifest cannot contain cyclic aliases.");
+        if (visited.has(value)) return;
+        active.add(value);
+        for (const child of Object.values(value)) check(child);
+        active.delete(value);
+        visited.add(value);
+      };
+      check(candidate);
+      object = candidate;
     } catch (error) {
       issues.push({ message: String(error), line: 1, column: 1, endLine: 1, endColumn: 2 });
     }
@@ -105,7 +121,7 @@ export function parseManifest(text: string): ParsedManifest {
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-const serverFields = new Set([
+export const serverFields = new Set([
   "managedFields",
   "resourceVersion",
   "uid",
