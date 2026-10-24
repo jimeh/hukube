@@ -1,7 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 
-// Waits for the layout containing this session to be acknowledged by the Engine.
-export function savedSessionLayout(page: Page, pod: string): () => Promise<void> {
+/**
+ * Waits for the Engine to acknowledge a saved Workspace layout containing this
+ * text. Call it before the page opens its socket.
+ */
+export function savedLayout(page: Page, text: string): () => Promise<void> {
   let saved = false;
   page.on("websocket", (socket) => {
     if (!socket.url().endsWith("/ws")) return;
@@ -13,10 +16,7 @@ export function savedSessionLayout(page: Page, pod: string): () => Promise<void>
         method?: string;
         params?: { value?: unknown };
       };
-      if (
-        message.method === "settings.put" &&
-        JSON.stringify(message.params?.value).includes(`app in ${pod}`)
-      )
+      if (message.method === "settings.put" && JSON.stringify(message.params?.value).includes(text))
         requests.add(message.id);
     });
     socket.on("framereceived", ({ payload }) => {
@@ -25,7 +25,12 @@ export function savedSessionLayout(page: Page, pod: string): () => Promise<void>
       if (message.type === "result" && requests.has(message.id)) saved = true;
     });
   });
-  return () => expect.poll(() => saved, { message: "session Tab layout acknowledged" }).toBe(true);
+  return () => expect.poll(() => saved, { message: `layout with ${text} acknowledged` }).toBe(true);
+}
+
+// Waits for the layout containing this session to be acknowledged by the Engine.
+export function savedSessionLayout(page: Page, pod: string): () => Promise<void> {
+  return savedLayout(page, `app in ${pod}`);
 }
 
 /** A restored live terminal owns Ctrl+K on Windows and Linux. */

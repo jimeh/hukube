@@ -10,7 +10,7 @@ import { expect, test, type Dialog, type Locator, type Page } from "@playwright/
 
 import { overviewTests } from "./overview.ts";
 
-import { openGoToResource, savedSessionLayout } from "./exec.ts";
+import { openGoToResource, savedLayout, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 
@@ -600,6 +600,90 @@ test("shows a Resource Type's columns and keeps their cells current", async ({ p
     '{"data":{"second":"2"}}',
   );
   await expect(data).toHaveText("2");
+});
+
+test("scopes a list to several Namespaces and keeps them in its Tab through a reload", async ({
+  page,
+}) => {
+  // Every Namespace gets a `default` ServiceAccount, and no other test lists
+  // ServiceAccounts.
+  const [first, second, third] = ["alpha", "beta", "gamma"].map((name) => `${namespace}-${name}`);
+  for (const name of [first, second, third]) kubectl("create", "namespace", name!);
+  try {
+    const saved = savedLayout(page, `"namespaces":["${second}"]`);
+    await page.goto(`/#token=${engineToken}`);
+    await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+    const sidebar = page.getByRole("complementary", { name: "Resource types" });
+    await sidebar.getByRole("button", { name: /^ServiceAccount \d+$/ }).click();
+    const panel = page.getByRole("tabpanel", { name: "serviceaccounts", exact: true });
+    const trigger = panel.getByRole("combobox", { name: "Namespace" });
+    const grid = panel.getByRole("grid", { name: "ServiceAccount resources" });
+    // A row names its Namespace only while the list shows the Namespace column.
+    const row = (name: string) => grid.getByRole("row", { name: new RegExp(`^default ${name} `) });
+    const onlyRow = grid.getByRole("row", { name: /^default / });
+    const namespaceHeader = panel.getByRole("columnheader", { name: "Namespace", exact: true });
+    await expect(trigger).toHaveText("All namespaces");
+
+    // Enter checks the highlighted match and keeps the popup open for the next.
+    await trigger.click();
+    const popup = page.getByRole("dialog", { name: "Namespaces" });
+    const option = (name: string) => popup.getByRole("option", { name, exact: true });
+    await expect(popup.getByRole("combobox", { name: "Filter namespaces" })).toBeFocused();
+    await page.keyboard.type(first!);
+    await expect(option(first!)).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(trigger).toHaveText(first!);
+    await expect(onlyRow).toHaveCount(1);
+    await page.keyboard.type(second!);
+    await expect(option(second!)).toBeVisible();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveText(`${first}+1 and 1 more`);
+    await expect(row(first!)).toBeVisible();
+    await expect(row(second!)).toBeVisible();
+    await expect(grid.getByRole("row")).toHaveCount(2);
+    await expect(namespaceHeader).toBeVisible();
+
+    // A click unchecks a chosen Namespace, which the popup lists first.
+    await trigger.click();
+    await expect(popup.getByRole("option").nth(1)).toHaveAccessibleName(first!);
+    await option(first!).click();
+    await expect(trigger).toHaveText(second!);
+    await page.keyboard.press("Escape");
+    await expect(namespaceHeader).toHaveCount(0);
+    await expect(onlyRow).toHaveCount(1);
+    await expect(grid.getByRole("row")).toHaveCount(1);
+
+    // The change pinned the Preview Tab, so another preview opens beside it.
+    await sidebar.getByRole("button", { name: /^Secret \d+$/ }).click();
+    await expect(page.getByRole("tabpanel", { name: "secrets", exact: true })).toBeVisible();
+    const tab = page
+      .locator(".dv-tab")
+      .filter({ has: page.getByRole("button", { name: "Close serviceaccounts", exact: true }) });
+    await expect(tab).toHaveCount(1);
+
+    await saved();
+    await page.reload();
+    await tab.click();
+    await expect(trigger).toHaveText(second!);
+    await expect(namespaceHeader).toHaveCount(0);
+    await expect(onlyRow).toHaveCount(1);
+    await expect(grid.getByRole("row")).toHaveCount(1);
+
+    // × returns to All namespaces, which leaves this Tab unscoped for later tests.
+    await panel.getByRole("button", { name: "Show all namespaces" }).click();
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveText("All namespaces");
+    await expect(namespaceHeader).toBeVisible();
+    const name = panel.getByRole("textbox", { name: "Filter by name" });
+    await name.fill("default");
+    for (const ns of [first, second, third]) await expect(row(ns!)).toBeVisible();
+    await name.fill("");
+  } finally {
+    for (const name of [first, second, third])
+      kubectl("delete", "namespace", name!, "--wait=false");
+  }
 });
 
 test("goes to a Resource and a Resource Type from the palette", async ({ page }) => {

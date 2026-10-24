@@ -35,9 +35,10 @@ describe("rowAt", () => {
 
 describe("listQuery", () => {
   const type = { op: "in", field: "type", values: ["pods"] };
+  const filters = { namespaced: true, namespaces: [], name: "", selector: "" };
 
   it("omits blank filters", () => {
-    expect(listQuery("pods", { namespace: null, name: " ", selector: "  " })).toEqual({
+    expect(listQuery("pods", { ...filters, name: " ", selector: "  " })).toEqual({
       op: "and",
       args: [type],
     });
@@ -45,7 +46,12 @@ describe("listQuery", () => {
 
   it("adds each filter that is set, trimmed", () => {
     expect(
-      listQuery("pods", { namespace: "default", name: " web ", selector: " app=web " }),
+      listQuery("pods", {
+        ...filters,
+        namespaces: ["default"],
+        name: " web ",
+        selector: " app=web ",
+      }),
     ).toEqual({
       op: "and",
       args: [
@@ -54,6 +60,21 @@ describe("listQuery", () => {
         { op: "contains", field: "name", values: ["web"] },
         { op: "selector", values: ["app=web"] },
       ],
+    });
+  });
+
+  it("matches several Namespaces with one sorted clause", () => {
+    expect(listQuery("pods", { ...filters, namespaces: ["shop", "payments", "shop"] })).toEqual({
+      op: "and",
+      args: [type, { op: "in", field: "namespace", values: ["payments", "shop"] }],
+    });
+  });
+
+  it("ignores Namespaces for a type that is not namespaced", () => {
+    // Params left on a type whose CRD changed scope must not empty its list.
+    expect(listQuery("pods", { ...filters, namespaced: false, namespaces: ["shop"] })).toEqual({
+      op: "and",
+      args: [type],
     });
   });
 });

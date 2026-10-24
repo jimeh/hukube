@@ -21,8 +21,10 @@ export function rowAt(result: QueryResult | undefined, index: number): Row | und
 }
 
 export interface ListFilters {
-  /** Only Resources in this Namespace, or every Namespace when null. */
-  namespace: string | null;
+  /** Whether the type is namespaced; Namespaces narrow only a namespaced type. */
+  namespaced: boolean;
+  /** Only Resources in these Namespaces, or in every Namespace when empty. */
+  namespaces: readonly string[];
   /** Text the name must contain, case-insensitively. */
   name: string;
   /** A Kubernetes label selector, such as `app=web,tier!=db`. */
@@ -32,7 +34,12 @@ export interface ListFilters {
 /** The Query for one Resource Type, narrowed by any filters that are set. */
 export function listQuery(type: TypeKey, filters: ListFilters): Expr {
   const args: Expr[] = [{ op: "in", field: "type", values: [type] }];
-  if (filters.namespace) args.push({ op: "in", field: "namespace", values: [filters.namespace] });
+  if (filters.namespaced && filters.namespaces.length > 0)
+    args.push({
+      op: "in",
+      field: "namespace",
+      values: [...new Set(filters.namespaces)].toSorted(),
+    });
   const name = filters.name.trim();
   if (name) args.push({ op: "contains", field: "name", values: [name] });
   const selector = filters.selector.trim();

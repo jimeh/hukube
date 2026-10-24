@@ -3,6 +3,8 @@ import type { AddPanelPositionOptions, DockviewApi } from "dockview-react";
 
 export interface ListPanelParams {
   type: TypeKey;
+  /** The chosen Namespaces, sorted; absent for All namespaces. */
+  namespaces?: string[];
   preview?: boolean;
 }
 

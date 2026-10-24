@@ -23,7 +23,8 @@ import { showColumn, type ResolvedColumnLayout, type StoredColumnLayout } from "
 
 export interface ColumnMenuProps {
   layout: ResolvedColumnLayout;
-  allNamespaces: boolean;
+  /** Whether exactly one Namespace is chosen, which hides the Namespace column. */
+  oneNamespace: boolean;
   hasStored: boolean;
   onEdit: (layout: StoredColumnLayout | null) => void;
   onShow: (id: string, menu: Element | null) => void;
@@ -32,7 +33,7 @@ export interface ColumnMenuProps {
 /** One checklist, rendered through either menu's primitives. */
 export function ColumnMenuItems({
   layout,
-  allNamespaces,
+  oneNamespace,
   hasStored,
   onEdit,
   onShow,
@@ -54,7 +55,7 @@ export function ColumnMenuItems({
             closeOnClick={false}
             disabled={
               (shown.has(column.id) && shown.size === 1) ||
-              (column.source === "namespace" && !allNamespaces)
+              (column.source === "namespace" && oneNamespace)
             }
             onCheckedChange={(checked) => {
               const value = showColumn(layout, column.id, checked);

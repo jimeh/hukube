@@ -66,8 +66,10 @@ Host a 404 during a test.
   from `packages/ui`, piping `yes n` to keep existing components, because
   `--yes` still asks before overwriting), plus the design tokens in
   `src/styles/globals.css`. `dialog.tsx` and `alert-dialog.tsx` carry a local
-  change, `useModalInert`, which keeps Tab inside an open modal dialog; keep
-  it when the CLI offers to overwrite them.
+  change, `useModalInert`, which keeps Tab inside an open modal dialog, and
+  `combobox.tsx` adds `ComboboxStatus` and `useComboboxFilteredItems`, which
+  the registry's version lacks; keep them when the CLI offers to overwrite
+  these files.
 - `packages/host/`: the `Host` interface the UI uses for platform features.
 - `packages/k8s/`: Kubernetes helpers: Resource URIs, type keys, and ages.
 - `apps/app/`: the UI; features live in `src/features/<feature>/`.
@@ -196,7 +198,7 @@ Host a 404 during a test.
   so a test finds lists earlier tests opened. Scope each list's locators to its
   tab panel, and select the Facet a test needs, because a Resource tab opens
   on the Facet an earlier test left. A test that reloads must first wait for
-  the Engine to acknowledge the layout it depends on (`savedSessionLayout` in
+  the Engine to acknowledge the layout it depends on (`savedLayout` in
   `e2e/tests/exec.ts`), or the reload restores an older one. A run's
   Namespace is deleted without waiting, so a second run started within a
   minute can find the first run's Resources by name.
