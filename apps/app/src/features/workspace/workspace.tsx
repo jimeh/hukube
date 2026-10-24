@@ -45,6 +45,15 @@ const components = {
     <ResourceListPanel
       panelId={api.id}
       type={params.type}
+      namespaces={params.namespaces}
+      // One partial update, so a full copy of older params cannot undo it.
+      // The selection is saved with the Tab, so changing it pins a preview.
+      onNamespacesChange={(namespaces) =>
+        api.updateParameters({
+          namespaces: namespaces.length > 0 ? namespaces : undefined,
+          preview: false,
+        })
+      }
       onInteract={() => pinPanel(api, params)}
     />
   ),

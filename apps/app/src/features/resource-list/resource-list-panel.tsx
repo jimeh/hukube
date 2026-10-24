@@ -6,14 +6,6 @@ import { useSubscription } from "@hukube/engine-client/react";
 import { formatAge, type TypeKey } from "@hukube/k8s";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@hukube/ui/components/input-group";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@hukube/ui/components/select";
 import { Skeleton } from "@hukube/ui/components/skeleton";
 import { cn } from "@hukube/ui/lib/utils";
 import { Search01Icon, Tag01Icon } from "@hugeicons/core-free-icons";
@@ -45,6 +37,8 @@ import {
   type ColumnWidths,
   type ListColumn,
 } from "./columns.ts";
+import { NamespacePicker } from "./namespace-picker.tsx";
+import { emptyListNotice, missingNamespaces, readNamespaces } from "./namespace-selection.ts";
 import { listQuery, rowAt, windowFor } from "./query-window.ts";
 import { useColumnLayout } from "./use-column-layout.ts";
 
@@ -52,22 +46,42 @@ const rowHeight = 26;
 // The header scrolls sideways with the rows and stays at the top, so the rows
 // start this far into the scrolling element. It matches the header's `h-7`.
 const headerHeight = 28;
-const allNamespaces = null;
+const noNamespaces: string[] = [];
 
 interface ResourceListPanelProps {
   panelId: string;
   type: TypeKey;
+  /** The chosen Namespaces from the Tab's params, which a restored layout may hold in any shape. */
+  namespaces: unknown;
+  /** Saves a new Namespace selection in the Tab's params, pinning its Preview Tab. */
+  onNamespacesChange: (namespaces: string[]) => void;
   /** Called when the user works with the list, which pins its Preview Tab. */
   onInteract: () => void;
 }
 
 /** A live, virtualized list of every Resource of one type. */
-export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPanelProps) {
+export function ResourceListPanel({
+  panelId,
+  type,
+  namespaces: namespacesParam,
+  onNamespacesChange,
+  onInteract,
+}: ResourceListPanelProps) {
   const { cluster, types, openResource } = useWorkspace();
   const info = types.get(type);
+  // A restarted Engine lists no Resource Types until its discovery completes,
+  // so the list keeps the type's last known scope, and with it the Namespace
+  // control and its open popup, until the type is listed again.
+  const [scope, setScope] = useState({ type, namespaced: info?.namespaced });
+  if (info && (scope.type !== type || scope.namespaced !== info.namespaced))
+    setScope({ type, namespaced: info.namespaced });
+  const namespaced = info?.namespaced ?? (scope.type === type && !!scope.namespaced);
   const [nameFilter, setNameFilter] = useState("");
   const [selectorFilter, setSelectorFilter] = useState("");
-  const [namespace, setNamespace] = useState<string | null>(allNamespaces);
+  const chosen = useMemo(() => readNamespaces(namespacesParam), [namespacesParam]);
+  // Namespaces narrow only a namespaced type, so params left on a type whose
+  // CRD changed scope cannot empty its list.
+  const namespaces = namespaced ? chosen : noNamespaces;
   const [sort, setSort] = useState<Sort>({ field: "name" });
   const [selected, setSelected] = useState<number>();
   const deferredName = useDeferredValue(nameFilter);
@@ -88,10 +102,17 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   const window = windowFor(items[0]?.index ?? 0, items.at(-1)?.index ?? 0);
 
   const where = useMemo(
-    () => listQuery(type, { namespace, name: deferredName, selector: deferredSelector }),
-    [type, namespace, deferredName, deferredSelector],
+    () =>
+      listQuery(type, {
+        namespaced,
+        namespaces,
+        name: deferredName,
+        selector: deferredSelector,
+      }),
+    [type, namespaced, namespaces, deferredName, deferredSelector],
   );
-  const filtered = Boolean(namespace || deferredName.trim() || deferredSelector.trim());
+  const filtered = Boolean(deferredName.trim() || deferredSelector.trim());
+  const oneNamespace = namespaces.length === 1;
   const { stored, put } = useColumnLayout(type);
   // Query data supplies the available cells; keep it while a derived sort changes.
   const [columnData, setColumnData] = useState<{ columns?: Column[]; rows: Row[] }>({ rows: [] });
@@ -99,13 +120,13 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
     () =>
       resolveColumnLayout({
         type,
-        namespaced: info?.namespaced ?? false,
-        allNamespaces: namespace === allNamespaces,
+        namespaced,
+        oneNamespace,
         columns: columnData.columns,
         rows: columnData.rows,
         stored: stored ?? null,
       }),
-    [type, info?.namespaced, namespace, columnData, stored],
+    [type, namespaced, oneNamespace, columnData, stored],
   );
   const columns = stored === undefined ? [] : resolved.shown;
   const effectiveSort = shownSort(sort, columns);
@@ -116,6 +137,14 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
       : undefined,
   );
   if (data && data.total !== total) setTotal(data.total);
+  // Only an empty list of chosen Namespaces needs to know which ones exist.
+  const known = useNamespaces(cluster, namespaces.length > 0 && data?.total === 0);
+  const namespacesState = types.get("namespaces")?.state;
+  const missing = useMemo(
+    () =>
+      missingNamespaces(namespaces, known?.names, !!known?.complete && namespacesState === "ready"),
+    [namespaces, known, namespacesState],
+  );
 
   if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
     setColumnData({ columns: data.columns, rows: data.rows });
@@ -147,7 +176,7 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   }, [reveal, resolved.shown]);
   const columnMenu: ColumnMenuProps = {
     layout: resolved,
-    allNamespaces: namespace === allNamespaces,
+    oneNamespace,
     hasStored: stored != null,
     onEdit: (value) => {
       onInteract();
@@ -199,15 +228,13 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
         <h2 className="font-semibold">{info?.kind ?? type}</h2>
         <span className="font-mono text-xs text-muted-foreground tabular-nums">
           {data ? data.total : ""}
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          {info?.namespaced && (
-            <NamespaceSelect cluster={cluster} value={namespace} onChange={setNamespace} />
-          )}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {namespaced && <NamespacePicker value={chosen} onChange={onNamespacesChange} />}
           <InputGroup className="h-7 w-56">
             <InputGroupAddon>
               <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
@@ -292,12 +319,12 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
         {data?.total === 0 && (
           <div className="pointer-events-none absolute inset-x-0 top-7 bottom-0 flex">
             <Notice
-              title={filtered ? "No matches" : `No ${info?.kind ?? type} resources`}
-              description={
-                filtered
-                  ? "Nothing matches the current filters."
-                  : "The cluster has none right now. This list updates live."
-              }
+              {...emptyListNotice({
+                kind: info?.kind ?? type,
+                chosen: namespaces,
+                missing,
+                filtered,
+              })}
             />
           </div>
         )}
@@ -383,38 +410,6 @@ function ListCell({ column, cells }: { column: ListColumn; cells: unknown[] | un
     >
       {text}
     </span>
-  );
-}
-
-function NamespaceSelect({
-  cluster,
-  value,
-  onChange,
-}: {
-  cluster: string;
-  value: string | null;
-  onChange: (ns: string | null) => void;
-}) {
-  const namespaces = useNamespaces(cluster);
-  const items = [
-    { label: "All namespaces", value: allNamespaces },
-    ...(namespaces?.names ?? []).map((name) => ({ label: name, value: name })),
-  ];
-  return (
-    <Select items={items} value={value} onValueChange={(v) => onChange(v)}>
-      <SelectTrigger size="sm" className="w-48 font-mono" aria-label="Namespace">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          {items.map((item) => (
-            <SelectItem key={item.value ?? ""} value={item.value} className="font-mono">
-              {item.label}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
   );
 }
 

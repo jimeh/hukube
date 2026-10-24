@@ -129,7 +129,7 @@ describe("gridLayout", () => {
     const layout = resolveColumnLayout({
       type: "pods",
       namespaced: true,
-      allNamespaces: true,
+      oneNamespace: false,
       columns: served,
       rows: [],
       stored: null,
@@ -143,7 +143,7 @@ describe("gridLayout", () => {
     const layout = resolveColumnLayout({
       type: "pods",
       namespaced: true,
-      allNamespaces: false,
+      oneNamespace: true,
       columns: served,
       rows: [],
       stored: null,
@@ -166,7 +166,7 @@ describe("gridLayout", () => {
     const layout = resolveColumnLayout({
       type: "widgets",
       namespaced: false,
-      allNamespaces: true,
+      oneNamespace: false,
       columns: [{ name: "Name", type: "string", priority: 0 }],
       rows: [row("long-resource-name", ["a"])],
       stored: null,
