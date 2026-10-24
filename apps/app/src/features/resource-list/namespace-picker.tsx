@@ -263,6 +263,36 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
         aria-label="Namespaces"
         className="max-w-[min(28rem,var(--available-width))] min-w-(--anchor-width) font-mono text-xs motion-reduce:animate-none! *:font-sans"
         style={{ width: popupWidth(rows, missing) }}
+        onKeyDown={(event) => {
+          // Base UI moves Shift+Tab focus to the control before the popup's
+          // place on the page, the × while it shows, and leaves the popup open.
+          // Return to the trigger instead, as Escape does; the focus-out below
+          // closes the popup.
+          if (
+            event.key === "Tab" &&
+            event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey
+          ) {
+            event.preventDefault();
+            triggerRef.current?.focus();
+          }
+        }}
+        onBlur={(event) => {
+          // Base UI keeps a portaled popup open when focus leaves it, except
+          // by Tab, which passes through its focus guards; they close the
+          // popup and move focus on. Closing at a guard would remove the
+          // guards first and lose focus to the page.
+          const to = event.relatedTarget;
+          if (
+            to &&
+            !event.currentTarget.contains(to) &&
+            !to.hasAttribute("data-base-ui-focus-guard")
+          ) {
+            setOpen(false);
+          }
+        }}
       >
         <ComboboxInput
           ref={inputRef}

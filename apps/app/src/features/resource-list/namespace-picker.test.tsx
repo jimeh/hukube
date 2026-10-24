@@ -104,6 +104,7 @@ function Harness({
               setValue(next);
             }}
           />
+          <input aria-label="Filter by name" />
         </WorkspaceContext>
       </TooltipProvider>
     </EngineProvider>
@@ -314,6 +315,62 @@ it("names the chosen Namespaces when focus comes from another control, not when 
   act(() => screen.getByRole("button", { name: "Show all namespaces" }).focus());
   act(() => trigger().focus());
   await vi.waitFor(() => expect(tooltipText()).toBe("alpha"));
+});
+
+/**
+ * Presses Shift+Tab on the focused element and, unless a handler prevents it,
+ * moves focus to the previous tabbable element, as a browser does and jsdom
+ * does not. Base UI's focus guards are tabbable, so they take part.
+ */
+function shiftTab() {
+  const from = document.activeElement;
+  if (!(from instanceof HTMLElement)) throw new Error("nothing is focused");
+  if (!fireEvent.keyDown(from, { key: "Tab", shiftKey: true })) return;
+  const tabbable = [
+    ...document.querySelectorAll<HTMLElement>("a[href], button, input, [tabindex]"),
+  ].filter((element) => element.tabIndex >= 0 && !element.matches(":disabled"));
+  act(() => tabbable[tabbable.indexOf(from) - 1]?.focus());
+}
+
+it.each([
+  ["All namespaces", []],
+  ["chosen Namespaces", ["shop"]],
+])(
+  "closes on Shift+Tab from the filter and returns focus to the trigger, on %s",
+  async (_, initial) => {
+    const onChange = vi.fn<(value: string[]) => void>();
+    render(<Harness initial={initial} state="ready" onChange={onChange} />);
+    respond(listing(), result(["alpha", "shop"]));
+    const label = trigger().textContent;
+    const popup = await openPopup();
+    fireEvent.change(filterInput(popup), { target: { value: "sh" } });
+    act(() => filterInput(popup).focus());
+
+    shiftTab();
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Namespaces" })).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger()));
+    await act(async () => {});
+    expect(tooltipText()).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(trigger().textContent).toBe(label);
+  },
+);
+
+it.each([
+  ["the trigger", trigger],
+  ["×", () => screen.getByRole("button", { name: "Show all namespaces" })],
+  ["another control", () => screen.getByRole("textbox", { name: "Filter by name" })],
+])("closes when focus moves from the filter to %s", async (_, target) => {
+  const onChange = vi.fn<(value: string[]) => void>();
+  render(<Harness initial={["shop"]} state="ready" onChange={onChange} />);
+  respond(listing(), result(["alpha", "shop"]));
+  const popup = await openPopup();
+  act(() => filterInput(popup).focus());
+
+  act(() => target().focus());
+  await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Namespaces" })).toBeNull());
+  expect(document.activeElement).toBe(target());
+  expect(onChange).not.toHaveBeenCalled();
 });
 
 it("returns to All namespaces from × and moves focus to the trigger", async () => {

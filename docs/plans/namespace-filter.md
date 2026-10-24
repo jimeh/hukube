@@ -341,6 +341,7 @@ patterns Base UI implements; the implementer confirms each in the running app.
 | Enter                   | Filter input | Checks or unchecks the highlighted row, keeps the filter text selected, and keeps the popup open. |
 | Escape                  | Popup        | Closes it and returns focus to the trigger.                                                       |
 | Tab                     | Popup        | Closes it; focus moves on.                                                                        |
+| Shift+Tab               | Popup        | Closes it and returns focus to the trigger, as Escape does.                                       |
 | Enter, Space            | ×            | All namespaces; focus moves to the trigger.                                                       |
 
 The common paths:
@@ -651,3 +652,11 @@ None.
   before. The Engine's search results, for a Cluster with more Namespaces
   than were loaded, follow the typed text instead. This also keeps the rows
   and the highlight while a restarted Engine lists the Namespaces again.
+- **Leaving the popup closes it.** Base UI moved Shift+Tab focus from the
+  filter to the ×, the control before the popup's place on the page, and left
+  the popup open over the toolbar's filters, where Enter on the × cleared the
+  selection behind it. Shift+Tab now returns focus to the trigger, as Escape
+  does. Base UI also keeps the popup open when focus moves from it to the
+  trigger or another control by script or assistive technology, so the picker
+  closes the popup whenever focus leaves it. It leaves Tab to Base UI's focus
+  guards, which close the popup and move focus on.

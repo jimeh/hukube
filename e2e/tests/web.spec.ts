@@ -650,7 +650,10 @@ test("scopes a list to several Namespaces and keeps them in its Tab through a re
     await expect(popup.getByRole("option").nth(1)).toHaveAccessibleName(first!);
     await option(first!).click();
     await expect(trigger).toHaveText(second!);
-    await page.keyboard.press("Escape");
+    // Tab leaves the popup through Base UI's focus guards, which closes it.
+    await page.keyboard.press("Tab");
+    await expect(popup).toBeHidden();
+    await expect(panel.getByRole("textbox", { name: "Filter by name" })).toBeFocused();
     await expect(namespaceHeader).toHaveCount(0);
     await expect(onlyRow).toHaveCount(1);
     await expect(grid.getByRole("row")).toHaveCount(1);
