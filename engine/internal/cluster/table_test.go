@@ -273,8 +273,16 @@ func TestTableReadsEventTimes(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []any{instant(t, tt.lastSeen), "Started", instant(t, tt.first)}
-			if row := cells["default/web.17f"]; !slices.EqualFunc(row, want, sameCell) {
+			row := cells["default/web.17f"]
+			if !slices.EqualFunc(row, want, sameCell) {
 				t.Errorf("cells = %v, want %v", row, want)
+			}
+			// Times keep the zone metav1 decodes into, so they encode with the
+			// same offset as a Row's createdAt and the Events Facet's times.
+			for _, cell := range row {
+				if at, ok := cell.(time.Time); ok && at.Location() != time.Local {
+					t.Errorf("time cell location is %v, want time.Local", at.Location())
+				}
 			}
 			if resourceVersion != "7" {
 				t.Errorf("resourceVersion = %q, want 7", resourceVersion)

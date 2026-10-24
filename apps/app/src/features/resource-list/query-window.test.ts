@@ -103,6 +103,14 @@ describe("selection", () => {
     expect(steppedIndex(unloaded(99), 99, -1, 500)).toBe(98);
   });
 
+  it("shows no row for a row chosen before it loaded once the list ends before it", () => {
+    // Deletions can shrink the list before the chosen row arrives.
+    const shrunk = { total: 3, offset: 0, rows: [row("events", "a")] };
+    expect(selectedIndex(shrunk, "c", unloaded(99))).toBeUndefined();
+    expect(steppedIndex(unloaded(99), undefined, -1, 3)).toBe(2);
+    expect(steppedIndex(unloaded(99), undefined, 1, 3)).toBe(2);
+  });
+
   it("starts at the first row when nothing is selected", () => {
     expect(steppedIndex(undefined, undefined, 1, 500)).toBe(0);
     expect(steppedIndex(undefined, undefined, -1, 500)).toBeUndefined();

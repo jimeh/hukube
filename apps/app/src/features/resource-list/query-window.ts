@@ -56,16 +56,18 @@ export function selectionAt(
 /**
  * The list index of the row that shows a selection. Rows that arrive above it
  * and a new sort move its Resource, so this is where the window holds that
- * Resource. A row selected before it loaded shows at its index. Otherwise no
- * row shows it: the Resource is scrolled out of the window, filtered out, or
- * deleted, and the row now at its last index is another Resource.
+ * Resource. A row selected before it loaded shows at its index while the list
+ * reaches it. Otherwise no row shows it: the Resource is scrolled out of the
+ * window, filtered out, or deleted, and the row now at its last index is
+ * another Resource.
  */
 export function selectedIndex(
   result: QueryResult | undefined,
   cluster: string,
   selection: ListSelection,
 ): number | undefined {
-  if (selection.key === undefined) return selection.index;
+  if (selection.key === undefined)
+    return !result || selection.index < result.total ? selection.index : undefined;
   if (!result) return undefined;
   const at = result.rows.findIndex((row) => rowUri(cluster, row) === selection.key);
   return at === -1 ? undefined : result.offset + at;
