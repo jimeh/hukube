@@ -1039,8 +1039,10 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
       ...(at ? { firstTimestamp: at, lastTimestamp: at, count: 1 } : {}),
     });
   // Reasons sort the other way round from Last Seen.
-  createEvent("older", "Alpha", hoursAgo(3));
-  createEvent("newer", "Bravo", hoursAgo(1));
+  // Neither name order nor creation order matches Last Seen order, so only a
+  // sort by the Events' times passes the order checks below.
+  createEvent("recent", "Bravo", hoursAgo(1));
+  createEvent("early", "Alpha", hoursAgo(3));
   await page.goto(`/#token=${engineToken}`);
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   const sidebar = page.getByRole("complementary", { name: "Resource types" });
@@ -1159,7 +1161,7 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
     const filter = panel.getByRole("textbox", { name: "Filter by name" });
     await rows.filter({ hasText: "Charlie" }).click();
     await expect(selected).toContainText("Charlie");
-    await filter.fill(`${prefix}-newer`);
+    await filter.fill(`${prefix}-recent`);
     await expect(rows).toHaveText([/Bravo/]);
     await expect(selected).toHaveCount(0);
     await grid.press("Enter");
@@ -1169,7 +1171,10 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
         .locator("span")
         .first(),
     ).toHaveCSS("font-style", "italic");
-    await expect(page.getByRole("tab", { name: `${prefix}-newer`, exact: true })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: `${prefix}-recent`, exact: true })).toHaveCount(0);
+    // The grid handled the keys: an arrow key selects the only row.
+    await grid.press("ArrowDown");
+    await expect(selected).toContainText("Bravo");
     await filter.fill(prefix);
     await expect(rows).toHaveCount(3);
     await expect(selected).toHaveCount(0);
@@ -1184,6 +1189,14 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
     createEvent("later", "Delta");
     await expect(rows).toHaveText([/Delta/, /Bravo/, /Alpha/]);
     await expect(selected).toHaveCount(0);
+    // Enter still opens the selected Event, though no row shows it.
+    await grid.press("Enter");
+    await expect(
+      page
+        .getByRole("tab", { name: `${prefix}-live`, exact: true })
+        .locator("span")
+        .first(),
+    ).toHaveCSS("font-style", "normal");
     await grid.press("ArrowDown");
     await expect(selected).toContainText("Bravo");
   }
