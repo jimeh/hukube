@@ -299,6 +299,12 @@ it("filters a complete list without searching the Engine", async () => {
   expect(searching()).toBeUndefined();
   expect(subscriptions).toHaveLength(1);
 
+  fireEvent.change(filterInput(popup), { target: { value: "zz" } });
+  expect(options(popup)).toEqual([]);
+  expect(popup.querySelector('[data-slot="combobox-empty"]')?.textContent).toBe(
+    "No namespaces match.",
+  );
+
   // Only spaces filter nothing, so All namespaces stays.
   fireEvent.change(filterInput(popup), { target: { value: " " } });
   expect(options(popup)).toEqual(["All namespaces", "alpha", "payments", "shop"]);
