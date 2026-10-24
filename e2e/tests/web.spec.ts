@@ -1240,6 +1240,37 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
     await resetSort.click();
     await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
     await expect(rows.nth(0)).toContainText("Charlie");
+
+    // A filter that hides the selected Event leaves no row selected, and
+    // Enter opens that Event, not the one in its place.
+    const filter = panel.getByRole("textbox", { name: "Filter by name" });
+    await rows.filter({ hasText: "Charlie" }).click();
+    await expect(selected).toContainText("Charlie");
+    await filter.fill(`${prefix}-newer`);
+    await expect(rows).toHaveText([/Bravo/]);
+    await expect(selected).toHaveCount(0);
+    await grid.press("Enter");
+    await expect(
+      page
+        .getByRole("tab", { name: `${prefix}-live`, exact: true })
+        .locator("span")
+        .first(),
+    ).toHaveCSS("font-style", "normal");
+    await expect(page.getByRole("tab", { name: `${prefix}-newer`, exact: true })).toHaveCount(0);
+    await filter.fill(prefix);
+    await expect(rows).toHaveCount(3);
+    await expect(selected).toContainText("Charlie");
+
+    // A deleted selection leaves no row selected while Events arrive. An
+    // arrow key selects a row again, next to where it was.
+    kubectl("-n", namespace, "delete", "event", `${prefix}-live`);
+    await expect(rows).toHaveText([/Bravo/, /Alpha/]);
+    await expect(selected).toHaveCount(0);
+    createEvent("later", "Delta");
+    await expect(rows).toHaveText([/Delta/, /Bravo/, /Alpha/]);
+    await expect(selected).toHaveCount(0);
+    await grid.press("ArrowDown");
+    await expect(selected).toContainText("Bravo");
   }
 
   // Other lists keep name order as their default.

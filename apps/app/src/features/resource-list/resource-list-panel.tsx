@@ -3,7 +3,7 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role, jsx-a11y/click-events-have-key-events */
 import type { Column, Row, Sort } from "@hukube/engine-client";
 import { useSubscription } from "@hukube/engine-client/react";
-import { formatAge, type TypeKey } from "@hukube/k8s";
+import { formatAge, type ResourceAddress, type TypeKey } from "@hukube/k8s";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@hukube/ui/components/input-group";
 import { Skeleton } from "@hukube/ui/components/skeleton";
@@ -44,8 +44,9 @@ import { emptyListNotice, missingNamespaces, readNamespaces } from "./namespace-
 import {
   listQuery,
   rowAt,
-  rowUri,
   selectedIndex,
+  selectionAt,
+  steppedIndex,
   windowFor,
   type ListSelection,
 } from "./query-window.ts";
@@ -162,7 +163,8 @@ export function ResourceListPanel({
     [namespaces, known, namespacesState],
   );
   // The selection stays on its Resource while rows arrive and the list
-  // re-sorts. Only the user's own moves scroll to it.
+  // re-sorts, and no row shows it while the window does not hold it. Only the
+  // user's own moves scroll to it.
   const selected = useMemo(
     () => selection && selectedIndex(data, cluster, selection),
     [data, cluster, selection],
@@ -170,6 +172,9 @@ export function ResourceListPanel({
   // Remember where the Resource was, for when the window no longer holds it.
   if (selection && selected !== undefined && selected !== selection.index)
     setSelection({ ...selection, index: selected });
+  // A row selected before it loaded becomes its Resource once it has.
+  if (selection && selection.key === undefined && rowAt(data, selection.index))
+    setSelection(selectionAt(data, cluster, selection.index));
 
   if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
     setColumnData({ columns: data.columns, rows: data.rows });
@@ -211,30 +216,24 @@ export function ResourceListPanel({
     onShow: (id, menu) => setReveal({ id, menu }),
   };
 
-  const open = (row: Row | undefined, preview: boolean) => {
-    if (!row) return;
+  const open = (address: Omit<ResourceAddress, "cluster"> | undefined, preview: boolean) => {
+    if (!address) return;
     onInteract();
-    openResource(
-      { type: row.type, namespace: row.namespace ?? "", name: row.name },
-      { preview, beside: panelId },
-    );
+    openResource(address, { preview, beside: panelId });
     // Previews keep focus in the list so arrow keys keep browsing.
     if (preview) requestAnimationFrame(() => gridRef.current?.focus({ preventScroll: true }));
   };
-  const selectionAt = (index: number): ListSelection => {
-    const row = rowAt(data, index);
-    return { key: row && rowUri(cluster, row), index };
-  };
   const select = (index: number) => {
-    setSelection(selectionAt(index));
+    setSelection(selectionAt(data, cluster, index));
     virtualizer.scrollToIndex(index);
   };
   const onKeyDown = (e: KeyboardEvent) => {
-    const current = selected ?? -1;
-    if (e.key === "ArrowDown" && current < total - 1) select(current + 1);
-    else if (e.key === "ArrowUp" && current > 0) select(current - 1);
-    else if (e.key === "Enter" && selected !== undefined) open(rowAt(data, selected), false);
-    else if (e.key === " " && selected !== undefined) open(rowAt(data, selected), true);
+    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    const next = step ? steppedIndex(selection, selected, step, total) : undefined;
+    if (next !== undefined) select(next);
+    // The selected Resource opens even when the window does not hold its row.
+    else if (e.key === "Enter" && selection) open(selection.address, false);
+    else if (e.key === " " && selection) open(selection.address, true);
     else return;
     e.preventDefault();
   };
@@ -342,10 +341,11 @@ export function ResourceListPanel({
                   columns={columns}
                   selected={item.index === selected}
                   onClick={() => {
-                    setSelection(selectionAt(item.index));
-                    open(rowAt(data, item.index), true);
+                    const clicked = selectionAt(data, cluster, item.index);
+                    setSelection(clicked);
+                    open(clicked.address, true);
                   }}
-                  onDoubleClick={() => open(rowAt(data, item.index), false)}
+                  onDoubleClick={() => open(selectionAt(data, cluster, item.index).address, false)}
                 />
               ))}
             </div>

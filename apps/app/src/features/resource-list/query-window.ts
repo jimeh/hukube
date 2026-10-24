@@ -1,5 +1,5 @@
 import type { Expr, QueryResult, Row } from "@hukube/engine-client";
-import { formatResourceUri, type TypeKey } from "@hukube/k8s";
+import { formatResourceUri, type ResourceAddress, type TypeKey } from "@hukube/k8s";
 
 const block = 100;
 
@@ -20,37 +20,72 @@ export function rowAt(result: QueryResult | undefined, index: number): Row | und
   return result.rows[index - result.offset];
 }
 
-/** The Resource URI of a row, which keeps rows of different types apart. */
-export function rowUri(cluster: string, row: Row): string {
-  return formatResourceUri({
-    cluster,
-    type: row.type,
-    namespace: row.namespace ?? "",
-    name: row.name,
-  });
+/** The address of a row's Resource, as `openResource` takes it. */
+export function rowAddress(row: Row): Omit<ResourceAddress, "cluster"> {
+  return { type: row.type, namespace: row.namespace ?? "", name: row.name };
 }
 
-/** A selected row: its Resource URI, once it has loaded, and its last known index. */
-export interface ListSelection {
-  key: string | undefined;
-  index: number;
+/** The Resource URI of a row, which keeps rows of different types apart. */
+export function rowUri(cluster: string, row: Row): string {
+  return formatResourceUri({ cluster, ...rowAddress(row) });
 }
 
 /**
- * The list index of a selection. Rows that arrive above it and a new sort move
- * its Resource, so this is where the window holds that Resource, or else the
- * last known index.
+ * A selected row: its Resource URI and address, once its row has loaded, and
+ * the list index it was selected at or the window last held it at. The address
+ * opens the Resource while the window does not hold it.
+ */
+export interface ListSelection {
+  key: string | undefined;
+  address: Omit<ResourceAddress, "cluster"> | undefined;
+  index: number;
+}
+
+/** A selection of the row at a list index, which has no Resource until it loads. */
+export function selectionAt(
+  result: QueryResult | undefined,
+  cluster: string,
+  index: number,
+): ListSelection {
+  const row = rowAt(result, index);
+  return row
+    ? { key: rowUri(cluster, row), address: rowAddress(row), index }
+    : { key: undefined, address: undefined, index };
+}
+
+/**
+ * The list index of the row that shows a selection. Rows that arrive above it
+ * and a new sort move its Resource, so this is where the window holds that
+ * Resource. A row selected before it loaded shows at its index. Otherwise no
+ * row shows it: the Resource is scrolled out of the window, filtered out, or
+ * deleted, and the row now at its last index is another Resource.
  */
 export function selectedIndex(
   result: QueryResult | undefined,
   cluster: string,
   selection: ListSelection,
-): number {
-  if (result && selection.key !== undefined) {
-    const at = result.rows.findIndex((row) => rowUri(cluster, row) === selection.key);
-    if (at !== -1) return result.offset + at;
-  }
-  return selection.index;
+): number | undefined {
+  if (selection.key === undefined) return selection.index;
+  if (!result) return undefined;
+  const at = result.rows.findIndex((row) => rowUri(cluster, row) === selection.key);
+  return at === -1 ? undefined : result.offset + at;
+}
+
+/**
+ * The list index an arrow key selects, `step` rows from the shown selection,
+ * or undefined if the selection stays. A selection no row shows moves from its
+ * last index, clamped to the list, which may have shrunk since.
+ */
+export function steppedIndex(
+  selection: ListSelection | undefined,
+  selected: number | undefined,
+  step: number,
+  total: number,
+): number | undefined {
+  if (selection && selected === undefined)
+    return total === 0 ? undefined : Math.min(Math.max(selection.index + step, 0), total - 1);
+  const index = (selected ?? -1) + step;
+  return index >= 0 && index < total ? index : undefined;
 }
 
 export interface ListFilters {

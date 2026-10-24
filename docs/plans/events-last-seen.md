@@ -247,3 +247,14 @@ A review of the running app found these problems.
   query window holds it. This applies to every Resource list. Only the user's
   own moves scroll the list; keeping the view in place as rows arrive is left
   for later.
+- **No row shows a selection whose Resource the window does not hold.** The
+  last known index was a fallback for the highlight and the keys, so after a
+  new sort, a filter, a Namespace change, a deletion, or a scroll away, the
+  row now at that index showed as selected, and the arrow keys, Space, and
+  Enter acted on it while the open tab showed the selected Resource. A list
+  now shows or acts on a Resource as selected only if the user selected it.
+  The selection also keeps its Resource's address: Enter and Space open the
+  selected Resource from it when the window does not hold its row, and an
+  arrow key selects the row next to the last index the Resource was seen at,
+  clamped to the list, and scrolls to it. A row an arrow key selects before
+  it has loaded shows at its index and takes its Resource once it loads.
