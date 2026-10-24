@@ -1241,8 +1241,8 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
     await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
     await expect(rows.nth(0)).toContainText("Charlie");
 
-    // A filter that hides the selected Event leaves no row selected, and
-    // Enter opens that Event, not the one in its place.
+    // Changing a filter clears the selection, so Enter opens nothing, neither
+    // the hidden Event nor the one in its place.
     const filter = panel.getByRole("textbox", { name: "Filter by name" });
     await rows.filter({ hasText: "Charlie" }).click();
     await expect(selected).toContainText("Charlie");
@@ -1255,10 +1255,12 @@ test("opens Event lists newest first with a live Last Seen, and resets a sort", 
         .getByRole("tab", { name: `${prefix}-live`, exact: true })
         .locator("span")
         .first(),
-    ).toHaveCSS("font-style", "normal");
+    ).toHaveCSS("font-style", "italic");
     await expect(page.getByRole("tab", { name: `${prefix}-newer`, exact: true })).toHaveCount(0);
     await filter.fill(prefix);
     await expect(rows).toHaveCount(3);
+    await expect(selected).toHaveCount(0);
+    await rows.filter({ hasText: "Charlie" }).click();
     await expect(selected).toContainText("Charlie");
 
     // A deleted selection leaves no row selected while Events arrive. An

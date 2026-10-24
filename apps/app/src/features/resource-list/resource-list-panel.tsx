@@ -223,6 +223,14 @@ export function ResourceListPanel({
     // Previews keep focus in the list so arrow keys keep browsing.
     if (preview) requestAnimationFrame(() => gridRef.current?.focus({ preventScroll: true }));
   };
+  // A filter the user changes clears the selection, so Enter and Space never
+  // open a Resource the filter hides.
+  const filterBy =
+    <T,>(set: (value: T) => void) =>
+    (value: T) => {
+      setSelection(undefined);
+      set(value);
+    };
   const select = (index: number) => {
     setSelection(selectionAt(data, cluster, index));
     virtualizer.scrollToIndex(index);
@@ -263,7 +271,7 @@ export function ResourceListPanel({
           {data ? data.total : ""}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {namespaced && <NamespacePicker value={chosen} onChange={onNamespacesChange} />}
+          {namespaced && <NamespacePicker value={chosen} onChange={filterBy(onNamespacesChange)} />}
           <InputGroup className="h-7 w-56">
             <InputGroupAddon>
               <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
@@ -272,7 +280,7 @@ export function ResourceListPanel({
               aria-label="Filter by name"
               placeholder="Filter by name"
               value={nameFilter}
-              onChange={(e) => setNameFilter(e.target.value)}
+              onChange={(e) => filterBy(setNameFilter)(e.target.value)}
             />
           </InputGroup>
           <InputGroup className="h-7 w-56">
@@ -284,7 +292,7 @@ export function ResourceListPanel({
               placeholder="Label selector"
               className="font-mono"
               value={selectorFilter}
-              onChange={(e) => setSelectorFilter(e.target.value)}
+              onChange={(e) => filterBy(setSelectorFilter)(e.target.value)}
             />
           </InputGroup>
         </div>
@@ -292,7 +300,9 @@ export function ResourceListPanel({
 
       {error && <p className="px-3 py-2 text-destructive">{error.message}</p>}
 
-      <div className="relative min-h-0 flex-1">
+      {/* The grid is as tall as every row, so its focus ring is drawn over this
+          wrapper, which stays in view while the list scrolls. */}
+      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-sm has-[[role=grid]:focus-visible]:after:outline-1 has-[[role=grid]:focus-visible]:after:-outline-offset-1 has-[[role=grid]:focus-visible]:after:outline-ring has-[[role=grid]:focus-visible]:after:outline-solid has-[[role=grid]:focus-visible]:after:ring-2 has-[[role=grid]:focus-visible]:after:ring-ring/30 has-[[role=grid]:focus-visible]:after:ring-inset">
         <div ref={scrollRef} className="h-full overflow-auto">
           {/* Column widths are in `ch`, so everything inside uses the cells' font. */}
           <div
