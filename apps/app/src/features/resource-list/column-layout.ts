@@ -1,4 +1,4 @@
-import type { Column, Row, Sort } from "@hukube/engine-client";
+import { ColumnTypeTimestamp, type Column, type Row, type Sort } from "@hukube/engine-client";
 
 import { listColumns, type ListColumn } from "./columns.ts";
 
@@ -228,6 +228,17 @@ export function columnSort(column: ListColumn): Sort {
   return column.source === "cell"
     ? { field: "column", column: column.name }
     : { field: column.source };
+}
+
+/**
+ * The labels of a column's two sort items. Age and the Engine's timestamp
+ * cells hold times, which ascending orders newest first, so their items name
+ * the direction in time.
+ */
+export function sortLabels(column: ListColumn): { ascending: string; descending: string } {
+  return column.source === "age" || column.type === ColumnTypeTimestamp
+    ? { ascending: "Sort newest first", descending: "Sort oldest first" }
+    : { ascending: "Sort ascending", descending: "Sort descending" };
 }
 
 /** Whether two sorts order a list the same way. */

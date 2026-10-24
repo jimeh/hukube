@@ -211,7 +211,7 @@ func (l tableLayout) rows(rows []metav1.TableRow) (cells map[string][]any, resou
 			switch {
 			case times != nil && times[j] != nil:
 				if at := times[j](event); !at.IsZero() {
-					kept[j] = at.UTC()
+					kept[j] = at
 				}
 			case src < len(rows[i].Cells):
 				kept[j] = rows[i].Cells[src]

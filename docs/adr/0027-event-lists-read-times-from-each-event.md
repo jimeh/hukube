@@ -19,9 +19,9 @@ the times they count from:
   `deprecatedFirstTimestamp`), then the event time and the creation time.
 
 This is the order the Events Facet uses for an Event's last time, and both
-read it from one place. The times are stored in UTC, so they encode with a
-`Z` as a Row's `createdAt` does. Every other type is still listed with
-metadata only.
+read it from one place. The times keep the Engine's local zone, as a Row's
+`createdAt` and the Events Facet's times do, so one instant reads the same in
+every title. Every other type is still listed with metadata only.
 
 ## The `timestamp` column type
 

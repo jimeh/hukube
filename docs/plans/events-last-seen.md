@@ -216,3 +216,34 @@ meaning, and that rendered ages go stale. Point to it from both bullets.
 ## Open questions
 
 None.
+
+## What changed while building
+
+A review of the running app found these problems.
+
+- **Times keep the Engine's local zone.** The plan stored them in UTC to
+  encode with a `Z` like `createdAt`, but `createdAt` and the Events Facet's
+  times carry the Engine's local offset. A Last Seen title read
+  `2026-10-24T01:27:43Z` while Age's read `2026-10-24T02:27:43+01:00`, so one
+  instant looked an hour apart. The Engine now leaves the times as `metav1`
+  decodes them, and tests compare instants rather than strings.
+- **The Customize columns menu's "Reset to default" is "Reset columns".** It
+  resets only the column layout, and now sits beside a sort reset.
+- **Reset sort is also in the Customize columns menu,** above Reset columns.
+  The menu's button is reached with Tab, while a header's context menu cannot
+  be opened from a Mac keyboard. A header's menu keeps its own Reset sort
+  among its sort items, so `ColumnMenuItems` shows the item only when given
+  `onResetSort`.
+- **Columns of times name their sort items by direction in time:** "Sort
+  newest first" for ascending and "Sort oldest first" for descending, on Age
+  and on `timestamp` cells. "Sort ascending" did not say whether the newest
+  or the oldest came first. Other columns keep "Sort ascending" and "Sort
+  descending", and `aria-sort` and the arrow are unchanged.
+- **A list's selection stays on its Resource.** It was a row index, so an
+  Event arriving at the top, a new sort, or Reset sort moved the highlight to
+  another Resource while the open tab still showed the first, and the arrow
+  keys continued from the wrong row. A selection is now the row's Resource URI
+  and its last known index, and the list uses the URI's position while the
+  query window holds it. This applies to every Resource list. Only the user's
+  own moves scroll the list; keeping the view in place as rows arrive is left
+  for later.

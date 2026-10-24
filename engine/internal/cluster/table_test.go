@@ -50,6 +50,16 @@ func snapshot(t *testing.T, table *Table) ([]protocol.Column, map[string]string)
 	return columns, cells
 }
 
+// sameCell reports whether two cells hold the same value. Times compare as
+// instants, because they decode into the zone the test runs in.
+func sameCell(a, b any) bool {
+	if at, ok := a.(time.Time); ok {
+		other, ok := b.(time.Time)
+		return ok && at.Equal(other)
+	}
+	return a == b
+}
+
 func tableRow(namespace, name, resourceVersion string, cells ...any) metav1.TableRow {
 	raw, _ := json.Marshal(map[string]any{"metadata": map[string]any{
 		"namespace": namespace, "name": name, "resourceVersion": resourceVersion,
@@ -157,6 +167,16 @@ func objectRow(object map[string]any, cells ...any) metav1.TableRow {
 	return metav1.TableRow{Cells: cells, Object: runtime.RawExtension{Raw: raw}}
 }
 
+// instant parses an RFC 3339 time.
+func instant(t *testing.T, value string) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
 // eventDefs are some of the column definitions the API server sends for both
 // Event types: the two whose cells the Engine replaces, one it keeps, and the
 // name, which it drops.
@@ -168,8 +188,8 @@ var eventDefs = []metav1.TableColumnDefinition{
 }
 
 // An Event's Last Seen and First Seen hold the times they count from, read
-// from the Event in either API group's fields, in UTC. Other columns, and
-// other types, keep the cells the API server rendered.
+// from the Event in either API group's fields. Other columns, and other
+// types, keep the cells the API server rendered.
 func TestTableReadsEventTimes(t *testing.T) {
 	const (
 		created   = "2026-10-24T02:00:00+02:00"
@@ -178,11 +198,6 @@ func TestTableReadsEventTimes(t *testing.T) {
 		last      = "2026-10-24T02:03:00+02:00"
 		series    = "2026-10-24T02:04:00.000002+02:00"
 	)
-	utc := map[string]string{
-		created: "2026-10-24T00:00:00Z", first: "2026-10-24T00:01:00Z",
-		eventTime: "2026-10-24T00:02:00.000001Z", last: "2026-10-24T00:03:00Z",
-		series: "2026-10-24T00:04:00.000002Z",
-	}
 	core := func(fields map[string]any) map[string]any {
 		object := map[string]any{
 			"apiVersion": "v1", "kind": "Event",
@@ -257,15 +272,9 @@ func TestTableReadsEventTimes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			row := cells["default/web.17f"]
-			for _, cell := range []any{row[0], row[2]} {
-				if at, ok := cell.(time.Time); !ok || at.Location() != time.UTC {
-					t.Errorf("cell %#v is not a time in UTC", cell)
-				}
-			}
-			raw, _ := json.Marshal(row)
-			if want := fmt.Sprintf(`[%q,"Started",%q]`, utc[tt.lastSeen], utc[tt.first]); string(raw) != want {
-				t.Errorf("cells = %s, want %s", raw, want)
+			want := []any{instant(t, tt.lastSeen), "Started", instant(t, tt.first)}
+			if row := cells["default/web.17f"]; !slices.EqualFunc(row, want, sameCell) {
+				t.Errorf("cells = %v, want %v", row, want)
 			}
 			if resourceVersion != "7" {
 				t.Errorf("resourceVersion = %q, want 7", resourceVersion)
@@ -524,9 +533,11 @@ func TestTableEventWatchKeepsItsList(t *testing.T) {
 		_, _, w := fake.calls()
 		w.Modify(event(eventDefs, objectRow(eventObject("11", "2026-10-24T00:02:00Z"), "0s", "Started", "6m", "web.17f")))
 		synctest.Wait()
-		_, cells := snapshot(t, table)
-		if want := `["2026-10-24T00:02:00Z","Started","2026-10-24T00:00:00Z"]`; cells["default/web.17f"] != want {
-			t.Errorf("cells after the watch = %v, want %s", cells, want)
+		var row []any
+		table.Read(func(_ []protocol.Column, cells func(string) []any) { row = cells("default/web.17f") })
+		want := []any{instant(t, "2026-10-24T00:02:00Z"), "Started", instant(t, "2026-10-24T00:00:00Z")}
+		if !slices.EqualFunc(row, want, sameCell) {
+			t.Errorf("cells after the watch = %v, want %v", row, want)
 		}
 		// A relist would wait for the retry delay first.
 		time.Sleep(2 * timing.ObjectRetry)
@@ -863,8 +874,10 @@ func TestTableReadsEventTimesFromTheCluster(t *testing.T) {
 	defer releaseCore()
 	modern, releaseModern := c.Table("events.events.k8s.io")
 	defer releaseModern()
-	// lastSeen returns the JSON of an Event's Last Seen cell in a Table.
-	lastSeen := func(table *Table, name string) string {
+	// lastSeen returns an Event's Last Seen cell in a Table, and its JSON or
+	// why there is none.
+	lastSeen := func(table *Table, name string) (time.Time, string) {
+		var at time.Time
 		got := "no cells"
 		table.Read(func(columns []protocol.Column, cells func(string) []any) {
 			i := slices.IndexFunc(columns, func(c protocol.Column) bool { return c.Name == "Last Seen" })
@@ -873,13 +886,14 @@ func TestTableReadsEventTimesFromTheCluster(t *testing.T) {
 				return
 			}
 			if row := cells(ns + "/" + name); row != nil {
+				at, _ = row[i].(time.Time)
 				raw, _ := json.Marshal(row[i])
 				got = string(raw)
 			}
 		})
-		return got
+		return at, got
 	}
-	expect := func(want map[string]string) {
+	expect := func(want map[string]time.Time) {
 		t.Helper()
 		eventually(t, func() (bool, string) {
 			state := ""
@@ -889,8 +903,8 @@ func TestTableReadsEventTimesFromTheCluster(t *testing.T) {
 				table *Table
 			}{{"events", core}, {"events.events.k8s.io", modern}} {
 				for event, cell := range want {
-					got := lastSeen(table.table, event)
-					ok = ok && got == cell
+					at, got := lastSeen(table.table, event)
+					ok = ok && at.Equal(cell)
 					state += fmt.Sprintf("%s %s: %s; ", table.name, event, got)
 				}
 			}
@@ -925,13 +939,13 @@ func TestTableReadsEventTimesFromTheCluster(t *testing.T) {
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	expect(map[string]string{"legacy": `"2026-10-24T00:02:00Z"`, "modern": `"2026-10-24T00:03:00.123456Z"`})
+	expect(map[string]time.Time{"legacy": first.Add(time.Minute), "modern": observed})
 
 	legacy.LastTimestamp = metav1.NewTime(first.Add(5 * time.Minute))
 	if _, err := cs.CoreV1().Events(ns).Update(ctx, legacy, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	expect(map[string]string{"legacy": `"2026-10-24T00:06:00Z"`, "modern": `"2026-10-24T00:03:00.123456Z"`})
+	expect(map[string]time.Time{"legacy": first.Add(5 * time.Minute), "modern": observed})
 }
 
 // A CRD's printer columns arrive with their declared types and priorities,
