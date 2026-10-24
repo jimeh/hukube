@@ -191,6 +191,44 @@ it("reopens on the chosen Namespaces, first and highlighted, after one deep in t
   expect(onChange).toHaveBeenLastCalledWith([]);
 });
 
+/** Moves the highlight down from the open-time one, on All namespaces, to `name`. */
+async function highlight(popup: HTMLElement, name: string) {
+  await vi.waitFor(() => expect(highlighted(popup)).toBe("All namespaces"));
+  const steps = options(popup).indexOf(name);
+  for (let step = 0; step < steps; step++) {
+    fireEvent.keyDown(filterInput(popup), { key: "ArrowDown" });
+  }
+  expect(highlighted(popup)).toBe(name);
+}
+
+it("keeps the highlight on its Namespace when one that sorts above it arrives while open", async () => {
+  const onChange = vi.fn<(value: string[]) => void>();
+  render(<Harness state="ready" onChange={onChange} />);
+  respond(listing(), result(["alpha", "delta", "gamma"]));
+  const popup = await openPopup();
+  await highlight(popup, "delta");
+
+  respond(listing(), result(["alpha", "beta", "delta", "gamma"]));
+  expect(options(popup)).toEqual(["All namespaces", "alpha", "delta", "gamma", "beta"]);
+  expect(highlighted(popup)).toBe("delta");
+  fireEvent.keyDown(filterInput(popup), { key: "Enter" });
+  expect(onChange).toHaveBeenLastCalledWith(["delta"]);
+});
+
+it("keeps the highlight on its Namespace when the one above it is deleted while open", async () => {
+  const onChange = vi.fn<(value: string[]) => void>();
+  render(<Harness state="ready" onChange={onChange} />);
+  respond(listing(), result(["alpha", "beta", "gamma"]));
+  const popup = await openPopup();
+  await highlight(popup, "gamma");
+
+  respond(listing(), result(["alpha", "gamma"]));
+  expect(options(popup)).toEqual(["All namespaces", "alpha", "beta", "gamma"]);
+  expect(highlighted(popup)).toBe("gamma");
+  fireEvent.keyDown(filterInput(popup), { key: "Enter" });
+  expect(onChange).toHaveBeenLastCalledWith(["gamma"]);
+});
+
 it("marks a chosen Namespace the complete list lacks as not found", async () => {
   render(<Harness initial={["gone", "shop"]} state="ready" />);
   respond(listing(), result(["alpha", "shop"]));
@@ -256,6 +294,26 @@ it("closes the popup when its Workspace stops being active", async () => {
   await openPopup();
   view.rerender(<Harness state="ready" active={false} />);
   await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Namespaces" })).toBeNull());
+});
+
+const tooltipText = () =>
+  document.querySelector('[data-slot="tooltip-content"]:not([data-closed])')?.textContent ?? null;
+
+it("names the chosen Namespaces when focus comes from another control, not when the popup closes", async () => {
+  render(<Harness state="ready" />);
+  respond(listing(), result(["alpha", "beta"]));
+  // Picked from All namespaces, while the tooltip had nothing to name.
+  const popup = await openPopup();
+  fireEvent.click(within(popup).getByRole("option", { name: "alpha" }));
+  fireEvent.keyDown(filterInput(popup), { key: "Escape" });
+  await vi.waitFor(() => expect(document.activeElement).toBe(trigger()));
+  // A focus opens the tooltip at once; let React render whatever it opened.
+  await act(async () => {});
+  expect(tooltipText()).toBeNull();
+
+  act(() => screen.getByRole("button", { name: "Show all namespaces" }).focus());
+  act(() => trigger().focus());
+  await vi.waitFor(() => expect(tooltipText()).toBe("alpha"));
 });
 
 it("returns to All namespaces from × and moves focus to the trigger", async () => {

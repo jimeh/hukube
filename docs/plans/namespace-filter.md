@@ -226,8 +226,10 @@ Top to bottom:
      has.
    - Chosen Namespaces first, by name, then the rest by name. The order is
      taken when the popup opens and kept while it is open, so a row does not
-     jump when it is checked (Lens does the same). Namespaces that arrive
-     while open take their sorted place among the unchosen.
+     jump when it is checked (Lens does the same). No live change moves a
+     row while it is open: Namespaces created since it opened follow the
+     listed rows, and deleted ones stay until it closes (see "What changed
+     while building").
 4. `Combobox.Empty`: "No namespaces match.", except while the names load or
    cannot be listed, when no search ran.
 
@@ -618,7 +620,11 @@ None.
   name after the first, and names with a common prefix truncated alike.
   Hovering or focusing the trigger lists up to ten, one per line in the mono
   font, then "and N more". It does not show while the popup is open, and it
-  replaces the `title` on the trigger's name.
+  replaces the `title` on the trigger's name. In a narrow Pane it covers the
+  filters, so it closes as soon as the pointer leaves the trigger and lets
+  clicks through (`disableHoverablePopup`); the popup lists the same names.
+  The focus that closing the popup returns to the trigger does not show it,
+  and focus from another control does.
 - **The empty state says when none of the chosen Namespaces exists.** "This
   list updates live." under a deleted Namespace had a user wait for
   Resources that could not appear. When the Namespace list is known, by the
@@ -635,3 +641,13 @@ None.
 - **The highlight wraps from the last row to the first,** and back, not
   through the filter input. Base UI does not loop through the input while
   `autoHighlight` is on.
+- **Live changes do not move a row while the popup is open.** Base UI keeps
+  the highlight by index, so a Namespace created above the highlighted row
+  moved the highlight onto another Namespace, which Enter then checked, and
+  an Engine restart emptied the rows for a moment and lost the highlight.
+  While the popup is open, Namespaces created since it opened
+  follow the rows it lists, sorted among those that arrive together, and
+  deleted ones stay listed until it closes. The next open orders the rows as
+  before. The Engine's search results, for a Cluster with more Namespaces
+  than were loaded, follow the typed text instead. This also keeps the rows
+  and the highlight while a restarted Engine lists the Namespaces again.

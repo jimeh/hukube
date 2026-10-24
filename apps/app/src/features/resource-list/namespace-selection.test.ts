@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   allNamespacesItem,
   emptyListNotice,
+  keepOrder,
   missingNamespaces,
   namespaceLabel,
   nextSelection,
@@ -72,17 +73,6 @@ describe("pickerRows", () => {
     ]);
   });
 
-  it("puts a Namespace that arrives while open in its sorted place among the rest", () => {
-    expect(
-      pickerRows({
-        names: ["alpha", "delta", "gamma", "shop"],
-        pinned: ["shop"],
-        chosen: ["shop"],
-        filtering: false,
-      }),
-    ).toEqual([allNamespacesItem, "shop", "alpha", "delta", "gamma"]);
-  });
-
   it("lists a chosen Namespace that is not among the names", () => {
     expect(
       pickerRows({ names: ["alpha"], pinned: [], chosen: ["alpha", "gone"], filtering: false }),
@@ -98,6 +88,27 @@ describe("pickerRows", () => {
       "alpha",
       "beta",
       "gamma",
+    ]);
+  });
+});
+
+describe("keepOrder", () => {
+  it("keeps the listed rows in place, a deleted one included, and adds arrivals after them", () => {
+    const listed = [allNamespacesItem, "shop", "alpha", "gamma"];
+    // `beta` and `delta` arrived and `alpha` was deleted since the popup opened.
+    const next = pickerRows({
+      names: ["beta", "delta", "gamma", "shop"],
+      pinned: ["shop"],
+      chosen: ["shop"],
+      filtering: false,
+    });
+    expect(keepOrder(listed, next)).toEqual([
+      allNamespacesItem,
+      "shop",
+      "alpha",
+      "gamma",
+      "beta",
+      "delta",
     ]);
   });
 });

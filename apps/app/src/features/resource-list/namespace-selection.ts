@@ -57,6 +57,17 @@ export function pickerRows({
 }
 
 /**
+ * The popup's rows while it is open: the rows it already lists, in their
+ * places, then the rows of `next` they lack, in `next`'s order. Base UI keeps
+ * the highlight by index, so a live change must not move a row: a Namespace
+ * that arrives follows the listed rows, and one that is deleted stays.
+ */
+export function keepOrder(listed: readonly string[], next: readonly string[]): string[] {
+  const kept = new Set(listed);
+  return [...listed, ...next.filter((row) => !kept.has(row))];
+}
+
+/**
  * The chosen Namespaces the Cluster no longer has. Only a complete list of a
  * ready Namespace type can say so (`known`); otherwise none is marked.
  */

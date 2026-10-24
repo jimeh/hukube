@@ -32,6 +32,7 @@ import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 
 import {
   allNamespacesItem,
+  keepOrder,
   missingNamespaces,
   namespaceLabel,
   nextSelection,
@@ -82,7 +83,7 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
   const searching = shown && search !== "" && loaded !== undefined && !loaded.complete;
   const found = useNamespaces(cluster, searching, search);
   // Until the first search result arrives, the loaded names are narrowed instead.
-  const names = (searching ? found : undefined) ?? loaded;
+  const results = searching ? found : undefined;
   const pending = searching && (!found || found.stale);
   const unavailable = state === "forbidden" || state === "failed";
   // Nothing was searched while the names are pending or cannot be listed.
@@ -93,11 +94,29 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
   // be in the order the popup opens with.
   const leading = shown ? pinned : value;
   const filtering = shown && query !== "";
-  const rows = useStableRows(
+  // While open, the loaded Namespaces keep their places through live changes.
+  const order = useStableRows(
     useMemo(
-      () => pickerRows({ names: names?.names ?? [], pinned: leading, chosen: value, filtering }),
-      [names, leading, value, filtering],
+      () =>
+        pickerRows({
+          names: loaded?.names ?? [],
+          pinned: leading,
+          chosen: value,
+          filtering: false,
+        }),
+      [loaded, leading, value],
     ),
+    shown,
+  );
+  const rows = useStableRows(
+    useMemo(() => {
+      // The Engine's search results follow the typed text, so their order is not kept.
+      if (results) {
+        return pickerRows({ names: results.names, pinned: leading, chosen: value, filtering });
+      }
+      // The order leads with All namespaces, which filtering hides.
+      return filtering ? order.slice(1) : order;
+    }, [results, order, leading, value, filtering]),
   );
   const missing = useMemo(
     () => missingNamespaces(value, loaded?.names, !!loaded?.complete && state === "ready"),
@@ -151,8 +170,24 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
       }}
     >
       <div className="flex h-7 w-56 min-w-0">
-        {/* The tooltip names the chosen Namespaces that the label cuts short. */}
-        <Tooltip disabled={value.length === 0 || shown}>
+        {/* The tooltip names the chosen Namespaces that the label cuts short.
+            It can cover the toolbar's filters, so it closes as the pointer
+            leaves the trigger and lets clicks through. */}
+        <Tooltip
+          disabled={value.length === 0 || shown}
+          disableHoverablePopup
+          onOpenChange={(next, { reason, event, cancel }) => {
+            // Closing the popup returns focus to the trigger from its filter
+            // input, which may have left the page by then, or from nowhere.
+            // Only focus from another control on the page shows the names.
+            if (next && reason === "trigger-focus") {
+              const from = event instanceof FocusEvent ? event.relatedTarget : null;
+              const fromControl =
+                from instanceof Element && from.isConnected && from !== inputRef.current;
+              if (!fromControl) cancel();
+            }
+          }}
+        >
           <TooltipTrigger
             render={
               <ComboboxTrigger
@@ -290,13 +325,15 @@ function popupWidth(rows: readonly string[], missing: ReadonlySet<string>): stri
 
 /**
  * Keeps the previous rows while they are unchanged, so a check that does not
- * change the rows does not hand Base UI a new list.
+ * change the rows does not hand Base UI a new list. While `keep` is set, the
+ * rows also keep their places as they change (see `keepOrder`).
  */
-function useStableRows(rows: string[]): string[] {
+function useStableRows(rows: string[], keep = false): string[] {
   const [stable, setStable] = useState(rows);
-  const same = stable.length === rows.length && stable.every((row, i) => row === rows[i]);
-  if (!same) setStable(rows);
-  return same ? stable : rows;
+  const next = keep ? keepOrder(stable, rows) : rows;
+  const same = stable.length === next.length && stable.every((row, i) => row === next[i]);
+  if (!same) setStable(next);
+  return same ? stable : next;
 }
 
 /** The popup's rows, virtualized as in Base UI's virtualized Combobox example. */
