@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
@@ -120,6 +121,40 @@ func TestRunSortsByColumn(t *testing.T) {
 	}
 }
 
+// A time the Engine read from each Resource sorts like the age since it:
+// ascending puts the newest first. Rows without one stay last both ways.
+func TestRunSortsTimesNewestFirst(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	store := index.New()
+	var changes []index.Change
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		changes = append(changes, index.Change{Kind: index.Added, Type: "events", Meta: index.Meta{Namespace: "default", Name: name}})
+	}
+	store.Apply(changes)
+	table := &fakeTable{
+		columns: []protocol.Column{{Name: "Last Seen", Type: protocol.ColumnTypeTimestamp}},
+		cells: map[string][]any{
+			"default/a": {now.Add(-3 * time.Hour)},
+			"default/b": {now.Add(-time.Hour)},
+			"default/c": {nil},
+			"default/e": {now.Add(-2*time.Hour - time.Microsecond)},
+		},
+	}
+	q, _ := Compile(ptr(in(protocol.FieldType, "events")))
+	for _, tt := range []struct {
+		desc bool
+		want []string
+	}{
+		{desc: false, want: []string{"default/b", "default/e", "default/a", "default/c", "default/d"}},
+		{desc: true, want: []string{"default/a", "default/e", "default/b", "default/d", "default/c"}},
+	} {
+		sort := protocol.Sort{Field: protocol.SortFieldColumn, Column: "Last Seen", Desc: tt.desc}
+		if got := keys(Run(store, q, table, sort, 0, 100)); !slices.Equal(got, tt.want) {
+			t.Errorf("desc %v: rows = %v, want %v", tt.desc, got, tt.want)
+		}
+	}
+}
+
 // Each Row gets the cells of its own Resource, including where two
 // Namespaces hold the same name, and a result that is not sorted by a Column
 // only reads the cells of its window.
@@ -153,10 +188,12 @@ func TestRunAttachesCellsToItsWindow(t *testing.T) {
 // Cells of different kinds must still have one consistent order, or a sorted
 // list would change order between two runs over the same Resources.
 func TestCellKeysOrderEveryKind(t *testing.T) {
+	newest := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	ordered := []any{
 		int64(-1), 2.5, int64(10),
 		false, true,
 		"45s", "2m30s", "3h", "5d", "2y45d",
+		newest, newest.Add(-time.Microsecond), newest.Add(-time.Hour),
 		"", "0", "9/10", "10/10", "<none>", "Running", "a2", "a10",
 	}
 	for i, a := range ordered {

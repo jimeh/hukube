@@ -3,9 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import { resolveColumnLayout } from "./column-layout.ts";
 
-import { cellText, gridLayout, growWidths, listColumns, type ColumnWidths } from "./columns.ts";
+import {
+  cellDisplay,
+  cellText,
+  gridLayout,
+  growWidths,
+  listColumns,
+  type ColumnWidths,
+} from "./columns.ts";
 
 const none: ColumnWidths = new Map();
+const now = Date.parse("2026-10-24T12:00:00Z");
 const widthsOf = (widths: ColumnWidths) => Object.fromEntries(widths);
 
 const row = (name: string, cells?: unknown[]): Row => ({
@@ -61,6 +69,29 @@ describe("cellText", () => {
   });
 });
 
+describe("cellDisplay", () => {
+  const timestamp = { type: "timestamp" };
+  it.each([
+    ["2026-10-24T11:00:00Z", "60m"],
+    ["2026-10-24T11:59:58.123456Z", "1s"],
+    ["2026-10-24T12:00:05Z", "0s"],
+    ["2026-10-21T12:00:00Z", "3d"],
+  ])("shows the timestamp %s as the age %s", (value, want) => {
+    expect(cellDisplay(timestamp, value, now)).toBe(want);
+  });
+  it.each([["yesterday"], [""], [5], [null]])(
+    "shows a timestamp cell holding %j as its text",
+    (value) => {
+      expect(cellDisplay(timestamp, value, now)).toBe(cellText(value));
+    },
+  );
+  it("shows a time in a column of another type as its text", () => {
+    expect(cellDisplay({ type: "string" }, "2026-10-24T11:00:00Z", now)).toBe(
+      "2026-10-24T11:00:00Z",
+    );
+  });
+});
+
 describe("growWidths", () => {
   const columns = listColumns(
     [
@@ -72,24 +103,33 @@ describe("growWidths", () => {
 
   it("fits the header and the widest cell, up to a limit", () => {
     const rows = [row("a", ["ContainerCreating", "x".repeat(200)]), row("b", ["Running", "ok"])];
-    expect(widthsOf(growWidths(none, columns, rows))).toEqual({
+    expect(widthsOf(growWidths(none, columns, rows, now))).toEqual({
       "cell:Status": 17,
       "cell:Message": 48,
     });
   });
 
+  it("fits a timestamp column to its age, not the time", () => {
+    const seen = listColumns([{ name: "T", type: "timestamp", priority: 0 }], []);
+    const rows = [row("a", ["2023-12-29T12:00:00.123456Z"])];
+    expect(widthsOf(growWidths(none, seen, rows, now))).toEqual({ "cell:T": "2y300d".length });
+    expect(widthsOf(growWidths(none, seen, [row("b", ["not a time at all"])], now))).toEqual({
+      "cell:T": 17,
+    });
+  });
+
   it("makes room for the header when cells are short or missing", () => {
-    expect(widthsOf(growWidths(none, columns, [row("a", ["Ok", null]), row("b")]))).toEqual({
+    expect(widthsOf(growWidths(none, columns, [row("a", ["Ok", null]), row("b")], now))).toEqual({
       "cell:Status": 9,
       "cell:Message": 10,
     });
   });
 
   it("never shrinks, and returns the same widths when nothing grew", () => {
-    const wide = growWidths(none, columns, [row("a", ["ContainerCreating", "pulling image"])]);
-    expect(growWidths(wide, columns, [row("b", ["Running", "ok"])])).toBe(wide);
+    const wide = growWidths(none, columns, [row("a", ["ContainerCreating", "pulling image"])], now);
+    expect(growWidths(wide, columns, [row("b", ["Running", "ok"])], now)).toBe(wide);
     expect(
-      widthsOf(growWidths(wide, columns, [row("c", ["Running", "back-off restarting"])])),
+      widthsOf(growWidths(wide, columns, [row("c", ["Running", "back-off restarting"])], now)),
     ).toEqual({ "cell:Status": 17, "cell:Message": 19 });
   });
 
@@ -99,9 +139,9 @@ describe("growWidths", () => {
     "settles for a column a Cluster named %s",
     (name) => {
       const named = listColumns([{ name, type: "string", priority: 0 }], []);
-      const first = growWidths(none, named, [row("a", ["Running"])]);
+      const first = growWidths(none, named, [row("a", ["Running"])], now);
       expect(first.get(`cell:${name}`)).toBe(name.length + 3);
-      expect(growWidths(first, named, [row("a", ["Running"])])).toBe(first);
+      expect(growWidths(first, named, [row("a", ["Running"])], now)).toBe(first);
       expect(gridLayout(named, first, undefined).template).toBe(
         `${name.length + 3}ch minmax(2rem, 1fr)`,
       );
@@ -156,7 +196,12 @@ describe("gridLayout", () => {
   it("gives Message the spare width and sizes a shown Name by content", () => {
     const columns = listColumns([{ name: "Message", type: "string", priority: 0 }], []);
     const name = { id: "name", source: "name" as const, name: "Name", numeric: false };
-    const widths = growWidths(none, [name, ...columns], [row("a-long-resource-name", ["hello"])]);
+    const widths = growWidths(
+      none,
+      [name, ...columns],
+      [row("a-long-resource-name", ["hello"])],
+      now,
+    );
     expect(gridLayout([name, ...columns], widths, "cell:Message").template).toBe(
       "20ch minmax(12rem, 2fr) 2rem",
     );
@@ -171,7 +216,7 @@ describe("gridLayout", () => {
       rows: [row("long-resource-name", ["a"])],
       stored: null,
     });
-    const widths = growWidths(none, layout.shown, [row("long-resource-name", ["a"])]);
+    const widths = growWidths(none, layout.shown, [row("long-resource-name", ["a"])], now);
     expect(widths.get("name")).toBe(18);
     expect(widths.get("cell:Name")).toBe(7);
     expect(gridLayout(layout.shown, widths, layout.spare).template).toBe(

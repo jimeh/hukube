@@ -1,4 +1,5 @@
-import type { Column, Row } from "@hukube/engine-client";
+import { ColumnTypeTimestamp, type Column, type Row } from "@hukube/engine-client";
+import { formatAge } from "@hukube/k8s";
 
 /** An available column, from the list itself or the Cluster's Table. */
 export interface ListColumn {
@@ -7,6 +8,8 @@ export interface ListColumn {
   name: string;
   /** The position of the column's value in each Row's cells. */
   index?: number;
+  /** The type of the Column the cells come from. */
+  type?: string;
   /** Whether the column holds numbers, which align right. */
   numeric: boolean;
 }
@@ -44,7 +47,14 @@ export function listColumns(columns: Column[] | undefined, rows: Row[]): ListCol
       column.type === "integer" ||
       column.type === "number" ||
       (values.length > 0 && values.every((v) => typeof v === "number"));
-    shown.push({ id: `cell:${column.name}`, source: "cell", name: column.name, index, numeric });
+    shown.push({
+      id: `cell:${column.name}`,
+      source: "cell",
+      name: column.name,
+      index,
+      type: column.type,
+      numeric,
+    });
   }
   return shown;
 }
@@ -58,11 +68,35 @@ export function cellText(value: unknown): string {
 }
 
 /**
- * Widens columns to fit their header and their cells in rows, up to a limit.
- * Widths never shrink, so columns stay put while a list scrolls and updates.
- * Returns the given widths when nothing grew.
+ * The time in milliseconds a cell of a timestamp column holds, which the
+ * Engine read from its Resource. Undefined for any other cell.
  */
-export function growWidths(widths: ColumnWidths, columns: ListColumn[], rows: Row[]): ColumnWidths {
+export function cellTime(column: { type?: string }, value: unknown): number | undefined {
+  if (column.type !== ColumnTypeTimestamp || typeof value !== "string") return undefined;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? undefined : time;
+}
+
+/**
+ * The text a list shows for one cell at the time now. A timestamp cell shows
+ * the age since its time, as kubectl prints ages, and any other cell its text.
+ */
+export function cellDisplay(column: { type?: string }, value: unknown, now: number): string {
+  const time = cellTime(column, value);
+  return time === undefined ? cellText(value) : formatAge(new Date(time), new Date(now));
+}
+
+/**
+ * Widens columns to fit their header and their cells in rows at the time now,
+ * up to a limit. Widths never shrink, so columns stay put while a list
+ * scrolls and updates. Returns the given widths when nothing grew.
+ */
+export function growWidths(
+  widths: ColumnWidths,
+  columns: ListColumn[],
+  rows: Row[],
+  now: number,
+): ColumnWidths {
   let grown: Map<string, number> | undefined;
   for (const column of columns) {
     let width = Math.max(widths.get(column.id) ?? 0, column.name.length + headerExtraChars);
@@ -72,7 +106,7 @@ export function growWidths(widths: ColumnWidths, columns: ListColumn[], rows: Ro
         column.source === "name"
           ? row.name
           : column.index !== undefined && row.cells
-            ? cellText(row.cells[column.index])
+            ? cellDisplay(column, row.cells[column.index], now)
             : "";
       width = Math.max(width, value.length);
     }

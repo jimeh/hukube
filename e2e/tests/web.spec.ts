@@ -654,7 +654,7 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
   const defaults = ["Name", "Namespace", "Type", "Cluster-IP", "External-IP", "Port(s)", "Age"];
   // Read through another client so optimistic rendering cannot stand in for
   // persistence, including when resetting before the page closes.
-  const expectSaved = async (expected: string[], resetToDefault = false) => {
+  const expectSaved = async (expected: string[], resetColumns = false) => {
     const other = await page.context().newPage();
     try {
       await other.goto(`${page.url()}#token=${engineToken}`);
@@ -664,9 +664,9 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
         .click();
       const otherPanel = other.getByRole("tabpanel", { name: "services" });
       await expect(otherPanel.getByRole("columnheader")).toHaveText(expected);
-      if (resetToDefault) {
+      if (resetColumns) {
         await otherPanel.getByRole("button", { name: "Customize columns", exact: true }).click();
-        await expect(other.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
+        await expect(other.getByRole("menuitem", { name: "Reset columns" })).toBeDisabled();
       }
     } finally {
       await other.close();
@@ -675,7 +675,7 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
   const reset = async () => {
     await page.keyboard.press("Escape");
     await columns.click();
-    const item = page.getByRole("menuitem", { name: "Reset to default" });
+    const item = page.getByRole("menuitem", { name: "Reset columns" });
     if (await item.isEnabled()) await item.click();
     else await page.keyboard.press("Escape");
     await expect(headers).toHaveText(defaults);
@@ -706,7 +706,7 @@ test("edits a Resource Type's columns and keeps the layout after reload", async 
     await expect(headers).toHaveText(defaults);
     await expect(headers.first()).toHaveAttribute("aria-sort", "ascending");
     await columns.click();
-    await expect(page.getByRole("menuitem", { name: "Reset to default" })).toBeDisabled();
+    await expect(page.getByRole("menuitem", { name: "Reset columns" })).toBeDisabled();
     await page.keyboard.press("Escape");
 
     const other = await page.context().newPage();
@@ -1012,6 +1012,218 @@ test("shows live Resource Events and restores the Facet after reload", async ({ 
   await expect(
     page.getByRole("tab", { name: "e2e-events-second", exact: true }).locator("span").first(),
   ).toHaveCSS("font-style", "normal");
+});
+
+// An Event list's second cell, after Namespace, is Last Seen.
+const lastSeenCell = (row: Locator) => row.getByRole("gridcell").nth(1);
+
+test("opens Event lists newest first with a live Last Seen, and resets a sort", async ({
+  page,
+}) => {
+  const now = Date.now();
+  // The API server keeps an Event's times to the second.
+  const hoursAgo = (hours: number) =>
+    new Date(now - hours * 3_600_000).toISOString().replace(/\.\d+Z$/, "Z");
+  const reference = { apiVersion: "v1", kind: "ConfigMap", name: "e2e-last-seen", namespace };
+  // Each name carries the run's Namespace, so a filter finds only this run's Events.
+  const prefix = `${namespace}-seen`;
+  const createEvent = (name: string, reason: string, at?: string) =>
+    kubectlCreate({
+      apiVersion: "v1",
+      kind: "Event",
+      metadata: { name: `${prefix}-${name}`, namespace },
+      involvedObject: reference,
+      reason,
+      message: `Last Seen ${name}`,
+      type: "Normal",
+      ...(at ? { firstTimestamp: at, lastTimestamp: at, count: 1 } : {}),
+    });
+  // Reasons sort the other way round from Last Seen.
+  // Neither name order nor creation order matches Last Seen order, so only a
+  // sort by the Events' times passes the order checks below.
+  createEvent("recent", "Bravo", hoursAgo(1));
+  createEvent("early", "Alpha", hoursAgo(3));
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  const sidebar = page.getByRole("complementary", { name: "Resource types" });
+
+  for (const [group, type] of [
+    ["events.k8s.io", "events.events.k8s.io"],
+    ["core", "events"],
+  ] as const) {
+    await sidebar
+      .getByRole("region", { name: group, exact: true })
+      .getByRole("button", { name: /^Event \d+$/ })
+      .click();
+    const panel = page.getByRole("tabpanel", { name: type, exact: true });
+    await panel.getByRole("textbox", { name: "Filter by name" }).fill(prefix);
+    const rows = panel.getByRole("grid", { name: "Event resources" }).getByRole("row");
+    const lastSeen = panel.getByRole("columnheader", { name: "Last Seen", exact: true });
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("Bravo");
+    await expect(rows.nth(1)).toContainText("Alpha");
+    // kubectl prints an age under 3h in minutes.
+    await expect(lastSeenCell(rows.nth(0))).toHaveText(/^6[01]m$/);
+    await expect(lastSeenCell(rows.nth(1))).toHaveText(/^3h(1m)?$/);
+    // The title is the exact time, in the zone the Engine writes other times in.
+    for (const [index, hours] of [
+      [0, 1],
+      [1, 3],
+    ] as const) {
+      await expect
+        .poll(async () => Date.parse((await lastSeenCell(rows.nth(index)).getAttribute("title"))!))
+        .toBe(Date.parse(hoursAgo(hours)));
+    }
+    if (type !== "events") continue;
+
+    // An Event that arrives while the list is open goes first, and its age
+    // counts up. The selection stays on its Event, and the arrow keys
+    // continue from there.
+    const grid = panel.getByRole("grid", { name: "Event resources" });
+    const selected = grid.getByRole("row", { selected: true });
+    await rows.filter({ hasText: "Bravo" }).click();
+    await expect(selected).toContainText("Bravo");
+    createEvent("live", "Charlie");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText("Charlie");
+    await expect(selected).toHaveCount(1);
+    await expect(selected).toContainText("Bravo");
+    await grid.press("ArrowDown");
+    await expect(selected).toContainText("Alpha");
+    const live = lastSeenCell(rows.nth(0));
+    await expect(live).toHaveText(/^\d+s$/);
+    const arrived = await live.textContent();
+    await expect(live).not.toHaveText(arrived!);
+    await expect(live).toHaveText(/^\d+s$/);
+
+    // A header's menu has Reset sort once, among its sort items. The
+    // selection stays on its Event through a new sort and a reset.
+    const reason = panel.getByRole("columnheader", { name: "Reason", exact: true });
+    const resetSort = page.getByRole("menuitem", { name: "Reset sort", exact: true });
+    await reason.click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "Sort ascending", exact: true })).toBeVisible();
+    await expect(resetSort).toHaveCount(1);
+    await expect(resetSort).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await reason.click();
+    await expect(reason).toHaveAttribute("aria-sort", "ascending");
+    await expect(lastSeen).toHaveAttribute("aria-sort", "none");
+    await expect(rows.nth(0)).toContainText("Alpha");
+    await expect(selected).toContainText("Alpha");
+    await reason.click({ button: "right" });
+    await resetSort.click();
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(reason).toHaveAttribute("aria-sort", "none");
+    await expect(rows.nth(0)).toContainText("Charlie");
+    await expect(rows.nth(2)).toContainText("Alpha");
+    await expect(selected).toContainText("Alpha");
+
+    // Enter on the focused header shows the oldest first.
+    await lastSeen.focus();
+    await lastSeen.press("Enter");
+    await expect(lastSeen).toHaveAttribute("aria-sort", "descending");
+    await expect(rows.nth(0)).toContainText("Alpha");
+    // The Customize columns button, which the keyboard reaches, resets the
+    // sort too. A menu stays in the page while it closes, so look in this one.
+    const customize = panel.getByRole("button", { name: "Customize columns", exact: true });
+    const columnsMenu = page.getByRole("menu", { name: "Customize columns", exact: true });
+    await customize.press("Enter");
+    await expect(columnsMenu.getByRole("menuitem")).toHaveText(["Reset sort", "Reset columns"]);
+    await columnsMenu.getByRole("menuitem", { name: "Reset sort", exact: true }).click();
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(rows.nth(0)).toContainText("Charlie");
+    await customize.press("Enter");
+    await expect(
+      columnsMenu.getByRole("menuitem", { name: "Reset sort", exact: true }),
+    ).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(columnsMenu).toHaveCount(0);
+
+    // A column of times names its sort items by direction in time.
+    await lastSeen.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Sort newest first", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Sort ascending", exact: true })).toHaveCount(
+      0,
+    );
+    await page.getByRole("menuitem", { name: "Sort oldest first", exact: true }).click();
+    await expect(lastSeen).toHaveAttribute("aria-sort", "descending");
+    await expect(rows.nth(0)).toContainText("Alpha");
+    await lastSeen.click({ button: "right" });
+    await resetSort.click();
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(rows.nth(0)).toContainText("Charlie");
+
+    // Changing a filter clears the selection, so Enter opens nothing, neither
+    // the hidden Event nor the one in its place.
+    const filter = panel.getByRole("textbox", { name: "Filter by name" });
+    await rows.filter({ hasText: "Charlie" }).click();
+    await expect(selected).toContainText("Charlie");
+    await filter.fill(`${prefix}-recent`);
+    await expect(rows).toHaveText([/Bravo/]);
+    await expect(selected).toHaveCount(0);
+    await grid.press("Enter");
+    await expect(
+      page
+        .getByRole("tab", { name: `${prefix}-live`, exact: true })
+        .locator("span")
+        .first(),
+    ).toHaveCSS("font-style", "italic");
+    await expect(page.getByRole("tab", { name: `${prefix}-recent`, exact: true })).toHaveCount(0);
+    // The grid handled the keys: an arrow key selects the only row.
+    await grid.press("ArrowDown");
+    await expect(selected).toContainText("Bravo");
+    await filter.fill(prefix);
+    await expect(rows).toHaveCount(3);
+    await expect(selected).toHaveCount(0);
+    await rows.filter({ hasText: "Charlie" }).click();
+    await expect(selected).toContainText("Charlie");
+
+    // A deleted selection leaves no row selected while Events arrive. An
+    // arrow key selects a row again, next to where it was.
+    kubectl("-n", namespace, "delete", "event", `${prefix}-live`);
+    await expect(rows).toHaveText([/Bravo/, /Alpha/]);
+    await expect(selected).toHaveCount(0);
+    createEvent("later", "Delta");
+    await expect(rows).toHaveText([/Delta/, /Bravo/, /Alpha/]);
+    await expect(selected).toHaveCount(0);
+    // Enter still opens the selected Event, though no row shows it.
+    await grid.press("Enter");
+    await expect(
+      page
+        .getByRole("tab", { name: `${prefix}-live`, exact: true })
+        .locator("span")
+        .first(),
+    ).toHaveCSS("font-style", "normal");
+    await grid.press("ArrowDown");
+    await expect(selected).toContainText("Bravo");
+  }
+
+  // Other lists keep name order as their default.
+  await sidebar.getByRole("button", { name: /^ConfigMap \d+$/ }).click();
+  const configMaps = page.getByRole("tabpanel", { name: "configmaps", exact: true });
+  const name = configMaps.getByRole("columnheader", { name: "Name", exact: true });
+  const namespaceHeader = configMaps.getByRole("columnheader", { name: "Namespace", exact: true });
+  await expect(name).toHaveAttribute("aria-sort", "ascending");
+  await namespaceHeader.click();
+  await expect(namespaceHeader).toHaveAttribute("aria-sort", "ascending");
+  await namespaceHeader.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Reset sort", exact: true }).click();
+  await expect(name).toHaveAttribute("aria-sort", "ascending");
+  await expect(namespaceHeader).toHaveAttribute("aria-sort", "none");
+  // Age is a column of times too.
+  await configMaps
+    .getByRole("columnheader", { name: "Age", exact: true })
+    .click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "Sort newest first", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Sort oldest first", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
 });
 
 // Observe the saved layout without opening a second Workspace, which could

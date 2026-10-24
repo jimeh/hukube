@@ -29,15 +29,27 @@ export interface ColumnMenuProps {
   onShow: (id: string, menu: Element | null) => void;
 }
 
-/** One checklist, rendered through either menu's primitives. */
+/** Returns a list to its default sort from the Customize columns menu. */
+export interface SortResetProps {
+  /** Whether the list already uses its default sort. */
+  sortIsDefault: boolean;
+  onResetSort: () => void;
+}
+
+/**
+ * One checklist, rendered through either menu's primitives. Reset sort shows
+ * only with onResetSort, because a header's menu has it among its sort items.
+ */
 export function ColumnMenuItems({
   layout,
   allNamespaces,
   hasStored,
   onEdit,
   onShow,
+  sortIsDefault,
+  onResetSort,
   context = false,
-}: ColumnMenuProps & { context?: boolean }) {
+}: ColumnMenuProps & Partial<SortResetProps> & { context?: boolean }) {
   const Group = context ? ContextMenuGroup : DropdownMenuGroup;
   const CheckboxItem = context ? ContextMenuCheckboxItem : DropdownMenuCheckboxItem;
   const Separator = context ? ContextMenuSeparator : DropdownMenuSeparator;
@@ -70,8 +82,13 @@ export function ColumnMenuItems({
       </Group>
       <Separator />
       <Group>
+        {onResetSort && (
+          <Item disabled={sortIsDefault} onClick={onResetSort}>
+            Reset sort
+          </Item>
+        )}
         <Item disabled={!hasStored} onClick={() => onEdit(null)}>
-          Reset to default
+          Reset columns
         </Item>
       </Group>
     </>
@@ -79,7 +96,10 @@ export function ColumnMenuItems({
 }
 
 /** This cell sticks to the viewport edge, outside the sortable headers. */
-export function CustomizeColumns({ loaded, ...menu }: ColumnMenuProps & { loaded: boolean }) {
+export function CustomizeColumns({
+  loaded,
+  ...menu
+}: ColumnMenuProps & SortResetProps & { loaded: boolean }) {
   return (
     <div
       data-column-actions
