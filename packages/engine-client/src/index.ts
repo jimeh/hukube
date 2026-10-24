@@ -3,6 +3,7 @@ export * from "./connection.ts";
 export * from "./methods.gen.ts";
 export type * from "./protocol.gen.ts";
 export {
+  ColumnTypeTimestamp,
   LogStreamMaxPods,
   MaxClientMessageBytes,
   ExecInputFrame,

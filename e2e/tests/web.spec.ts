@@ -1101,6 +1101,111 @@ test("shows live Resource Events and restores the Facet after reload", async ({ 
   ).toHaveCSS("font-style", "normal");
 });
 
+// An Event list's second cell, after Namespace, is Last Seen.
+const lastSeenCell = (row: Locator) => row.getByRole("gridcell").nth(1);
+
+test("opens Event lists newest first with a live Last Seen, and resets a sort", async ({
+  page,
+}) => {
+  const now = Date.now();
+  // The API server keeps an Event's times to the second.
+  const hoursAgo = (hours: number) =>
+    new Date(now - hours * 3_600_000).toISOString().replace(/\.\d+Z$/, "Z");
+  const reference = { apiVersion: "v1", kind: "ConfigMap", name: "e2e-last-seen", namespace };
+  // Each name carries the run's Namespace, so a filter finds only this run's Events.
+  const prefix = `${namespace}-seen`;
+  const createEvent = (name: string, reason: string, at?: string) =>
+    kubectlCreate({
+      apiVersion: "v1",
+      kind: "Event",
+      metadata: { name: `${prefix}-${name}`, namespace },
+      involvedObject: reference,
+      reason,
+      message: `Last Seen ${name}`,
+      type: "Normal",
+      ...(at ? { firstTimestamp: at, lastTimestamp: at, count: 1 } : {}),
+    });
+  // Reasons sort the other way round from Last Seen.
+  createEvent("older", "Alpha", hoursAgo(3));
+  createEvent("newer", "Bravo", hoursAgo(1));
+  await page.goto(`/#token=${engineToken}`);
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  const sidebar = page.getByRole("complementary", { name: "Resource types" });
+
+  for (const [group, type] of [
+    ["events.k8s.io", "events.events.k8s.io"],
+    ["core", "events"],
+  ] as const) {
+    await sidebar
+      .getByRole("region", { name: group, exact: true })
+      .getByRole("button", { name: /^Event \d+$/ })
+      .click();
+    const panel = page.getByRole("tabpanel", { name: type, exact: true });
+    await panel.getByRole("textbox", { name: "Filter by name" }).fill(prefix);
+    const rows = panel.getByRole("grid", { name: "Event resources" }).getByRole("row");
+    const lastSeen = panel.getByRole("columnheader", { name: "Last Seen", exact: true });
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("Bravo");
+    await expect(rows.nth(1)).toContainText("Alpha");
+    // kubectl prints an age under 3h in minutes.
+    await expect(lastSeenCell(rows.nth(0))).toHaveText(/^6[01]m$/);
+    await expect(lastSeenCell(rows.nth(0))).toHaveAttribute("title", hoursAgo(1));
+    await expect(lastSeenCell(rows.nth(1))).toHaveText(/^3h(1m)?$/);
+    await expect(lastSeenCell(rows.nth(1))).toHaveAttribute("title", hoursAgo(3));
+    if (type !== "events") continue;
+
+    // An Event that arrives while the list is open goes first, and its age counts up.
+    createEvent("live", "Charlie");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText("Charlie");
+    const live = lastSeenCell(rows.nth(0));
+    await expect(live).toHaveText(/^\d+s$/);
+    const arrived = await live.textContent();
+    await expect(live).not.toHaveText(arrived!);
+    await expect(live).toHaveText(/^\d+s$/);
+
+    const reason = panel.getByRole("columnheader", { name: "Reason", exact: true });
+    const resetSort = page.getByRole("menuitem", { name: "Reset sort", exact: true });
+    await reason.click({ button: "right" });
+    await expect(resetSort).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await reason.click();
+    await expect(reason).toHaveAttribute("aria-sort", "ascending");
+    await expect(lastSeen).toHaveAttribute("aria-sort", "none");
+    await expect(rows.nth(0)).toContainText("Alpha");
+    await reason.click({ button: "right" });
+    await resetSort.click();
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(reason).toHaveAttribute("aria-sort", "none");
+    await expect(rows.nth(0)).toContainText("Charlie");
+    await expect(rows.nth(2)).toContainText("Alpha");
+
+    // Enter on the focused header shows the oldest first.
+    await lastSeen.focus();
+    await lastSeen.press("Enter");
+    await expect(lastSeen).toHaveAttribute("aria-sort", "descending");
+    await expect(rows.nth(0)).toContainText("Alpha");
+    await lastSeen.click({ button: "right" });
+    await resetSort.click();
+    await expect(lastSeen).toHaveAttribute("aria-sort", "ascending");
+    await expect(rows.nth(0)).toContainText("Charlie");
+  }
+
+  // Other lists keep name order as their default.
+  await sidebar.getByRole("button", { name: /^ConfigMap \d+$/ }).click();
+  const configMaps = page.getByRole("tabpanel", { name: "configmaps", exact: true });
+  const name = configMaps.getByRole("columnheader", { name: "Name", exact: true });
+  const namespaceHeader = configMaps.getByRole("columnheader", { name: "Namespace", exact: true });
+  await expect(name).toHaveAttribute("aria-sort", "ascending");
+  await namespaceHeader.click();
+  await expect(namespaceHeader).toHaveAttribute("aria-sort", "ascending");
+  await namespaceHeader.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Reset sort", exact: true }).click();
+  await expect(name).toHaveAttribute("aria-sort", "ascending");
+  await expect(namespaceHeader).toHaveAttribute("aria-sort", "none");
+});
+
 // Observe the saved layout without opening a second Workspace, which could
 // restore and save an older layout before the first Workspace's save arrives.
 async function waitForStoredResourceUri(page: Page, uri: string): Promise<void> {

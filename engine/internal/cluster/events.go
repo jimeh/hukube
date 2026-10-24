@@ -208,21 +208,43 @@ func eventMatches(ref corev1.ObjectReference, target protocol.ResourceEventsPara
 	return sameIncarnation && sameGroup
 }
 
-func resourceEvent(ev *corev1.Event) protocol.ResourceEvent {
-	var seriesTime time.Time
-	if ev.Series != nil {
-		seriesTime = ev.Series.LastObservedTime.Time
-	}
-	var last time.Time
-	for _, timestamp := range []time.Time{
-		seriesTime, ev.LastTimestamp.Time, ev.EventTime.Time,
-		ev.FirstTimestamp.Time, ev.CreationTimestamp.Time,
-	} {
+// eventTimes holds the times an Event records, any of which may be unset.
+type eventTimes struct {
+	series, last, event, first, created time.Time
+}
+
+// lastSeen is when an Event last happened: the last time its series was
+// observed, then its last time, its event time, its first time, and its
+// creation time.
+func (e eventTimes) lastSeen() time.Time {
+	return firstSet(e.series, e.last, e.event, e.first, e.created)
+}
+
+// firstSeen is when an Event first happened: its first time, then its event
+// time and its creation time.
+func (e eventTimes) firstSeen() time.Time {
+	return firstSet(e.first, e.event, e.created)
+}
+
+// firstSet returns the first of times that is not zero, or zero if none is set.
+func firstSet(times ...time.Time) time.Time {
+	for _, timestamp := range times {
 		if !timestamp.IsZero() {
-			last = timestamp
-			break
+			return timestamp
 		}
 	}
+	return time.Time{}
+}
+
+func resourceEvent(ev *corev1.Event) protocol.ResourceEvent {
+	times := eventTimes{
+		last: ev.LastTimestamp.Time, event: ev.EventTime.Time,
+		first: ev.FirstTimestamp.Time, created: ev.CreationTimestamp.Time,
+	}
+	if ev.Series != nil {
+		times.series = ev.Series.LastObservedTime.Time
+	}
+	last := times.lastSeen()
 	count := int(ev.Count)
 	if count <= 0 {
 		count = 1

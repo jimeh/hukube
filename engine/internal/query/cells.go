@@ -3,6 +3,7 @@ package query
 import (
 	"cmp"
 	"fmt"
+	"time"
 )
 
 // A cell is ordered by what it holds rather than by its Column's declared
@@ -16,6 +17,8 @@ const (
 	kindNumber
 	kindBool
 	kindAge
+	// kindTime is a time the Engine read from a Resource (ADR-0027).
+	kindTime
 	kindText
 )
 
@@ -23,6 +26,7 @@ const (
 type sortKey struct {
 	kind   int
 	number float64
+	time   time.Time
 	text   string
 }
 
@@ -44,17 +48,21 @@ func cellKey(cell any) sortKey {
 			return sortKey{kind: kindAge, number: age}
 		}
 		return sortKey{kind: kindText, text: v}
+	case time.Time:
+		return sortKey{kind: kindTime, time: v}
 	default:
 		return sortKey{kind: kindText, text: fmt.Sprint(v)}
 	}
 }
 
 // compareKeys orders the keys of two cells: numbers by value, false before
-// true, ages by length, and any other text in natural order.
+// true, ages by length, times newest first, as the ages since them would be,
+// and any other text in natural order.
 func compareKeys(a, b sortKey) int {
 	return cmp.Or(
 		cmp.Compare(a.kind, b.kind),
 		cmp.Compare(a.number, b.number),
+		b.time.Compare(a.time),
 		compareNatural(a.text, b.text),
 	)
 }

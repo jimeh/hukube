@@ -67,13 +67,17 @@ function dropAt({ target, position }: DropOperation, pointer = position.current)
 
 interface ColumnHeadersProps extends ColumnMenuProps {
   sort: Sort;
-  onSort: (sort: Sort) => void;
+  /** Whether sort is the one the list uses until the user chooses another. */
+  sortIsDefault: boolean;
+  /** Sorts the list; undefined returns it to its default sort. */
+  onSort: (sort: Sort | undefined) => void;
 }
 
 /** Headers stay aligned with the cells until the column is dropped. */
 export function ColumnHeaders({
   layout,
   sort,
+  sortIsDefault,
   onSort,
   onEdit,
   onShow,
@@ -138,6 +142,7 @@ export function ColumnHeaders({
           index={index}
           layout={layout}
           sort={sort}
+          sortIsDefault={sortIsDefault}
           onSort={onSort}
           onEdit={onEdit}
           onShow={onShow}
@@ -156,6 +161,7 @@ function ColumnHeader({
   index,
   layout,
   sort,
+  sortIsDefault,
   onSort,
   onEdit,
   onShow,
@@ -232,6 +238,9 @@ function ColumnHeader({
             </ContextMenuItem>
             <ContextMenuItem onClick={() => onSort({ ...by, desc: true })}>
               Sort descending
+            </ContextMenuItem>
+            <ContextMenuItem disabled={sortIsDefault} onClick={() => onSort(undefined)}>
+              Reset sort
             </ContextMenuItem>
             <ContextMenuItem
               disabled={layout.shown.length === 1}
