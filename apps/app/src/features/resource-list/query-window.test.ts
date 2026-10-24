@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { listQuery, rowAt, rowUri, selectedIndex, windowFor } from "./query-window.ts";
+import {
+  listQuery,
+  rowAt,
+  rowUri,
+  selectedIndex,
+  selectionAt,
+  steppedIndex,
+  windowFor,
+  type ListSelection,
+} from "./query-window.ts";
 
 describe("windowFor", () => {
   it.each([
@@ -41,8 +50,18 @@ const row = (type: string, name: string) => ({
   createdAt: "",
 });
 const key = (type: string, name: string) => rowUri("c", row(type, name));
+const selection = (type: string, name: string, index: number): ListSelection => ({
+  key: key(type, name),
+  address: { type, namespace: "default", name },
+  index,
+});
+const unloaded = (index: number): ListSelection => ({
+  key: undefined,
+  address: undefined,
+  index,
+});
 
-describe("selectedIndex", () => {
+describe("selection", () => {
   // Both Event types serve the same Event under the same name.
   const result = {
     total: 500,
@@ -50,20 +69,44 @@ describe("selectedIndex", () => {
     rows: [row("events", "a"), row("events.events.k8s.io", "b"), row("events", "b")],
   };
 
-  it("follows the selected Resource to where the window holds it", () => {
-    expect(selectedIndex(result, "c", { key: key("events", "b"), index: 100 })).toBe(102);
-    expect(selectedIndex(result, "c", { key: key("events.events.k8s.io", "b"), index: 7 })).toBe(
-      101,
-    );
+  it("selects a loaded row's Resource, and an unloaded row by its index", () => {
+    expect(selectionAt(result, "c", 102)).toEqual(selection("events", "b", 102));
+    expect(selectionAt(result, "c", 99)).toEqual(unloaded(99));
   });
 
-  it("keeps the last known index while the window does not hold the Resource", () => {
-    expect(selectedIndex(result, "c", { key: key("events", "z"), index: 7 })).toBe(7);
-    expect(selectedIndex(undefined, "c", { key: key("events", "b"), index: 7 })).toBe(7);
+  it("shows a Resource where the window holds it, and steps from there", () => {
+    expect(selectedIndex(result, "c", selection("events", "b", 100))).toBe(102);
+    expect(selectedIndex(result, "c", selection("events.events.k8s.io", "b", 7))).toBe(101);
+    expect(steppedIndex(selection("events", "a", 100), 100, 1, 500)).toBe(101);
+    expect(steppedIndex(selection("events", "a", 100), 100, -1, 500)).toBe(99);
+    expect(steppedIndex(selection("events", "a", 499), 499, 1, 500)).toBeUndefined();
+    expect(steppedIndex(selection("events", "a", 0), 0, -1, 500)).toBeUndefined();
   });
 
-  it("keeps the index of a row that had not loaded when it was selected", () => {
-    expect(selectedIndex(result, "c", { key: undefined, index: 101 })).toBe(101);
+  it("shows no row for a Resource the window does not hold, and steps from its last index", () => {
+    // Scrolled away, filtered out, or deleted: another Resource is at its index.
+    const away = selection("events", "z", 101);
+    expect(selectedIndex(result, "c", away)).toBeUndefined();
+    expect(selectedIndex(undefined, "c", away)).toBeUndefined();
+    expect(steppedIndex(away, undefined, 1, 500)).toBe(102);
+    expect(steppedIndex(away, undefined, -1, 500)).toBe(100);
+    // Clamped to a list that has shrunk, or ends at the last index.
+    expect(steppedIndex(away, undefined, -1, 3)).toBe(2);
+    expect(steppedIndex(selection("events", "z", 0), undefined, -1, 3)).toBe(0);
+    expect(steppedIndex(away, undefined, 1, 0)).toBeUndefined();
+  });
+
+  it("shows a row chosen before it loaded at its index until it loads", () => {
+    expect(selectedIndex(result, "c", unloaded(99))).toBe(99);
+    expect(selectedIndex(undefined, "c", unloaded(99))).toBe(99);
+    expect(steppedIndex(unloaded(99), 99, 1, 500)).toBe(100);
+    expect(steppedIndex(unloaded(99), 99, -1, 500)).toBe(98);
+  });
+
+  it("starts at the first row when nothing is selected", () => {
+    expect(steppedIndex(undefined, undefined, 1, 500)).toBe(0);
+    expect(steppedIndex(undefined, undefined, -1, 500)).toBeUndefined();
+    expect(steppedIndex(undefined, undefined, 1, 0)).toBeUndefined();
   });
 });
 
