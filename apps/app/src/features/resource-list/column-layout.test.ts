@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   columnId,
   defaultColumnLayout,
+  defaultSort,
   moveColumn,
   moveColumnTo,
   readColumnLayout,
   resolveColumnLayout,
+  sameSort,
   showColumn,
   shownSort,
   type StoredColumnLayout,
@@ -37,6 +39,23 @@ const resolve = (
     rows: [],
     stored: value,
   });
+const resolveEvents = (value: StoredColumnLayout | null, columns: Column[] | undefined) =>
+  resolveColumnLayout({
+    type: "events",
+    namespaced: true,
+    allNamespaces: true,
+    columns,
+    rows: [],
+    stored: value,
+  });
+// What a list sorts by, given the user's choice, a loaded layout, and the
+// Columns the Engine sent.
+const listSort = (
+  chosen: Parameters<typeof shownSort>[0],
+  layout: ReturnType<typeof resolveColumnLayout> | undefined,
+  columns: Column[] | undefined,
+  type = "events",
+) => shownSort(chosen, layout?.shown ?? [], defaultSort(type, layout, columns));
 const ids = (value: StoredColumnLayout) => value.columns.map(columnId);
 const shown = (value: ReturnType<typeof resolve>) => value.shown.map((c) => c.id);
 
@@ -339,20 +358,22 @@ describe("column edits", () => {
 });
 
 describe("shownSort", () => {
-  it("uses name ascending when a sorted column is hidden, unserved, or Namespace is narrowed", () => {
+  const name = { field: "name" as const };
+  it("uses the fallback when a sorted column is hidden, unserved, or Namespace is narrowed", () => {
     const layout = resolve(
       stored(["name", "namespace", "age", "cell:A", "cell:B"], ["cell:A"]),
       cells(["A", "B"]),
       false,
     );
     for (const sort of [
+      undefined,
       { field: "column" as const, column: "A", desc: true },
       { field: "column" as const, column: "Missing" },
       { field: "namespace" as const, desc: true },
     ]) {
-      expect(shownSort(sort, layout.shown)).toEqual({ field: "name" });
+      expect(shownSort(sort, layout.shown, name)).toEqual(name);
     }
-    expect(shownSort({ field: "column", column: "B", desc: true }, layout.shown)).toEqual({
+    expect(shownSort({ field: "column", column: "B", desc: true }, layout.shown, name)).toEqual({
       field: "column",
       column: "B",
       desc: true,
@@ -360,6 +381,82 @@ describe("shownSort", () => {
   });
   it("restores the requested sort when its column shows again", () => {
     const sort = { field: "column" as const, column: "A", desc: true };
-    expect(shownSort(sort, resolve().shown)).toEqual(sort);
+    expect(shownSort(sort, resolve().shown, name)).toEqual(sort);
+  });
+});
+
+describe("list sort", () => {
+  const event = [
+    ...cells(["Last Seen", "Type", "Reason", "Object", "Message"]),
+    ...cells(["First Seen", "Count"], 1),
+  ];
+  const lastSeen = { field: "column" as const, column: "Last Seen" };
+  const name = { field: "name" as const };
+  const hidingLastSeen = stored(
+    ["namespace", "cell:Last Seen", "cell:Type", "cell:Reason", "cell:Object", "cell:Message"],
+    ["cell:Last Seen"],
+  );
+
+  it.each(["events", "events.events.k8s.io"])("opens %s on Last Seen, newest first", (type) => {
+    const layout = resolveColumnLayout({
+      type,
+      namespaced: true,
+      allNamespaces: true,
+      columns: event,
+      rows: [],
+      stored: null,
+    });
+    expect(defaultSort(type, layout, event)).toEqual(lastSeen);
+    expect(listSort(undefined, layout, event, type)).toEqual(lastSeen);
+  });
+  it("keeps Last Seen while the stored layout loads, with or without Columns", () => {
+    expect(listSort(undefined, undefined, undefined)).toEqual(lastSeen);
+    expect(listSort(undefined, undefined, event)).toEqual(lastSeen);
+  });
+  it("keeps Last Seen before any Columns arrive, which the Engine orders by name", () => {
+    expect(listSort(undefined, resolveEvents(null, undefined), undefined)).toEqual(lastSeen);
+    const showing = stored(["name", "cell:Last Seen", "cell:Reason"]);
+    expect(listSort(undefined, resolveEvents(showing, undefined), undefined)).toEqual(lastSeen);
+  });
+  it("uses the user's choice while its column shows, then the default again", () => {
+    const layout = resolveEvents(null, event);
+    const reason = { field: "column" as const, column: "Reason", desc: true };
+    expect(listSort(reason, layout, event)).toEqual(reason);
+    const withoutReason = resolveEvents(showColumn(layout, "cell:Reason", false)!, event);
+    expect(listSort(reason, withoutReason, event)).toEqual(lastSeen);
+  });
+  it("uses name when the stored layout hides Last Seen, with and without Columns", () => {
+    for (const columns of [event, undefined]) {
+      const layout = resolveEvents(hidingLastSeen, columns);
+      expect(defaultSort("events", layout, columns)).toEqual(name);
+      expect(listSort(undefined, layout, columns)).toEqual(name);
+    }
+  });
+  it("uses name when the served Columns have no Last Seen", () => {
+    const columns = cells(["Type", "Reason", "Object", "Message"]);
+    expect(listSort(undefined, resolveEvents(null, columns), columns)).toEqual(name);
+    expect(listSort(undefined, undefined, columns)).toEqual(name);
+  });
+  it("uses name for other types, even with a Last Seen column", () => {
+    const columns = cells(["Last Seen", "A"]);
+    expect(defaultSort("pods", undefined, undefined)).toEqual(name);
+    expect(defaultSort("widgets", resolve(null, columns), columns)).toEqual(name);
+  });
+  it("tells when the list already uses its default sort", () => {
+    const layout = resolveEvents(null, event);
+    const fallback = defaultSort("events", layout, event);
+    expect(sameSort(listSort(undefined, layout, event), fallback)).toBe(true);
+    expect(sameSort(listSort({ ...lastSeen, desc: false }, layout, event), fallback)).toBe(true);
+    expect(sameSort(listSort({ ...lastSeen, desc: true }, layout, event), fallback)).toBe(false);
+    expect(sameSort(listSort({ field: "namespace" }, layout, event), fallback)).toBe(false);
+    // Without Last Seen there is nothing to return to but name.
+    const hidden = resolveEvents(hidingLastSeen, event);
+    const reason = { field: "column" as const, column: "Reason" };
+    expect(sameSort(listSort(reason, hidden, event), defaultSort("events", hidden, event))).toBe(
+      false,
+    );
+    expect(sameSort(listSort(undefined, hidden, event), defaultSort("events", hidden, event))).toBe(
+      true,
+    );
   });
 });

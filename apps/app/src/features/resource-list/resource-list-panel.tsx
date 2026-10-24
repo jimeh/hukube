@@ -36,9 +36,11 @@ import { useNow } from "@/lib/use-now.ts";
 import { ColumnHeaders } from "./column-header.tsx";
 import { columnRevealDelta } from "./column-reveal.ts";
 import { CustomizeColumns, type ColumnMenuProps } from "./column-menu.tsx";
-import { resolveColumnLayout, shownSort } from "./column-layout.ts";
+import { defaultSort, resolveColumnLayout, sameSort, shownSort } from "./column-layout.ts";
 import {
+  cellDisplay,
   cellText,
+  cellTime,
   gridLayout,
   growWidths,
   noValue,
@@ -68,7 +70,8 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   const [nameFilter, setNameFilter] = useState("");
   const [selectorFilter, setSelectorFilter] = useState("");
   const [namespace, setNamespace] = useState<string | null>(allNamespaces);
-  const [sort, setSort] = useState<Sort>({ field: "name" });
+  // Unset until the user chooses a sort, which leaves the type's default.
+  const [sort, setSort] = useState<Sort>();
   const [selected, setSelected] = useState<number>();
   const deferredName = useDeferredValue(nameFilter);
   const deferredSelector = useDeferredValue(selectorFilter);
@@ -108,7 +111,12 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
     [type, info?.namespaced, namespace, columnData, stored],
   );
   const columns = stored === undefined ? [] : resolved.shown;
-  const effectiveSort = shownSort(sort, columns);
+  const initialSort = defaultSort(
+    type,
+    stored === undefined ? undefined : resolved,
+    columnData.columns,
+  );
+  const effectiveSort = shownSort(sort, columns, initialSort);
   const { data, error } = useSubscription(
     "resources.query",
     info && info.state !== "forbidden"
@@ -120,7 +128,8 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
   if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
     setColumnData({ columns: data.columns, rows: data.rows });
   const [widths, setWidths] = useState<ColumnWidths>(() => new Map());
-  const grown = growWidths(widths, columns, data?.rows ?? []);
+  const now = useNow();
+  const grown = growWidths(widths, columns, data?.rows ?? [], now);
   if (grown !== widths) setWidths(grown);
   const layout = gridLayout(columns, grown, resolved.spare);
   const gridColumns: CSSProperties = { gridTemplateColumns: layout.template };
@@ -254,6 +263,7 @@ export function ResourceListPanel({ panelId, type, onInteract }: ResourceListPan
                   {...columnMenu}
                   scrollRef={scrollRef}
                   sort={effectiveSort}
+                  sortIsDefault={sameSort(effectiveSort, initialSort)}
                   onSort={setSort}
                 />
               )}
@@ -341,7 +351,7 @@ function ListRow({
       {row ? (
         columns.map((column) => {
           if (column.source === "cell")
-            return <ListCell key={column.id} column={column} cells={row.cells} />;
+            return <ListCell key={column.id} column={column} cells={row.cells} now={now} />;
           return (
             <span
               key={column.id}
@@ -368,16 +378,30 @@ function ListRow({
   );
 }
 
-/** One cell of a Row. A Row has no cells until the Engine has fetched them. */
-function ListCell({ column, cells }: { column: ListColumn; cells: unknown[] | undefined }) {
-  const text = cells && column.index !== undefined ? cellText(cells[column.index]) : "";
+/**
+ * One cell of a Row. A Row has no cells until the Engine has fetched them. A
+ * timestamp cell shows a live age, as Age does, with its time in the title.
+ */
+function ListCell({
+  column,
+  cells,
+  now,
+}: {
+  column: ListColumn;
+  cells: unknown[] | undefined;
+  now: number;
+}) {
+  const value = cells && column.index !== undefined ? cells[column.index] : undefined;
+  const text = cells && column.index !== undefined ? cellDisplay(column, value, now) : "";
+  const age = cellTime(column, value) !== undefined;
   return (
     <span
       role="gridcell"
-      title={text}
+      title={age ? cellText(value) : text}
       className={cn(
         "truncate",
         column.numeric && "text-right tabular-nums",
+        age && "text-muted-foreground tabular-nums",
         text === noValue && "text-muted-foreground",
       )}
     >

@@ -8,7 +8,7 @@ import { Skeleton } from "@hukube/ui/components/skeleton";
 import { cn } from "@hukube/ui/lib/utils";
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import { cellText, noValue } from "@/features/resource-list/columns.ts";
+import { cellDisplay, noValue } from "@/features/resource-list/columns.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
@@ -83,7 +83,7 @@ function secondLine(
       if (row.namespace && row.namespace !== namespace) parts.push({ text: row.namespace });
       if (row.createdAt) parts.push({ text: formatAge(new Date(row.createdAt), new Date(now)) });
       columns?.forEach((column, index) => {
-        const value = cellText(row.cells?.[index]);
+        const value = cellDisplay(column, row.cells?.[index], now);
         if (value !== noValue && value !== "")
           parts.push({ text: `${column.name} ${value}`, label: column.name, value });
       });

@@ -18,11 +18,15 @@ kubectl's printers for dozens of types and evaluating JSONPath for CRDs.
   as `"3"`, a ratio as `"1/1"`, and a time as an age such as `"5m"`. The
   Engine orders cells by what they hold, not by the column's declared type,
   and nothing in hukube can rely on a cell's meaning. A feature that needs
-  real values, such as health, must read the Resource itself.
+  real values, such as health, must read the Resource itself. Event lists do
+  so for their times, which the Engine marks with a `timestamp` column type
+  (ADR-0027).
 - A rendered age is only correct when the API server sends the row. It is not
   sent again as time passes, so such a cell is stale until the Resource next
   changes, as in `kubectl get -w`. The Engine drops the `Age` column for this
-  reason and the UI shows a live age from the index instead.
+  reason and the UI shows a live age from the index instead. An Event's Last
+  Seen and First Seen count from times the Engine reads from each Event
+  (ADR-0027).
 - Fetching a type's Table is a second list and watch beside the metadata
   watch from ADR-0003. The Engine therefore runs it only while a list of that
   type is open, and for a short time afterwards. Lists of one type share it,

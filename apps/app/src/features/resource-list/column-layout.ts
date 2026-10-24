@@ -230,12 +230,41 @@ export function columnSort(column: ListColumn): Sort {
     : { field: column.source };
 }
 
-/** Uses the requested sort while its column shows, otherwise name ascending. */
-export function shownSort(sort: Sort, shown: ListColumn[]): Sort {
-  return shown.some((c) => {
-    const by = columnSort(c);
-    return by.field === sort.field && by.column === sort.column;
-  })
+/** Whether two sorts order a list the same way. */
+export function sameSort(a: Sort, b: Sort): boolean {
+  return a.field === b.field && a.column === b.column && Boolean(a.desc) === Boolean(b.desc);
+}
+
+/** The column an Event list opens sorted by, ascending, which puts the newest first. */
+const eventSortColumn = "Last Seen";
+
+/**
+ * The sort a list uses until the user chooses one: Last Seen for Events, and
+ * name ascending otherwise. An Event list falls back to name when its layout
+ * hides Last Seen or the served Columns lack it. Pass layout once the stored
+ * layout has loaded. Until then, and until Columns arrive, Last Seen stays,
+ * because the Engine orders by name until its Table has the column.
+ */
+export function defaultSort(
+  type: string,
+  layout: ResolvedColumnLayout | undefined,
+  columns: Column[] | undefined,
+): Sort {
+  if (!isEvent(type)) return { field: "name" };
+  const hidden = layout?.stored.columns.some(
+    (c) => c.source === "cell" && c.name === eventSortColumn && c.hidden,
+  );
+  const unserved = columns !== undefined && !columns.some((c) => c.name === eventSortColumn);
+  return hidden || unserved ? { field: "name" } : { field: "column", column: eventSortColumn };
+}
+
+/** Uses the requested sort while its column shows, otherwise the fallback. */
+export function shownSort(sort: Sort | undefined, shown: ListColumn[], fallback: Sort): Sort {
+  return sort &&
+    shown.some((c) => {
+      const by = columnSort(c);
+      return by.field === sort.field && by.column === sort.column;
+    })
     ? sort
-    : { field: "name" };
+    : fallback;
 }
