@@ -154,11 +154,19 @@ it("says Namespaces are loading and keeps All namespaces and the chosen ones usa
   const popup = await openPopup();
   expect(status(popup)).toBe("Loading namespaces…");
   expect(options(popup)).toEqual(["All namespaces", "shop"]);
+
+  // No search ran before the names arrived, so none failed to match.
+  fireEvent.change(filterInput(popup), { target: { value: "pay" } });
+  expect(options(popup)).toEqual([]);
+  expect(popup.querySelector('[data-slot="combobox-empty"]')?.textContent).toBe("");
+  fireEvent.change(filterInput(popup), { target: { value: "" } });
+
   fireEvent.click(within(popup).getByRole("option", { name: "All namespaces" }));
   expect(onChange).toHaveBeenLastCalledWith([]);
 });
 
 it.each([
+  ["syncing" as const, "Loading namespaces…"],
   ["forbidden" as const, "Your credentials cannot list namespaces."],
   ["failed" as const, "Could not list namespaces."],
 ])("says when Namespaces are %s and marks no chosen one as not found", async (state, text) => {
@@ -269,6 +277,9 @@ it("searches the Engine only while filtering a Cluster with more Namespaces than
   fireEvent.change(input, { target: { value: "shop-1" } });
   expect(searching()?.params.where?.args?.[1]?.values).toEqual(["shop-1"]);
   expect(status(popup)).toBe("Searching…");
+  // The older results are narrowed to the new text, so Enter cannot pick a non-match.
+  expect(options(popup).length).toBeGreaterThan(0);
+  expect(options(popup).every((name) => name?.includes("shop-1"))).toBe(true);
   respond(searching(), result(["shop-1", "shop-10"]));
   expect(status(popup)).toBe("");
   expect(options(popup)).toEqual(["shop-1", "shop-10"]);
@@ -287,6 +298,10 @@ it("filters a complete list without searching the Engine", async () => {
   expect(options(popup)).toEqual(["payments", "shop"]);
   expect(searching()).toBeUndefined();
   expect(subscriptions).toHaveLength(1);
+
+  // Only spaces filter nothing, so All namespaces stays.
+  fireEvent.change(filterInput(popup), { target: { value: " " } });
+  expect(options(popup)).toEqual(["All namespaces", "alpha", "payments", "shop"]);
 });
 
 it("closes the popup when its Workspace stops being active", async () => {

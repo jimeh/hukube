@@ -85,15 +85,16 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
   // Until the first search result arrives, the loaded names are narrowed instead.
   const results = searching ? found : undefined;
   const pending = searching && (!found || found.stale);
-  const unavailable = state === "forbidden" || state === "failed";
-  // Nothing was searched while the names are pending or cannot be listed.
-  const noMatchText = pending || unavailable ? undefined : "No namespaces match.";
+  // Nothing was searched while the names load, are pending, or cannot be listed.
+  const unlisted = !loaded || state !== "ready";
+  const noMatchText = pending || unlisted ? undefined : "No namespaces match.";
 
   // While closed, the rows follow the selection. Base UI highlights the first
   // chosen row on open from the rows it had while closed, so they must already
   // be in the order the popup opens with.
   const leading = shown ? pinned : value;
-  const filtering = shown && query !== "";
+  // Spaces alone filter nothing, as in Base UI's filter and the Engine search.
+  const filtering = shown && search !== "";
   // While open, the loaded Namespaces keep their places through live changes.
   const order = useStableRows(
     useMemo(

@@ -658,5 +658,8 @@ None.
   selection behind it. Shift+Tab now returns focus to the trigger, as Escape
   does. Base UI also keeps the popup open when focus moves from it to the
   trigger or another control by script or assistive technology, so the picker
-  closes the popup whenever focus leaves it. It leaves Tab to Base UI's focus
-  guards, which close the popup and move focus on.
+  closes the popup whenever focus moves from it to another element. It leaves
+  Tab to Base UI's focus guards, which close the popup and move focus on.
+  Focus that leaves the page, as when the window loses focus, has no other
+  element to go to, so the popup stays open with its filter for when the
+  user returns.
