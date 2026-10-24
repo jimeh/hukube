@@ -31,6 +31,7 @@ import {
   moveColumn,
   moveColumnTo,
   showColumn,
+  sortLabels,
   type StoredColumnLayout,
 } from "./column-layout.ts";
 import type { ListColumn } from "./columns.ts";
@@ -185,6 +186,7 @@ function ColumnHeader({
     transition: null,
   });
   const by = columnSort(column);
+  const labels = sortLabels(column);
   const active = sort.field === by.field && sort.column === by.column;
   const edit = (value: StoredColumnLayout | undefined) => {
     if (value !== undefined) onEdit(value);
@@ -234,10 +236,10 @@ function ColumnHeader({
         <ContextMenuContent>
           <ContextMenuGroup>
             <ContextMenuItem onClick={() => onSort({ ...by, desc: false })}>
-              Sort ascending
+              {labels.ascending}
             </ContextMenuItem>
             <ContextMenuItem onClick={() => onSort({ ...by, desc: true })}>
-              Sort descending
+              {labels.descending}
             </ContextMenuItem>
             <ContextMenuItem disabled={sortIsDefault} onClick={() => onSort(undefined)}>
               Reset sort

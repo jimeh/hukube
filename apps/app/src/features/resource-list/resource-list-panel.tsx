@@ -41,7 +41,14 @@ import {
 } from "./columns.ts";
 import { NamespacePicker } from "./namespace-picker.tsx";
 import { emptyListNotice, missingNamespaces, readNamespaces } from "./namespace-selection.ts";
-import { listQuery, rowAt, windowFor } from "./query-window.ts";
+import {
+  listQuery,
+  rowAt,
+  rowUri,
+  selectedIndex,
+  windowFor,
+  type ListSelection,
+} from "./query-window.ts";
 import { useColumnLayout } from "./use-column-layout.ts";
 
 const rowHeight = 26;
@@ -86,7 +93,7 @@ export function ResourceListPanel({
   const namespaces = namespaced ? chosen : noNamespaces;
   // Unset until the user chooses a sort, which leaves the type's default.
   const [sort, setSort] = useState<Sort>();
-  const [selected, setSelected] = useState<number>();
+  const [selection, setSelection] = useState<ListSelection>();
   const deferredName = useDeferredValue(nameFilter);
   const deferredSelector = useDeferredValue(selectorFilter);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -138,6 +145,7 @@ export function ResourceListPanel({
     columnData.columns,
   );
   const effectiveSort = shownSort(sort, columns, initialSort);
+  const sortIsDefault = sameSort(effectiveSort, initialSort);
   const { data, error } = useSubscription(
     "resources.query",
     info && info.state !== "forbidden"
@@ -153,6 +161,15 @@ export function ResourceListPanel({
       missingNamespaces(namespaces, known?.names, !!known?.complete && namespacesState === "ready"),
     [namespaces, known, namespacesState],
   );
+  // The selection stays on its Resource while rows arrive and the list
+  // re-sorts. Only the user's own moves scroll to it.
+  const selected = useMemo(
+    () => selection && selectedIndex(data, cluster, selection),
+    [data, cluster, selection],
+  );
+  // Remember where the Resource was, for when the window no longer holds it.
+  if (selection && selected !== undefined && selected !== selection.index)
+    setSelection({ ...selection, index: selected });
 
   if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
     setColumnData({ columns: data.columns, rows: data.rows });
@@ -204,8 +221,12 @@ export function ResourceListPanel({
     // Previews keep focus in the list so arrow keys keep browsing.
     if (preview) requestAnimationFrame(() => gridRef.current?.focus({ preventScroll: true }));
   };
+  const selectionAt = (index: number): ListSelection => {
+    const row = rowAt(data, index);
+    return { key: row && rowUri(cluster, row), index };
+  };
   const select = (index: number) => {
-    setSelected(index);
+    setSelection(selectionAt(index));
     virtualizer.scrollToIndex(index);
   };
   const onKeyDown = (e: KeyboardEvent) => {
@@ -290,11 +311,16 @@ export function ResourceListPanel({
                   {...columnMenu}
                   scrollRef={scrollRef}
                   sort={effectiveSort}
-                  sortIsDefault={sameSort(effectiveSort, initialSort)}
+                  sortIsDefault={sortIsDefault}
                   onSort={setSort}
                 />
               )}
-              <CustomizeColumns {...columnMenu} loaded={stored !== undefined} />
+              <CustomizeColumns
+                {...columnMenu}
+                loaded={stored !== undefined}
+                sortIsDefault={sortIsDefault}
+                onResetSort={() => setSort(undefined)}
+              />
             </div>
 
             <div
@@ -316,7 +342,7 @@ export function ResourceListPanel({
                   columns={columns}
                   selected={item.index === selected}
                   onClick={() => {
-                    setSelected(item.index);
+                    setSelection(selectionAt(item.index));
                     open(rowAt(data, item.index), true);
                   }}
                   onDoubleClick={() => open(rowAt(data, item.index), false)}

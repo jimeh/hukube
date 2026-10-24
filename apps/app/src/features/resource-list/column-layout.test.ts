@@ -1,4 +1,4 @@
-import type { Column } from "@hukube/engine-client";
+import { ColumnTypeTimestamp, type Column } from "@hukube/engine-client";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +12,7 @@ import {
   sameSort,
   showColumn,
   shownSort,
+  sortLabels,
   type StoredColumnLayout,
 } from "./column-layout.ts";
 
@@ -468,5 +469,28 @@ describe("list sort", () => {
     expect(sameSort(listSort(undefined, hidden, event), defaultSort("events", hidden, event))).toBe(
       true,
     );
+  });
+});
+
+describe("sortLabels", () => {
+  it("names the direction in time for Age and timestamp cells, and order for others", () => {
+    const columns: Column[] = [
+      { name: "Last Seen", type: ColumnTypeTimestamp, priority: 0 },
+      { name: "Schedule", type: "date", priority: 0 },
+      { name: "Count", type: "integer", priority: 0 },
+    ];
+    const labels = Object.fromEntries(
+      resolve(null, columns).available.map((c) => [c.id, sortLabels(c)]),
+    );
+    const time = { ascending: "Sort newest first", descending: "Sort oldest first" };
+    const order = { ascending: "Sort ascending", descending: "Sort descending" };
+    expect(labels).toEqual({
+      name: order,
+      namespace: order,
+      "cell:Last Seen": time,
+      "cell:Schedule": order,
+      "cell:Count": order,
+      age: time,
+    });
   });
 });
