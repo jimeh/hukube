@@ -258,3 +258,14 @@ A review of the running app found these problems.
   arrow key selects the row next to the last index the Resource was seen at,
   clamped to the list, and scrolls to it. A row an arrow key selects before
   it has loaded shows at its index and takes its Resource once it loads.
+- **Changing a filter clears the selection.** A filter or Namespace that hid
+  the selection still let Enter open it, while the list showed only other
+  rows. A change the user makes to the name filter, the label selector, or the
+  Namespace now clears the selection, as MUI DataGrid drops filtered-out rows
+  from its selection, so clearing the filter does not bring it back. A
+  selection that a new sort, a deletion, or scrolling moves out of the window
+  still opens with Enter.
+- **The list shows keyboard focus.** The grid had no focus style, which went
+  unnoticed while a focused list always had a highlighted row. Now that a
+  list can hold focus with no row shown as selected, a ring like the column
+  headers' marks the list while the grid has keyboard focus.
