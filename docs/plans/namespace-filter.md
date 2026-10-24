@@ -1,6 +1,6 @@
 # Plan: filter and choose several Namespaces in a Resource list
 
-Status: accepted, not started. Jim settled the open questions; see "Decisions
+Status: implemented, not merged yet. Jim settled the open questions; see "Decisions
 from Jim".
 
 ## Outcome
@@ -228,7 +228,8 @@ Top to bottom:
      taken when the popup opens and kept while it is open, so a row does not
      jump when it is checked (Lens does the same). Namespaces that arrive
      while open take their sorted place among the unchosen.
-4. `Combobox.Empty`: "No namespaces match."
+4. `Combobox.Empty`: "No namespaces match.", except while the names load or
+   cannot be listed, when no search ran.
 
 "All namespaces" is an item whose value no Namespace name can take
 (Namespace names are DNS-1123 labels). The controlled value holds it while the
@@ -321,7 +322,8 @@ truncate`); the count does not (`shrink-0 tabular-nums`). The visible "+2" is
 accessible name is "Namespace", through `Combobox.Label` (visually hidden) or
 `aria-label`, whichever Base UI associates with the trigger. The popup's
 accessible name is "Namespaces". The full list of chosen names is in the
-popup, first; no tooltip repeats it.
+popup, first, and in a tooltip on the trigger (see "What changed while
+building").
 
 ### Keyboard
 
@@ -333,7 +335,7 @@ patterns Base UI implements; the implementer confirms each in the running app.
 | Tab                     | Toolbar      | The trigger, then × when shown, then "Filter by name".                                            |
 | Enter, Space, ArrowDown | Trigger      | Opens the popup and focuses the filter input.                                                     |
 | Typing                  | Filter input | Narrows the rows. The first match is highlighted (`autoHighlight`).                               |
-| ArrowDown, ArrowUp      | Filter input | Moves the highlight, looping through the input (`loopFocus`).                                     |
+| ArrowDown, ArrowUp      | Filter input | Moves the highlight, wrapping from the last row to the first and back.                            |
 | Enter                   | Filter input | Checks or unchecks the highlighted row, keeps the filter text selected, and keeps the popup open. |
 | Escape                  | Popup        | Closes it and returns focus to the trigger.                                                       |
 | Tab                     | Popup        | Closes it; focus moves on.                                                                        |
@@ -345,9 +347,9 @@ The common paths:
 - Add a second: open, type `pay`, Enter, Escape.
 - Back to All: × from the toolbar, or open, ArrowDown to "All namespaces",
   Enter.
-- Switch from `shop` to `payments`: open, the chosen `shop` is the first row,
-  so ArrowDown, Enter unchecks it; type `pay`, Enter. Jim chose toggling over
-  Lens's one-step replace with a modifier.
+- Switch from `shop` to `payments`: open (the highlight is on `shop`), Enter
+  unchecks it, type `pay`, Enter. Jim chose toggling over Lens's one-step
+  replace with a modifier.
 
 After a pick, by Enter or by click, the filter text stays and is selected.
 Base UI clears it by default when the input is inside the popup; cancel that
@@ -391,19 +393,19 @@ the popup is portaled outside the inert content.
 
 ### States
 
-| State                                          | Popup                                                                                       | Trigger       | The rest of the list                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------- |
-| Names loading                                  | Status "Loading namespaces…". All namespaces and the chosen rows, unmarked, are usable.     | From params   | Queries the selection at once; does not wait for names.                 |
-| Ready                                          | All rows                                                                                    | From params   | Unchanged                                                               |
-| No match                                       | "No namespaces match."                                                                      | Unchanged     | Unchanged                                                               |
-| Not permitted to list Namespaces (`forbidden`) | Status "Your credentials cannot list Namespaces." All namespaces and chosen rows, unmarked. | Unchanged     | Unchanged; All namespaces still works.                                  |
-| Namespace listing failed (`failed`)            | Status "Could not list Namespaces."                                                         | Unchanged     | Unchanged                                                               |
-| More than 1,000                                | Status note; typing searches the Engine (see above)                                         | Unchanged     | Unchanged                                                               |
-| Chosen Namespace deleted                       | Checked, "Not found" (complete list only)                                                   | Still counted | Its rows leave; the empty state names the selection if nothing is left. |
-| List type not permitted or not served          | No toolbar: the existing notices replace the list.                                          | Not shown     | Existing notice                                                         |
-| Cluster unreachable                            | Last known names                                                                            | Unchanged     | Last known rows, as today                                               |
-| Engine reconnecting                            | Last known names; checks still change params                                                | Unchanged     | The subscription resumes with the latest params on reconnect.           |
-| Window out of date, or Workspace hidden        | Closed by force                                                                             | Inert         | Inert                                                                   |
+| State                                          | Popup                                                                                       | Trigger       | The rest of the list                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------- |
+| Names loading                                  | Status "Loading namespaces…". All namespaces and the chosen rows, unmarked, are usable.     | From params   | Queries the selection at once; does not wait for names.         |
+| Ready                                          | All rows                                                                                    | From params   | Unchanged                                                       |
+| No match                                       | "No namespaces match."                                                                      | Unchanged     | Unchanged                                                       |
+| Not permitted to list Namespaces (`forbidden`) | Status "Your credentials cannot list namespaces." All namespaces and chosen rows, unmarked. | Unchanged     | Unchanged; All namespaces still works.                          |
+| Namespace listing failed (`failed`)            | Status "Could not list namespaces."                                                         | Unchanged     | Unchanged                                                       |
+| More than 1,000                                | Status note; typing searches the Engine (see above)                                         | Unchanged     | Unchanged                                                       |
+| Chosen Namespace deleted                       | Checked, "Not found" (complete list only)                                                   | Still counted | Its rows leave; the empty state says when no chosen one exists. |
+| List type not permitted or not served          | No toolbar: the existing notices replace the list.                                          | Not shown     | Existing notice                                                 |
+| Cluster unreachable                            | Last known names                                                                            | Unchanged     | Last known rows, as today                                       |
+| Engine reconnecting                            | Last known names; checks still change params                                                | Unchanged     | The subscription resumes with the latest params on reconnect.   |
+| Window out of date, or Workspace hidden        | Closed by force                                                                             | Inert         | Inert                                                           |
 
 The list's empty state names the cause when only the Namespace selection
 narrows it:
@@ -414,6 +416,9 @@ narrows it:
   live."
 - With a name or label filter as well: the existing "No matches" and "Nothing
   matches the current filters."
+- None of the chosen Namespaces exists, whatever the other filters: "shop not
+  found" or "3 chosen namespaces not found" (see "What changed while
+  building").
 
 The × beside the control is the recovery, so the empty state stays
 non-interactive.
@@ -425,7 +430,8 @@ non-interactive.
   width and at most `min(28rem, var(--available-width))`.
 - Wide Pane (about 1,400 px): unchanged, right-aligned.
 - Long names: a 63-character Namespace truncates in the trigger and in its
-  row, keeps "+N" visible, and shows its full name in `title`.
+  row, keeps "+N" visible, and shows its full name in the row's `title` and
+  the trigger's tooltip.
 - Both themes: shadcn tokens only. Check the check mark, the highlighted row,
   "Not found", and the count against the popover background in light and
   dark.
@@ -591,3 +597,41 @@ Settled before implementation, each with the recommended option:
 ## Open questions
 
 None.
+
+## What changed while building
+
+- **The popup's width follows its longest name.** A fixed `w-80` cut long
+  names short. The width is now the longest row in `ch` of the names' mono
+  font, counting " Not found" on a missing one, plus 3rem for the row's
+  padding and check mark, between the trigger's width (`--anchor-width`) and
+  `min(28rem, var(--available-width))`. Nothing is measured in the DOM. The
+  popup takes the mono font so that `ch` is the names' width, and its parts
+  return to the app's font. A 63-character name needs about 31rem, so at the
+  cap it still loses its last characters; its row's `title` has them.
+- **The popup opens on the first chosen row.** Base UI takes the highlight on
+  open from the rows it had while closed, and the rows put the chosen
+  Namespaces first only as the popup opened. The highlight landed on the row
+  that took the first chosen one's old place. While closed, the rows now
+  follow the selection, so they are already in their open order, and Enter
+  on open unchecks the first chosen Namespace.
+- **A tooltip on the trigger names the chosen Namespaces.** "+N" hid every
+  name after the first, and names with a common prefix truncated alike.
+  Hovering or focusing the trigger lists up to ten, one per line in the mono
+  font, then "and N more". It does not show while the popup is open, and it
+  replaces the `title` on the trigger's name.
+- **The empty state says when none of the chosen Namespaces exists.** "This
+  list updates live." under a deleted Namespace had a user wait for
+  Resources that could not appear. When the Namespace list is known, by the
+  rule "Not found" uses, the list says "shop not found" or "3 chosen
+  namespaces not found". It subscribes to the Namespaces for this only while
+  it is empty and scoped.
+- **An Engine restart keeps the popup open.** A restarted Engine lists no
+  Resource Types until discovery completes, and the list hid its Namespace
+  control while its type was unknown, which closed the popup and dropped
+  focus to the page. The list now keeps the type's last known scope.
+- **`combobox.tsx` adds `ComboboxStatus` and `useComboboxFilteredItems`,**
+  which the registry's version lacks. `AGENTS.md` says to keep them.
+- **The listbox is named "Namespaces"**, as the popup is.
+- **The highlight wraps from the last row to the first,** and back, not
+  through the filter input. Base UI does not loop through the input while
+  `autoHighlight` is on.

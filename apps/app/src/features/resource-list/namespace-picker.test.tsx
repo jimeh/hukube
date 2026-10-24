@@ -122,6 +122,10 @@ const options = (popup: HTMLElement) =>
   within(popup)
     .queryAllByRole("option")
     .map((option) => option.textContent);
+const filterInput = (popup: HTMLElement) =>
+  within(popup).getByRole("combobox", { name: "Filter namespaces" });
+const highlighted = (popup: HTMLElement) =>
+  popup.querySelector('[role="option"][data-highlighted]')?.textContent;
 
 beforeEach(() => {
   // jsdom has no layout, and the virtualized rows render only in a list that has a size.
@@ -154,14 +158,37 @@ it("says Namespaces are loading and keeps All namespaces and the chosen ones usa
 });
 
 it.each([
-  ["forbidden" as const, "Your credentials cannot list Namespaces."],
-  ["failed" as const, "Could not list Namespaces."],
+  ["forbidden" as const, "Your credentials cannot list namespaces."],
+  ["failed" as const, "Could not list namespaces."],
 ])("says when Namespaces are %s and marks no chosen one as not found", async (state, text) => {
   render(<Harness initial={["shop"]} state={state} />);
   respond(listing(), result([]));
   const popup = await openPopup();
   expect(status(popup)).toBe(text);
   expect(options(popup)).toEqual(["All namespaces", "shop"]);
+
+  // No search ran over a list that could not be loaded, so none failed to match.
+  fireEvent.change(filterInput(popup), { target: { value: "pay" } });
+  expect(options(popup)).toEqual([]);
+  expect(popup.querySelector('[data-slot="combobox-empty"]')?.textContent).toBe("");
+});
+
+it("reopens on the chosen Namespaces, first and highlighted, after one deep in the list is checked", async () => {
+  const onChange = vi.fn<(value: string[]) => void>();
+  render(<Harness state="ready" onChange={onChange} />);
+  const names = Array.from({ length: 25 }, (_, i) => `ns-${String(i).padStart(2, "0")}`);
+  respond(listing(), result(names));
+  let popup = await openPopup();
+  fireEvent.click(within(popup).getByRole("option", { name: "ns-20" }));
+  expect(onChange).toHaveBeenLastCalledWith(["ns-20"]);
+  fireEvent.keyDown(filterInput(popup), { key: "Escape" });
+  await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Namespaces" })).toBeNull());
+
+  popup = await openPopup();
+  expect(options(popup).slice(0, 3)).toEqual(["All namespaces", "ns-20", "ns-00"]);
+  await vi.waitFor(() => expect(highlighted(popup)).toBe("ns-20"));
+  fireEvent.keyDown(filterInput(popup), { key: "Enter" });
+  expect(onChange).toHaveBeenLastCalledWith([]);
 });
 
 it("marks a chosen Namespace the complete list lacks as not found", async () => {

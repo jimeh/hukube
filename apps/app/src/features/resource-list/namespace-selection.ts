@@ -95,3 +95,52 @@ export function namespaceLabel(selection: readonly string[], locale?: string): N
     text: `${name} and ${count} more`,
   };
 }
+
+export interface ListNotice {
+  title: string;
+  description: string;
+}
+
+/**
+ * The empty state of a list with no Resources. When the Cluster has none of
+ * the chosen Namespaces (`missing`), no Resource can appear until the
+ * selection changes, so it says that whatever the other filters. Otherwise
+ * it names the filters, or the selection that narrows the list.
+ */
+export function emptyListNotice({
+  kind,
+  chosen,
+  missing,
+  filtered,
+  locale,
+}: {
+  kind: string;
+  chosen: readonly string[];
+  missing: ReadonlySet<string>;
+  filtered: boolean;
+  locale?: string;
+}): ListNotice {
+  const count = new Intl.NumberFormat(locale);
+  if (chosen.length > 0 && chosen.every((name) => missing.has(name))) {
+    return chosen.length === 1
+      ? {
+          title: `${chosen[0]} not found`,
+          description:
+            "The cluster has no namespace with this name. Choose another namespace, or show all namespaces.",
+        }
+      : {
+          title: `${count.format(chosen.length)} chosen namespaces not found`,
+          description:
+            "The cluster has none of them. Choose other namespaces, or show all namespaces.",
+        };
+  }
+  if (filtered) return { title: "No matches", description: "Nothing matches the current filters." };
+  if (chosen.length === 0) {
+    return {
+      title: `No ${kind} resources`,
+      description: "The cluster has none right now. This list updates live.",
+    };
+  }
+  const scope = chosen.length === 1 ? chosen[0] : `${count.format(chosen.length)} namespaces`;
+  return { title: `No ${kind} resources in ${scope}`, description: "This list updates live." };
+}

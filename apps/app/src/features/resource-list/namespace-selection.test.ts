@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   allNamespacesItem,
+  emptyListNotice,
   missingNamespaces,
   namespaceLabel,
   nextSelection,
@@ -135,6 +136,55 @@ describe("namespaceLabel", () => {
     expect(namespaceLabel(thousands, "en-US")).toMatchObject({
       more: "+1,234",
       moreText: "and 1,234 more",
+    });
+  });
+});
+
+describe("emptyListNotice", () => {
+  const kind = "Service";
+
+  it("says the one chosen Namespace is not found, whatever the other filters", () => {
+    const want = {
+      title: "gone not found",
+      description:
+        "The cluster has no namespace with this name. Choose another namespace, or show all namespaces.",
+    };
+    const missing = new Set(["gone"]);
+    expect(emptyListNotice({ kind, chosen: ["gone"], missing, filtered: false })).toEqual(want);
+    expect(emptyListNotice({ kind, chosen: ["gone"], missing, filtered: true })).toEqual(want);
+  });
+
+  it("says when none of several chosen Namespaces is found", () => {
+    const chosen = ["gone-a", "gone-b", "gone-c"];
+    expect(
+      emptyListNotice({ kind, chosen, missing: new Set(chosen), filtered: true, locale: "en-US" }),
+    ).toEqual({
+      title: "3 chosen namespaces not found",
+      description: "The cluster has none of them. Choose other namespaces, or show all namespaces.",
+    });
+  });
+
+  it("names the selection or the filters when only some chosen Namespaces are missing", () => {
+    const missing = new Set(["gone"]);
+    const chosen = ["gone", "shop"];
+    expect(emptyListNotice({ kind, chosen, missing, filtered: false, locale: "en-US" })).toEqual({
+      title: "No Service resources in 2 namespaces",
+      description: "This list updates live.",
+    });
+    expect(emptyListNotice({ kind, chosen, missing, filtered: true })).toEqual({
+      title: "No matches",
+      description: "Nothing matches the current filters.",
+    });
+  });
+
+  it("names the selection while the Namespace list is unknown", () => {
+    // `missingNamespaces` marks none until the list is complete and ready.
+    expect(
+      emptyListNotice({ kind, chosen: ["gone"], missing: new Set(), filtered: false }),
+    ).toEqual({ title: "No Service resources in gone", description: "This list updates live." });
+    expect(emptyListNotice({ kind, chosen: [], missing: new Set(), filtered: false })).toEqual({
+      title: "No Service resources",
+      description: "The cluster has none right now. This list updates live.",
     });
   });
 });

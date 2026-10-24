@@ -40,6 +40,8 @@ import {
 
 const rowHeight = 28;
 const count = new Intl.NumberFormat();
+// The most chosen Namespaces the trigger's tooltip names before "and N more".
+const tooltipLimit = 10;
 
 type Virtualizer = ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>;
 
@@ -82,12 +84,19 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
   // Until the first search result arrives, the loaded names are narrowed instead.
   const names = (searching ? found : undefined) ?? loaded;
   const pending = searching && (!found || found.stale);
+  const unavailable = state === "forbidden" || state === "failed";
+  // Nothing was searched while the names are pending or cannot be listed.
+  const noMatchText = pending || unavailable ? undefined : "No namespaces match.";
 
+  // While closed, the rows follow the selection. Base UI highlights the first
+  // chosen row on open from the rows it had while closed, so they must already
+  // be in the order the popup opens with.
+  const leading = shown ? pinned : value;
+  const filtering = shown && query !== "";
   const rows = useStableRows(
     useMemo(
-      () =>
-        pickerRows({ names: names?.names ?? [], pinned, chosen: value, filtering: query !== "" }),
-      [names, pinned, value, query],
+      () => pickerRows({ names: names?.names ?? [], pinned: leading, chosen: value, filtering }),
+      [names, leading, value, filtering],
     ),
   );
   const missing = useMemo(
@@ -142,38 +151,55 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
       }}
     >
       <div className="flex h-7 w-56 min-w-0">
-        <ComboboxTrigger
-          ref={triggerRef}
-          aria-label="Namespace"
-          className={cn(
-            "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-input bg-input/20 px-2 text-left text-xs/relaxed whitespace-nowrap transition-colors outline-none hover:bg-input/50 focus-visible:z-10 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 aria-expanded:bg-input/50 dark:bg-input/30 dark:hover:bg-input/60 dark:aria-expanded:bg-input/60 [&_svg]:shrink-0",
-            value.length > 0 && "rounded-r-none border-r-0",
-          )}
-        >
-          <HugeiconsIcon
-            icon={Layers01Icon}
-            strokeWidth={2}
-            aria-hidden
-            className="size-3.5 text-muted-foreground"
-          />
-          <span className="flex min-w-0 flex-1 items-center gap-1">
-            {label.name === undefined ? (
-              <span className="truncate">{label.text}</span>
-            ) : (
-              <span translate="no" title={label.name} className="min-w-0 truncate font-mono">
-                {label.name}
-              </span>
-            )}
-            {label.more && (
-              <>
-                <span aria-hidden className="shrink-0 text-muted-foreground tabular-nums">
-                  {label.more}
+        {/* The tooltip names the chosen Namespaces that the label cuts short. */}
+        <Tooltip disabled={value.length === 0 || shown}>
+          <TooltipTrigger
+            render={
+              <ComboboxTrigger
+                ref={triggerRef}
+                aria-label="Namespace"
+                className={cn(
+                  "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-input bg-input/20 px-2 text-left text-xs/relaxed whitespace-nowrap transition-colors outline-none hover:bg-input/50 focus-visible:z-10 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 aria-expanded:bg-input/50 dark:bg-input/30 dark:hover:bg-input/60 dark:aria-expanded:bg-input/60 [&_svg]:shrink-0",
+                  value.length > 0 && "rounded-r-none border-r-0",
+                )}
+              />
+            }
+          >
+            <HugeiconsIcon
+              icon={Layers01Icon}
+              strokeWidth={2}
+              aria-hidden
+              className="size-3.5 text-muted-foreground"
+            />
+            <span className="flex min-w-0 flex-1 items-center gap-1">
+              {label.name === undefined ? (
+                <span className="truncate">{label.text}</span>
+              ) : (
+                <span translate="no" className="min-w-0 truncate font-mono">
+                  {label.name}
                 </span>
-                <span className="sr-only"> {label.moreText}</span>
-              </>
+              )}
+              {label.more && (
+                <>
+                  <span aria-hidden className="shrink-0 text-muted-foreground tabular-nums">
+                    {label.more}
+                  </span>
+                  <span className="sr-only"> {label.moreText}</span>
+                </>
+              )}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-[min(32rem,var(--available-width))] flex-col items-start gap-0">
+            {value.slice(0, tooltipLimit).map((name) => (
+              <span key={name} translate="no" className="font-mono break-all">
+                {name}
+              </span>
+            ))}
+            {value.length > tooltipLimit && (
+              <span>and {count.format(value.length - tooltipLimit)} more</span>
             )}
-          </span>
-        </ComboboxTrigger>
+          </TooltipContent>
+        </Tooltip>
         {value.length > 0 && (
           <Tooltip>
             <TooltipTrigger
@@ -196,9 +222,12 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
           </Tooltip>
         )}
       </div>
+      {/* The popup sets `ch` in the names' font for its width, and its parts
+          return to the app's font. */}
       <ComboboxContent
         aria-label="Namespaces"
-        className="w-80 max-w-[min(28rem,var(--available-width))] min-w-(--anchor-width) motion-reduce:animate-none!"
+        className="max-w-[min(28rem,var(--available-width))] min-w-(--anchor-width) font-mono text-xs motion-reduce:animate-none! *:font-sans"
+        style={{ width: popupWidth(rows, missing) }}
       >
         <ComboboxInput
           ref={inputRef}
@@ -213,7 +242,9 @@ export function NamespacePicker({ value, onChange }: NamespacePickerProps) {
           </InputGroupAddon>
         </ComboboxInput>
         <ComboboxStatus>{statusText(state, loaded, searching, found)}</ComboboxStatus>
-        <ComboboxEmpty>{pending ? null : "No namespaces match."}</ComboboxEmpty>
+        <ComboboxEmpty className={cn(noMatchText === undefined && "py-0")}>
+          {noMatchText}
+        </ComboboxEmpty>
         <ComboboxList aria-label="Namespaces" className="max-h-none overflow-visible p-0">
           <VirtualRows open={shown} missing={missing} virtualizerRef={virtualizerRef} />
         </ComboboxList>
@@ -229,8 +260,8 @@ function statusText(
   searching: boolean,
   found: Namespaces | undefined,
 ): string {
-  if (state === "forbidden") return "Your credentials cannot list Namespaces.";
-  if (state === "failed") return "Could not list Namespaces.";
+  if (state === "forbidden") return "Your credentials cannot list namespaces.";
+  if (state === "failed") return "Could not list namespaces.";
   if (!loaded || state !== "ready") return "Loading namespaces…";
   if (loaded.complete) return "";
   if (!searching) {
@@ -241,6 +272,20 @@ function statusText(
     return `Showing ${count.format(found.names.length)} of ${count.format(found.total)} matches. Type more to narrow them down.`;
   }
   return "";
+}
+
+/**
+ * The popup's width, in the names' `ch`: its longest row plus the row's
+ * padding and check mark, between the trigger's width and the CSS maximum.
+ * "Not found" counts as mono characters, which are wider than its own.
+ */
+function popupWidth(rows: readonly string[], missing: ReadonlySet<string>): string {
+  let longest = 0;
+  for (const row of rows) {
+    if (row === allNamespacesItem) continue;
+    longest = Math.max(longest, row.length + (missing.has(row) ? " Not found".length : 0));
+  }
+  return `calc(${longest}ch + 3rem)`;
 }
 
 /**

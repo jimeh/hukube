@@ -21,6 +21,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
 import { useNow } from "@/lib/use-now.ts";
 
@@ -37,7 +38,7 @@ import {
   type ListColumn,
 } from "./columns.ts";
 import { NamespacePicker } from "./namespace-picker.tsx";
-import { readNamespaces } from "./namespace-selection.ts";
+import { emptyListNotice, missingNamespaces, readNamespaces } from "./namespace-selection.ts";
 import { listQuery, rowAt, windowFor } from "./query-window.ts";
 import { useColumnLayout } from "./use-column-layout.ts";
 
@@ -45,7 +46,6 @@ const rowHeight = 26;
 // The header scrolls sideways with the rows and stays at the top, so the rows
 // start this far into the scrolling element. It matches the header's `h-7`.
 const headerHeight = 28;
-const count = new Intl.NumberFormat();
 const noNamespaces: string[] = [];
 
 interface ResourceListPanelProps {
@@ -69,12 +69,19 @@ export function ResourceListPanel({
 }: ResourceListPanelProps) {
   const { cluster, types, openResource } = useWorkspace();
   const info = types.get(type);
+  // A restarted Engine lists no Resource Types until its discovery completes,
+  // so the list keeps the type's last known scope, and with it the Namespace
+  // control and its open popup, until the type is listed again.
+  const [scope, setScope] = useState({ type, namespaced: info?.namespaced });
+  if (info && (scope.type !== type || scope.namespaced !== info.namespaced))
+    setScope({ type, namespaced: info.namespaced });
+  const namespaced = info?.namespaced ?? (scope.type === type && !!scope.namespaced);
   const [nameFilter, setNameFilter] = useState("");
   const [selectorFilter, setSelectorFilter] = useState("");
   const chosen = useMemo(() => readNamespaces(namespacesParam), [namespacesParam]);
   // Namespaces narrow only a namespaced type, so params left on a type whose
   // CRD changed scope cannot empty its list.
-  const namespaces = info?.namespaced ? chosen : noNamespaces;
+  const namespaces = namespaced ? chosen : noNamespaces;
   const [sort, setSort] = useState<Sort>({ field: "name" });
   const [selected, setSelected] = useState<number>();
   const deferredName = useDeferredValue(nameFilter);
@@ -97,12 +104,12 @@ export function ResourceListPanel({
   const where = useMemo(
     () =>
       listQuery(type, {
-        namespaced: info?.namespaced ?? false,
+        namespaced,
         namespaces,
         name: deferredName,
         selector: deferredSelector,
       }),
-    [type, info?.namespaced, namespaces, deferredName, deferredSelector],
+    [type, namespaced, namespaces, deferredName, deferredSelector],
   );
   const filtered = Boolean(deferredName.trim() || deferredSelector.trim());
   const oneNamespace = namespaces.length === 1;
@@ -113,13 +120,13 @@ export function ResourceListPanel({
     () =>
       resolveColumnLayout({
         type,
-        namespaced: info?.namespaced ?? false,
+        namespaced,
         oneNamespace,
         columns: columnData.columns,
         rows: columnData.rows,
         stored: stored ?? null,
       }),
-    [type, info?.namespaced, oneNamespace, columnData, stored],
+    [type, namespaced, oneNamespace, columnData, stored],
   );
   const columns = stored === undefined ? [] : resolved.shown;
   const effectiveSort = shownSort(sort, columns);
@@ -130,6 +137,14 @@ export function ResourceListPanel({
       : undefined,
   );
   if (data && data.total !== total) setTotal(data.total);
+  // Only an empty list of chosen Namespaces needs to know which ones exist.
+  const known = useNamespaces(cluster, namespaces.length > 0 && data?.total === 0);
+  const namespacesState = types.get("namespaces")?.state;
+  const missing = useMemo(
+    () =>
+      missingNamespaces(namespaces, known?.names, !!known?.complete && namespacesState === "ready"),
+    [namespaces, known, namespacesState],
+  );
 
   if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
     setColumnData({ columns: data.columns, rows: data.rows });
@@ -219,7 +234,7 @@ export function ResourceListPanel({
           {data ? data.total : ""}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {info?.namespaced && <NamespacePicker value={chosen} onChange={onNamespacesChange} />}
+          {namespaced && <NamespacePicker value={chosen} onChange={onNamespacesChange} />}
           <InputGroup className="h-7 w-56">
             <InputGroupAddon>
               <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
@@ -304,18 +319,12 @@ export function ResourceListPanel({
         {data?.total === 0 && (
           <div className="pointer-events-none absolute inset-x-0 top-7 bottom-0 flex">
             <Notice
-              title={
-                filtered
-                  ? "No matches"
-                  : `No ${info?.kind ?? type} resources${scopeText(namespaces)}`
-              }
-              description={
-                filtered
-                  ? "Nothing matches the current filters."
-                  : namespaces.length > 0
-                    ? "This list updates live."
-                    : "The cluster has none right now. This list updates live."
-              }
+              {...emptyListNotice({
+                kind: info?.kind ?? type,
+                chosen: namespaces,
+                missing,
+                filtered,
+              })}
             />
           </div>
         )}
@@ -402,13 +411,6 @@ function ListCell({ column, cells }: { column: ListColumn; cells: unknown[] | un
       {text}
     </span>
   );
-}
-
-/** Where an unfiltered list looks, such as " in shop" or " in 3 namespaces". */
-function scopeText(namespaces: readonly string[]): string {
-  if (namespaces.length === 0) return "";
-  if (namespaces.length === 1) return ` in ${namespaces[0]}`;
-  return ` in ${count.format(namespaces.length)} namespaces`;
 }
 
 function Notice({ title, description }: { title: string; description: string }) {
