@@ -31,6 +31,7 @@ import {
   moveColumn,
   moveColumnTo,
   showColumn,
+  sortLabels,
   type StoredColumnLayout,
 } from "./column-layout.ts";
 import type { ListColumn } from "./columns.ts";
@@ -67,13 +68,17 @@ function dropAt({ target, position }: DropOperation, pointer = position.current)
 
 interface ColumnHeadersProps extends ColumnMenuProps {
   sort: Sort;
-  onSort: (sort: Sort) => void;
+  /** Whether sort is the one the list uses until the user chooses another. */
+  sortIsDefault: boolean;
+  /** Sorts the list; undefined returns it to its default sort. */
+  onSort: (sort: Sort | undefined) => void;
 }
 
 /** Headers stay aligned with the cells until the column is dropped. */
 export function ColumnHeaders({
   layout,
   sort,
+  sortIsDefault,
   onSort,
   onEdit,
   onShow,
@@ -138,6 +143,7 @@ export function ColumnHeaders({
           index={index}
           layout={layout}
           sort={sort}
+          sortIsDefault={sortIsDefault}
           onSort={onSort}
           onEdit={onEdit}
           onShow={onShow}
@@ -156,6 +162,7 @@ function ColumnHeader({
   index,
   layout,
   sort,
+  sortIsDefault,
   onSort,
   onEdit,
   onShow,
@@ -179,6 +186,7 @@ function ColumnHeader({
     transition: null,
   });
   const by = columnSort(column);
+  const labels = sortLabels(column);
   const active = sort.field === by.field && sort.column === by.column;
   const edit = (value: StoredColumnLayout | undefined) => {
     if (value !== undefined) onEdit(value);
@@ -228,10 +236,13 @@ function ColumnHeader({
         <ContextMenuContent>
           <ContextMenuGroup>
             <ContextMenuItem onClick={() => onSort({ ...by, desc: false })}>
-              Sort ascending
+              {labels.ascending}
             </ContextMenuItem>
             <ContextMenuItem onClick={() => onSort({ ...by, desc: true })}>
-              Sort descending
+              {labels.descending}
+            </ContextMenuItem>
+            <ContextMenuItem disabled={sortIsDefault} onClick={() => onSort(undefined)}>
+              Reset sort
             </ContextMenuItem>
             <ContextMenuItem
               disabled={layout.shown.length === 1}

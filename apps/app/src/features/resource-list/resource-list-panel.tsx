@@ -3,7 +3,7 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role, jsx-a11y/click-events-have-key-events */
 import type { Column, Row, Sort } from "@hukube/engine-client";
 import { useSubscription } from "@hukube/engine-client/react";
-import { formatAge, type TypeKey } from "@hukube/k8s";
+import { formatAge, type ResourceAddress, type TypeKey } from "@hukube/k8s";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@hukube/ui/components/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@hukube/ui/components/input-group";
 import { Skeleton } from "@hukube/ui/components/skeleton";
@@ -28,9 +28,11 @@ import { useNow } from "@/lib/use-now.ts";
 import { ColumnHeaders } from "./column-header.tsx";
 import { columnRevealDelta } from "./column-reveal.ts";
 import { CustomizeColumns, type ColumnMenuProps } from "./column-menu.tsx";
-import { resolveColumnLayout, shownSort } from "./column-layout.ts";
+import { defaultSort, resolveColumnLayout, sameSort, shownSort } from "./column-layout.ts";
 import {
+  cellDisplay,
   cellText,
+  cellTime,
   gridLayout,
   growWidths,
   noValue,
@@ -39,7 +41,15 @@ import {
 } from "./columns.ts";
 import { NamespacePicker } from "./namespace-picker.tsx";
 import { emptyListNotice, missingNamespaces, readNamespaces } from "./namespace-selection.ts";
-import { listQuery, rowAt, windowFor } from "./query-window.ts";
+import {
+  listQuery,
+  rowAt,
+  selectedIndex,
+  selectionAt,
+  steppedIndex,
+  windowFor,
+  type ListSelection,
+} from "./query-window.ts";
 import { useColumnLayout } from "./use-column-layout.ts";
 
 const rowHeight = 26;
@@ -82,8 +92,9 @@ export function ResourceListPanel({
   // Namespaces narrow only a namespaced type, so params left on a type whose
   // CRD changed scope cannot empty its list.
   const namespaces = namespaced ? chosen : noNamespaces;
-  const [sort, setSort] = useState<Sort>({ field: "name" });
-  const [selected, setSelected] = useState<number>();
+  // Unset until the user chooses a sort, which leaves the type's default.
+  const [sort, setSort] = useState<Sort>();
+  const [selection, setSelection] = useState<ListSelection>();
   const deferredName = useDeferredValue(nameFilter);
   const deferredSelector = useDeferredValue(selectorFilter);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -129,7 +140,13 @@ export function ResourceListPanel({
     [type, namespaced, oneNamespace, columnData, stored],
   );
   const columns = stored === undefined ? [] : resolved.shown;
-  const effectiveSort = shownSort(sort, columns);
+  const initialSort = defaultSort(
+    type,
+    stored === undefined ? undefined : resolved,
+    columnData.columns,
+  );
+  const effectiveSort = shownSort(sort, columns, initialSort);
+  const sortIsDefault = sameSort(effectiveSort, initialSort);
   const { data, error } = useSubscription(
     "resources.query",
     info && info.state !== "forbidden"
@@ -145,11 +162,25 @@ export function ResourceListPanel({
       missingNamespaces(namespaces, known?.names, !!known?.complete && namespacesState === "ready"),
     [namespaces, known, namespacesState],
   );
+  // The selection stays on its Resource while rows arrive and the list
+  // re-sorts, and no row shows it while the window does not hold it. Only the
+  // user's own moves scroll to it.
+  const selected = useMemo(
+    () => selection && selectedIndex(data, cluster, selection),
+    [data, cluster, selection],
+  );
+  // Remember where the Resource was, for when the window no longer holds it.
+  if (selection && selected !== undefined && selected !== selection.index)
+    setSelection({ ...selection, index: selected });
+  // A row selected before it loaded becomes its Resource once it has.
+  if (selection && selection.key === undefined && rowAt(data, selection.index))
+    setSelection(selectionAt(data, cluster, selection.index));
 
   if (data && (data.columns !== columnData.columns || data.rows !== columnData.rows))
     setColumnData({ columns: data.columns, rows: data.rows });
   const [widths, setWidths] = useState<ColumnWidths>(() => new Map());
-  const grown = growWidths(widths, columns, data?.rows ?? []);
+  const now = useNow();
+  const grown = growWidths(widths, columns, data?.rows ?? [], now);
   if (grown !== widths) setWidths(grown);
   const layout = gridLayout(columns, grown, resolved.spare);
   const gridColumns: CSSProperties = { gridTemplateColumns: layout.template };
@@ -185,26 +216,32 @@ export function ResourceListPanel({
     onShow: (id, menu) => setReveal({ id, menu }),
   };
 
-  const open = (row: Row | undefined, preview: boolean) => {
-    if (!row) return;
+  const open = (address: Omit<ResourceAddress, "cluster"> | undefined, preview: boolean) => {
+    if (!address) return;
     onInteract();
-    openResource(
-      { type: row.type, namespace: row.namespace ?? "", name: row.name },
-      { preview, beside: panelId },
-    );
+    openResource(address, { preview, beside: panelId });
     // Previews keep focus in the list so arrow keys keep browsing.
     if (preview) requestAnimationFrame(() => gridRef.current?.focus({ preventScroll: true }));
   };
+  // A filter the user changes clears the selection, so Enter and Space never
+  // open a Resource the filter hides.
+  const filterBy =
+    <T,>(set: (value: T) => void) =>
+    (value: T) => {
+      setSelection(undefined);
+      set(value);
+    };
   const select = (index: number) => {
-    setSelected(index);
+    setSelection(selectionAt(data, cluster, index));
     virtualizer.scrollToIndex(index);
   };
   const onKeyDown = (e: KeyboardEvent) => {
-    const current = selected ?? -1;
-    if (e.key === "ArrowDown" && current < total - 1) select(current + 1);
-    else if (e.key === "ArrowUp" && current > 0) select(current - 1);
-    else if (e.key === "Enter" && selected !== undefined) open(rowAt(data, selected), false);
-    else if (e.key === " " && selected !== undefined) open(rowAt(data, selected), true);
+    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    const next = step ? steppedIndex(selection, selected, step, total) : undefined;
+    if (next !== undefined) select(next);
+    // The selected Resource opens even when the window does not hold its row.
+    else if (e.key === "Enter" && selection) open(selection.address, false);
+    else if (e.key === " " && selection) open(selection.address, true);
     else return;
     e.preventDefault();
   };
@@ -234,7 +271,7 @@ export function ResourceListPanel({
           {data ? data.total : ""}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {namespaced && <NamespacePicker value={chosen} onChange={onNamespacesChange} />}
+          {namespaced && <NamespacePicker value={chosen} onChange={filterBy(onNamespacesChange)} />}
           <InputGroup className="h-7 w-56">
             <InputGroupAddon>
               <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
@@ -243,7 +280,7 @@ export function ResourceListPanel({
               aria-label="Filter by name"
               placeholder="Filter by name"
               value={nameFilter}
-              onChange={(e) => setNameFilter(e.target.value)}
+              onChange={(e) => filterBy(setNameFilter)(e.target.value)}
             />
           </InputGroup>
           <InputGroup className="h-7 w-56">
@@ -255,7 +292,7 @@ export function ResourceListPanel({
               placeholder="Label selector"
               className="font-mono"
               value={selectorFilter}
-              onChange={(e) => setSelectorFilter(e.target.value)}
+              onChange={(e) => filterBy(setSelectorFilter)(e.target.value)}
             />
           </InputGroup>
         </div>
@@ -263,7 +300,9 @@ export function ResourceListPanel({
 
       {error && <p className="px-3 py-2 text-destructive">{error.message}</p>}
 
-      <div className="relative min-h-0 flex-1">
+      {/* The grid is as tall as every row, so its focus ring is drawn over this
+          wrapper, which stays in view while the list scrolls. */}
+      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-sm has-[[role=grid]:focus-visible]:after:outline-1 has-[[role=grid]:focus-visible]:after:-outline-offset-1 has-[[role=grid]:focus-visible]:after:outline-ring has-[[role=grid]:focus-visible]:after:outline-solid has-[[role=grid]:focus-visible]:after:ring-2 has-[[role=grid]:focus-visible]:after:ring-ring/30 has-[[role=grid]:focus-visible]:after:ring-inset">
         <div ref={scrollRef} className="h-full overflow-auto">
           {/* Column widths are in `ch`, so everything inside uses the cells' font. */}
           <div
@@ -281,10 +320,16 @@ export function ResourceListPanel({
                   {...columnMenu}
                   scrollRef={scrollRef}
                   sort={effectiveSort}
+                  sortIsDefault={sortIsDefault}
                   onSort={setSort}
                 />
               )}
-              <CustomizeColumns {...columnMenu} loaded={stored !== undefined} />
+              <CustomizeColumns
+                {...columnMenu}
+                loaded={stored !== undefined}
+                sortIsDefault={sortIsDefault}
+                onResetSort={() => setSort(undefined)}
+              />
             </div>
 
             <div
@@ -306,10 +351,11 @@ export function ResourceListPanel({
                   columns={columns}
                   selected={item.index === selected}
                   onClick={() => {
-                    setSelected(item.index);
-                    open(rowAt(data, item.index), true);
+                    const clicked = selectionAt(data, cluster, item.index);
+                    setSelection(clicked);
+                    open(clicked.address, true);
                   }}
-                  onDoubleClick={() => open(rowAt(data, item.index), false)}
+                  onDoubleClick={() => open(selectionAt(data, cluster, item.index).address, false)}
                 />
               ))}
             </div>
@@ -368,7 +414,7 @@ function ListRow({
       {row ? (
         columns.map((column) => {
           if (column.source === "cell")
-            return <ListCell key={column.id} column={column} cells={row.cells} />;
+            return <ListCell key={column.id} column={column} cells={row.cells} now={now} />;
           return (
             <span
               key={column.id}
@@ -395,16 +441,30 @@ function ListRow({
   );
 }
 
-/** One cell of a Row. A Row has no cells until the Engine has fetched them. */
-function ListCell({ column, cells }: { column: ListColumn; cells: unknown[] | undefined }) {
-  const text = cells && column.index !== undefined ? cellText(cells[column.index]) : "";
+/**
+ * One cell of a Row. A Row has no cells until the Engine has fetched them. A
+ * timestamp cell shows a live age, as Age does, with its time in the title.
+ */
+function ListCell({
+  column,
+  cells,
+  now,
+}: {
+  column: ListColumn;
+  cells: unknown[] | undefined;
+  now: number;
+}) {
+  const value = cells && column.index !== undefined ? cells[column.index] : undefined;
+  const text = cells && column.index !== undefined ? cellDisplay(column, value, now) : "";
+  const age = cellTime(column, value) !== undefined;
   return (
     <span
       role="gridcell"
-      title={text}
+      title={age ? cellText(value) : text}
       className={cn(
         "truncate",
         column.numeric && "text-right tabular-nums",
+        age && "text-muted-foreground tabular-nums",
         text === noValue && "text-muted-foreground",
       )}
     >

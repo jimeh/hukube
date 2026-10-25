@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "7ca954f53ae545bf";
+export const Hash = "3338809e79c523b5";
 
 //////////
 // source: protocol.go
@@ -415,6 +415,7 @@ export interface Column {
    * string, integer, number, boolean, or date. It is a hint, not a promise:
    * built-in types declare some columns of numbers as string. A date cell
    * holds a duration the Cluster rendered, such as "5m", not a timestamp.
+   * ColumnTypeTimestamp is the one type the Engine sets itself.
    */
   type: string;
   /**
@@ -423,6 +424,13 @@ export interface Column {
    */
   priority: number /* int */;
 }
+/**
+ * ColumnTypeTimestamp is the Column type of cells that hold RFC 3339 times
+ * the Engine read from each Resource, in place of the ages the Cluster
+ * rendered (ADR-0027). A Cluster cannot declare it: the Engine reads a
+ * declared "timestamp" as "string".
+ */
+export const ColumnTypeTimestamp = "timestamp";
 /**
  * QueryResult is one window of a query's matching Resources.
  */

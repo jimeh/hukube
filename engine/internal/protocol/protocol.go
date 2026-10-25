@@ -258,11 +258,18 @@ type Column struct {
 	// string, integer, number, boolean, or date. It is a hint, not a promise:
 	// built-in types declare some columns of numbers as string. A date cell
 	// holds a duration the Cluster rendered, such as "5m", not a timestamp.
+	// ColumnTypeTimestamp is the one type the Engine sets itself.
 	Type string `json:"type"`
 	// Priority is 0 for the columns `kubectl get` shows by default, and higher
 	// for the ones it only shows with `-o wide`.
 	Priority int `json:"priority"`
 }
+
+// ColumnTypeTimestamp is the Column type of cells that hold RFC 3339 times
+// the Engine read from each Resource, in place of the ages the Cluster
+// rendered (ADR-0027). A Cluster cannot declare it: the Engine reads a
+// declared "timestamp" as "string".
+const ColumnTypeTimestamp = "timestamp"
 
 // QueryResult is one window of a query's matching Resources.
 type QueryResult struct {

@@ -128,17 +128,35 @@ type tableLayout struct {
 	source []int
 }
 
+// eventTimeColumns maps the columns of an Event Table whose cells the Engine
+// replaces to the time each counts from. The API server renders them as ages
+// such as "5m", which are stale as soon as they are sent (ADR-0027).
+var eventTimeColumns = map[string]func(eventTimes) time.Time{
+	"Last Seen":  eventTimes.lastSeen,
+	"First Seen": eventTimes.firstSeen,
+}
+
 // newTableLayout leaves out the name and Age columns. A Query's rows already
 // carry both from the index, where the age stays current: the API server
 // renders an age as text such as "5m" when it sends a row, and does not send
-// the row again as time passes.
-func newTableLayout(defs []metav1.TableColumnDefinition) tableLayout {
+// the row again as time passes. events says the type is an Event type, whose
+// columns named in eventTimeColumns are marked as holding timestamps.
+func newTableLayout(defs []metav1.TableColumnDefinition, events bool) tableLayout {
 	var l tableLayout
 	for i, d := range defs {
 		if d.Format == "name" || d.Name == "Age" {
 			continue
 		}
-		l.columns = append(l.columns, protocol.Column{Name: d.Name, Type: d.Type, Priority: int(d.Priority)})
+		column := protocol.Column{Name: d.Name, Type: d.Type, Priority: int(d.Priority)}
+		switch {
+		case events && eventTimeColumns[d.Name] != nil:
+			column.Type = protocol.ColumnTypeTimestamp
+		case d.Type == protocol.ColumnTypeTimestamp:
+			// The type says the Engine replaced the cells, so a column whose
+			// cells the Cluster rendered must not claim it.
+			column.Type = "string"
+		}
+		l.columns = append(l.columns, column)
 		l.source = append(l.source, i)
 	}
 	return l
@@ -151,6 +169,18 @@ func (l tableLayout) equal(other tableLayout) bool {
 // rows returns the kept cells of each row by index key, and the
 // resourceVersion of the last row.
 func (l tableLayout) rows(rows []metav1.TableRow) (cells map[string][]any, resourceVersion string, err error) {
+	// times[j], when set, reads the cell of columns[j] from the row's Event.
+	// It stays nil for a Table whose cells are all the Cluster's.
+	var times []func(eventTimes) time.Time
+	for j, column := range l.columns {
+		if column.Type != protocol.ColumnTypeTimestamp {
+			continue
+		}
+		if times == nil {
+			times = make([]func(eventTimes) time.Time, len(l.columns))
+		}
+		times[j] = eventTimeColumns[column.Name]
+	}
 	cells = make(map[string][]any, len(rows))
 	for i := range rows {
 		// Rows are requested with their metadata, which is the only thing that
@@ -170,9 +200,20 @@ func (l tableLayout) rows(rows []metav1.TableRow) (cells map[string][]any, resou
 		if obj.Metadata.Name == "" {
 			return nil, "", errors.New("table row has no metadata")
 		}
+		var event eventTimes
+		if times != nil {
+			if event, err = readEventTimes(rows[i].Object.Raw); err != nil {
+				return nil, "", err
+			}
+		}
 		kept := make([]any, len(l.source))
 		for j, src := range l.source {
-			if src < len(rows[i].Cells) {
+			switch {
+			case times != nil && times[j] != nil:
+				if at := times[j](event); !at.IsZero() {
+					kept[j] = at
+				}
+			case src < len(rows[i].Cells):
 				kept[j] = rows[i].Cells[src]
 			}
 		}
@@ -182,11 +223,52 @@ func (l tableLayout) rows(rows []metav1.TableRow) (cells map[string][]any, resou
 	return cells, resourceVersion, nil
 }
 
+// readEventTimes reads the times of an Event in a Table row, which holds the
+// whole Event in the API group the Table was listed from.
+func readEventTimes(raw []byte) (eventTimes, error) {
+	// The fields of both API groups, which name the same times differently.
+	var ev struct {
+		Metadata struct {
+			CreationTimestamp metav1.Time `json:"creationTimestamp"`
+		} `json:"metadata"`
+		Series *struct {
+			LastObservedTime metav1.MicroTime `json:"lastObservedTime"`
+		} `json:"series"`
+		LastTimestamp            metav1.Time      `json:"lastTimestamp"`
+		DeprecatedLastTimestamp  metav1.Time      `json:"deprecatedLastTimestamp"`
+		EventTime                metav1.MicroTime `json:"eventTime"`
+		FirstTimestamp           metav1.Time      `json:"firstTimestamp"`
+		DeprecatedFirstTimestamp metav1.Time      `json:"deprecatedFirstTimestamp"`
+	}
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return eventTimes{}, fmt.Errorf("table row event: %w", err)
+	}
+	times := eventTimes{
+		last:    firstSet(ev.LastTimestamp.Time, ev.DeprecatedLastTimestamp.Time),
+		event:   ev.EventTime.Time,
+		first:   firstSet(ev.FirstTimestamp.Time, ev.DeprecatedFirstTimestamp.Time),
+		created: ev.Metadata.CreationTimestamp.Time,
+	}
+	if ev.Series != nil {
+		times.series = ev.Series.LastObservedTime.Time
+	}
+	return times, nil
+}
+
+// isEventType reports whether gvr is one of the two Resource Types that
+// serve Events, whose Table cells for eventTimeColumns the Engine replaces.
+func isEventType(gvr schema.GroupVersionResource) bool {
+	return gvr.Resource == "events" && (gvr.Group == "" || gvr.Group == "events.k8s.io")
+}
+
 // tableClient lists and watches the Table of one Resource Type.
 type tableClient interface {
 	List(ctx context.Context, opts metav1.ListOptions) (*metav1.Table, error)
 	// Watch returns a watch whose events hold a *metav1.Table.
 	Watch(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error)
+	// events reports whether the type is an Event type, whose rows hold the
+	// whole Event rather than only its metadata.
+	events() bool
 }
 
 // tableSource waits until a Resource Type can be listed and returns a client
@@ -311,7 +393,7 @@ func listTable(ctx context.Context, client tableClient, t *Table) (tableLayout, 
 		}
 		if first {
 			// Every page of one list has the same column definitions.
-			layout = newTableLayout(page.ColumnDefinitions)
+			layout = newTableLayout(page.ColumnDefinitions, client.events())
 			if incremental {
 				t.replace(layout, nil)
 			}
@@ -365,7 +447,7 @@ func watchTable(ctx context.Context, client tableClient, t *Table, layout tableL
 			}
 			// Only a watch's first event carries column definitions. Cells are
 			// stored by position, so different columns need a fresh list.
-			if len(table.ColumnDefinitions) > 0 && !layout.equal(newTableLayout(table.ColumnDefinitions)) {
+			if len(table.ColumnDefinitions) > 0 && !layout.equal(newTableLayout(table.ColumnDefinitions, client.events())) {
 				return resourceVersion, errTableRelist
 			}
 			cells, last, err := layout.rows(table.Rows)
@@ -529,16 +611,24 @@ type restTableClient struct {
 	gvr    schema.GroupVersionResource
 }
 
+func (c *restTableClient) events() bool { return isEventType(c.gvr) }
+
 func (c *restTableClient) request(opts *metav1.ListOptions) *rest.Request {
 	segments := []string{"apis", c.gvr.Group, c.gvr.Version, c.gvr.Resource}
 	if c.gvr.Group == "" {
 		segments = []string{"api", c.gvr.Version, c.gvr.Resource}
 	}
+	// An Event's row holds the whole Event, whose times replace the ages the
+	// API server rendered.
+	include := metav1.IncludeMetadata
+	if c.events() {
+		include = metav1.IncludeObject
+	}
 	return c.client.Get().
 		AbsPath(segments...).
 		SetHeader("Accept", tableAccept).
 		SpecificallyVersionedParams(opts, tableParams, tableVersion).
-		Param("includeObject", string(metav1.IncludeMetadata))
+		Param("includeObject", string(include))
 }
 
 func (c *restTableClient) List(ctx context.Context, opts metav1.ListOptions) (*metav1.Table, error) {

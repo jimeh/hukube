@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strconv"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -46,6 +48,16 @@ func snapshot(t *testing.T, table *Table) ([]protocol.Column, map[string]string)
 		cells[key] = string(raw)
 	}
 	return columns, cells
+}
+
+// sameCell reports whether two cells hold the same value. Times compare as
+// instants, because they decode into the zone the test runs in.
+func sameCell(a, b any) bool {
+	if at, ok := a.(time.Time); ok {
+		other, ok := b.(time.Time)
+		return ok && at.Equal(other)
+	}
+	return a == b
 }
 
 func tableRow(namespace, name, resourceVersion string, cells ...any) metav1.TableRow {
@@ -124,7 +136,7 @@ func TestTableLayoutDropsNameAndAge(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			layout := newTableLayout(tt.defs)
+			layout := newTableLayout(tt.defs, false)
 			if !slices.Equal(layout.columns, tt.wantColumns) {
 				t.Errorf("columns = %+v, want %+v", layout.columns, tt.wantColumns)
 			}
@@ -143,9 +155,198 @@ func TestTableLayoutDropsNameAndAge(t *testing.T) {
 	}
 
 	// A row that does not say which Resource it describes cannot be stored.
-	if _, _, err := newTableLayout(nil).rows([]metav1.TableRow{{Cells: []any{"web"}}}); err == nil {
+	if _, _, err := newTableLayout(nil, false).rows([]metav1.TableRow{{Cells: []any{"web"}}}); err == nil {
 		t.Error("rows accepted a row without metadata")
 	}
+}
+
+// objectRow is a Table row whose object is the whole Resource, as the API
+// server sends an Event's row.
+func objectRow(object map[string]any, cells ...any) metav1.TableRow {
+	raw, _ := json.Marshal(object)
+	return metav1.TableRow{Cells: cells, Object: runtime.RawExtension{Raw: raw}}
+}
+
+// instant parses an RFC 3339 time.
+func instant(t *testing.T, value string) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// eventDefs are some of the column definitions the API server sends for both
+// Event types: the two whose cells the Engine replaces, one it keeps, and the
+// name, which it drops.
+var eventDefs = []metav1.TableColumnDefinition{
+	{Name: "Last Seen", Type: "string"},
+	{Name: "Reason", Type: "string"},
+	{Name: "First Seen", Type: "string", Priority: 1},
+	{Name: "Name", Type: "string", Format: "name", Priority: 1},
+}
+
+// An Event's Last Seen and First Seen hold the times they count from, read
+// from the Event in either API group's fields. Other columns, and other
+// types, keep the cells the API server rendered.
+func TestTableReadsEventTimes(t *testing.T) {
+	const (
+		created   = "2026-10-24T02:00:00+02:00"
+		first     = "2026-10-24T02:01:00+02:00"
+		eventTime = "2026-10-24T02:02:00.000001+02:00"
+		last      = "2026-10-24T02:03:00+02:00"
+		series    = "2026-10-24T02:04:00.000002+02:00"
+	)
+	core := func(fields map[string]any) map[string]any {
+		object := map[string]any{
+			"apiVersion": "v1", "kind": "Event",
+			"metadata": map[string]any{"namespace": "default", "name": "web.17f", "resourceVersion": "7", "creationTimestamp": created},
+		}
+		maps.Copy(object, fields)
+		return object
+	}
+	modern := func(fields map[string]any) map[string]any {
+		object := core(fields)
+		object["apiVersion"] = "events.k8s.io/v1"
+		return object
+	}
+	tests := []struct {
+		name            string
+		object          map[string]any
+		lastSeen, first string
+	}{
+		{
+			name: "core series",
+			object: core(map[string]any{
+				"series":        map[string]any{"count": 3, "lastObservedTime": series},
+				"lastTimestamp": last, "eventTime": eventTime, "firstTimestamp": first,
+			}),
+			lastSeen: series, first: first,
+		},
+		{
+			name:     "core last timestamp",
+			object:   core(map[string]any{"lastTimestamp": last, "eventTime": eventTime, "firstTimestamp": first}),
+			lastSeen: last, first: first,
+		},
+		{name: "core event time only", object: core(map[string]any{"eventTime": eventTime}), lastSeen: eventTime, first: eventTime},
+		{name: "core first timestamp only", object: core(map[string]any{"firstTimestamp": first}), lastSeen: first, first: first},
+		{name: "core creation time only", object: core(nil), lastSeen: created, first: created},
+		{
+			name: "events.k8s.io series",
+			object: modern(map[string]any{
+				"series":                  map[string]any{"count": 3, "lastObservedTime": series},
+				"deprecatedLastTimestamp": last, "eventTime": eventTime, "deprecatedFirstTimestamp": first,
+			}),
+			lastSeen: series, first: first,
+		},
+		{
+			name: "events.k8s.io last timestamp",
+			object: modern(map[string]any{
+				"deprecatedLastTimestamp": last, "eventTime": eventTime, "deprecatedFirstTimestamp": first,
+			}),
+			lastSeen: last, first: first,
+		},
+		{name: "events.k8s.io event time only", object: modern(map[string]any{"eventTime": eventTime}), lastSeen: eventTime, first: eventTime},
+		{
+			name:     "events.k8s.io first timestamp only",
+			object:   modern(map[string]any{"deprecatedFirstTimestamp": first}),
+			lastSeen: first, first: first,
+		},
+		{name: "events.k8s.io creation time only", object: modern(nil), lastSeen: created, first: created},
+	}
+	layout := newTableLayout(eventDefs, true)
+	wantColumns := []protocol.Column{
+		{Name: "Last Seen", Type: protocol.ColumnTypeTimestamp},
+		{Name: "Reason", Type: "string"},
+		{Name: "First Seen", Type: protocol.ColumnTypeTimestamp, Priority: 1},
+	}
+	if !slices.Equal(layout.columns, wantColumns) {
+		t.Errorf("columns = %+v, want %+v", layout.columns, wantColumns)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cells, resourceVersion, err := layout.rows([]metav1.TableRow{
+				objectRow(tt.object, "0s", "Started", "5m", "web.17f"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []any{instant(t, tt.lastSeen), "Started", instant(t, tt.first)}
+			row := cells["default/web.17f"]
+			if !slices.EqualFunc(row, want, sameCell) {
+				t.Errorf("cells = %v, want %v", row, want)
+			}
+			// Times keep the zone metav1 decodes into, so they encode with the
+			// same offset as a Row's createdAt and the Events Facet's times.
+			for _, cell := range row {
+				if at, ok := cell.(time.Time); ok && at.Location() != time.Local {
+					t.Errorf("time cell location is %v, want time.Local", at.Location())
+				}
+			}
+			if resourceVersion != "7" {
+				t.Errorf("resourceVersion = %q, want 7", resourceVersion)
+			}
+		})
+	}
+
+	t.Run("an Event without any time", func(t *testing.T) {
+		object := map[string]any{"metadata": map[string]any{"namespace": "default", "name": "web.17f"}}
+		cells, _, err := layout.rows([]metav1.TableRow{objectRow(object, "<unknown>", "Started", "<unknown>", "web.17f")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, _ := json.Marshal(cells["default/web.17f"]); string(raw) != `[null,"Started",null]` {
+			t.Errorf("cells = %s, want no times", raw)
+		}
+	})
+
+	// Only the Engine may mark a column as holding times, so a type that
+	// declares one keeps it as a string of rendered cells, as does a column
+	// of the same name in a type that is not an Event.
+	for _, events := range []bool{false, true} {
+		t.Run(fmt.Sprintf("declared timestamp, events %v", events), func(t *testing.T) {
+			defs := []metav1.TableColumnDefinition{
+				{Name: "Name", Type: "string", Format: "name"},
+				{Name: "Last Seen", Type: "string"},
+				{Name: "Expires", Type: protocol.ColumnTypeTimestamp},
+			}
+			layout := newTableLayout(defs, events)
+			wantType := "string"
+			if events {
+				wantType = protocol.ColumnTypeTimestamp
+			}
+			want := []protocol.Column{{Name: "Last Seen", Type: wantType}, {Name: "Expires", Type: "string"}}
+			if !slices.Equal(layout.columns, want) {
+				t.Errorf("columns = %+v, want %+v", layout.columns, want)
+			}
+			if events {
+				return
+			}
+			cells, _, err := layout.rows([]metav1.TableRow{tableRow("default", "web", "7", "web", "5m", "2026-10-24")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw, _ := json.Marshal(cells["default/web"]); string(raw) != `["5m","2026-10-24"]` {
+				t.Errorf("cells = %s, want the rendered cells", raw)
+			}
+		})
+	}
+
+	t.Run("an Event Table without the time columns", func(t *testing.T) {
+		defs := []metav1.TableColumnDefinition{{Name: "Reason", Type: "string"}, {Name: "Name", Type: "string", Format: "name"}}
+		layout := newTableLayout(defs, true)
+		if want := []protocol.Column{{Name: "Reason", Type: "string"}}; !slices.Equal(layout.columns, want) {
+			t.Errorf("columns = %+v, want %+v", layout.columns, want)
+		}
+		cells, _, err := layout.rows([]metav1.TableRow{objectRow(core(nil), "Started", "web.17f")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, _ := json.Marshal(cells["default/web.17f"]); string(raw) != `["Started"]` {
+			t.Errorf("cells = %s, want the rendered cells", raw)
+		}
+	})
 }
 
 // fakeTables serves one type's Table from memory and records the requests it
@@ -157,6 +358,8 @@ type fakeTables struct {
 	version  string
 	pageSize int
 	listErr  error
+	// eventRows makes the fake an Event type's client, whose rows hold Events.
+	eventRows bool
 
 	lists    []metav1.ListOptions
 	listedAt []time.Time
@@ -190,6 +393,8 @@ func (f *fakeTables) List(_ context.Context, opts metav1.ListOptions) (*metav1.T
 	}
 	return table, nil
 }
+
+func (f *fakeTables) events() bool { return f.eventRows }
 
 func (f *fakeTables) Watch(_ context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 	f.mu.Lock()
@@ -305,6 +510,48 @@ func TestTableFollowsListsAndWatches(t *testing.T) {
 		columns, cells := snapshot(t, table)
 		if len(columns) != 2 || cells["other/a"] != `[3,"x"]` {
 			t.Errorf("after the columns changed: columns %+v cells %v, want Data and Extra with [3,\"x\"]", columns, cells)
+		}
+	})
+}
+
+// Every watch of an Event Table starts with column definitions, which must
+// lay out as the list's did, or each watch would list the type again.
+func TestTableEventWatchKeepsItsList(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		eventObject := func(resourceVersion, lastTimestamp string) map[string]any {
+			return map[string]any{
+				"metadata": map[string]any{
+					"namespace": "default", "name": "web.17f", "resourceVersion": resourceVersion,
+					"creationTimestamp": "2026-10-24T00:00:00Z",
+				},
+				"lastTimestamp": lastTimestamp,
+			}
+		}
+		fake := &fakeTables{
+			defs: eventDefs, version: "10", pageSize: 2, eventRows: true,
+			rows: []metav1.TableRow{objectRow(eventObject("1", "2026-10-24T00:01:00Z"), "5m", "Started", "6m", "web.17f")},
+		}
+		table := &Table{}
+		timing := testTiming()
+		go runTable(ctx, table, fake.source(context.Background()), timing, slog.New(slog.DiscardHandler))
+
+		synctest.Wait()
+		_, _, w := fake.calls()
+		w.Modify(event(eventDefs, objectRow(eventObject("11", "2026-10-24T00:02:00Z"), "0s", "Started", "6m", "web.17f")))
+		synctest.Wait()
+		var row []any
+		table.Read(func(_ []protocol.Column, cells func(string) []any) { row = cells("default/web.17f") })
+		want := []any{instant(t, "2026-10-24T00:02:00Z"), "Started", instant(t, "2026-10-24T00:00:00Z")}
+		if !slices.EqualFunc(row, want, sameCell) {
+			t.Errorf("cells after the watch = %v, want %v", row, want)
+		}
+		// A relist would wait for the retry delay first.
+		time.Sleep(2 * timing.ObjectRetry)
+		synctest.Wait()
+		if lists, watches, _ := fake.calls(); len(lists) != 1 || !slices.Equal(watches, []string{"10"}) {
+			t.Errorf("lists %q watches %q, want one list and its watch", lists, watches)
 		}
 	})
 }
@@ -621,6 +868,92 @@ func TestTableFollowsResourceChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, hasCells("none"))
+}
+
+// The API server sends the whole Event in each Event type's rows, under that
+// API group's field names, and a new last time reaches both Tables.
+func TestTableReadsEventTimesFromTheCluster(t *testing.T) {
+	c := connect(t)
+	cs := kubernetes.NewForConfigOrDie(cfg)
+	ns := createNamespace(t, cs)
+	ctx := context.Background()
+
+	core, releaseCore := c.Table("events")
+	defer releaseCore()
+	modern, releaseModern := c.Table("events.events.k8s.io")
+	defer releaseModern()
+	// lastSeen returns an Event's Last Seen cell in a Table, and its JSON or
+	// why there is none.
+	lastSeen := func(table *Table, name string) (time.Time, string) {
+		var at time.Time
+		got := "no cells"
+		table.Read(func(columns []protocol.Column, cells func(string) []any) {
+			i := slices.IndexFunc(columns, func(c protocol.Column) bool { return c.Name == "Last Seen" })
+			if i < 0 || columns[i].Type != protocol.ColumnTypeTimestamp {
+				got = fmt.Sprintf("columns %+v", columns)
+				return
+			}
+			if row := cells(ns + "/" + name); row != nil {
+				at, _ = row[i].(time.Time)
+				raw, _ := json.Marshal(row[i])
+				got = string(raw)
+			}
+		})
+		return at, got
+	}
+	expect := func(want map[string]time.Time) {
+		t.Helper()
+		eventually(t, func() (bool, string) {
+			state := ""
+			ok := true
+			for _, table := range []struct {
+				name  string
+				table *Table
+			}{{"events", core}, {"events.events.k8s.io", modern}} {
+				for event, cell := range want {
+					at, got := lastSeen(table.table, event)
+					ok = ok && at.Equal(cell)
+					state += fmt.Sprintf("%s %s: %s; ", table.name, event, got)
+				}
+			}
+			return ok, state
+		})
+	}
+
+	first := time.Date(2026, 10, 24, 0, 1, 0, 0, time.UTC)
+	legacy, err := cs.CoreV1().Events(ns).Create(ctx, &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "legacy"},
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "ConfigMap", Name: "web", Namespace: ns},
+		Reason:         "Legacy",
+		Type:           "Normal",
+		Count:          2,
+		FirstTimestamp: metav1.NewTime(first),
+		LastTimestamp:  metav1.NewTime(first.Add(time.Minute)),
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := time.Date(2026, 10, 24, 0, 3, 0, 123456000, time.UTC)
+	if _, err := cs.EventsV1().Events(ns).Create(ctx, &eventsv1.Event{
+		ObjectMeta:          metav1.ObjectMeta{Name: "modern"},
+		Regarding:           corev1.ObjectReference{APIVersion: "v1", Kind: "ConfigMap", Name: "web", Namespace: ns},
+		EventTime:           metav1.NewMicroTime(first),
+		Series:              &eventsv1.EventSeries{Count: 2, LastObservedTime: metav1.NewMicroTime(observed)},
+		ReportingController: "test",
+		ReportingInstance:   "test-1",
+		Action:              "Test",
+		Reason:              "Modern",
+		Type:                "Normal",
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	expect(map[string]time.Time{"legacy": first.Add(time.Minute), "modern": observed})
+
+	legacy.LastTimestamp = metav1.NewTime(first.Add(5 * time.Minute))
+	if _, err := cs.CoreV1().Events(ns).Update(ctx, legacy, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	expect(map[string]time.Time{"legacy": first.Add(5 * time.Minute), "modern": observed})
 }
 
 // A CRD's printer columns arrive with their declared types and priorities,
