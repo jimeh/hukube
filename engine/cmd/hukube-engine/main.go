@@ -29,6 +29,9 @@ import (
 	"github.com/jimeh/hukube/engine/internal/settings"
 )
 
+var version = "development"
+var revision = "unknown"
+
 type stringList []string
 
 func (l *stringList) String() string     { return strings.Join(*l, ",") }
@@ -76,7 +79,12 @@ func registerOptions(o *options) {
 func run() error {
 	var o options
 	registerOptions(&o)
+	showVersion := flag.Bool("version", false, "print the bundled app version and revision")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("hukube-engine %s (%s)\n", version, revision)
+		return nil
+	}
 
 	if err := validateExecOptions(o); err != nil {
 		return err

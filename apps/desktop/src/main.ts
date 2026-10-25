@@ -23,6 +23,11 @@ import {
 
 import type { EngineEndpoint } from "@hukube/host";
 import { unloadPrompt, type OpenWork } from "./unload.ts";
+import { Quit } from "./quit.ts";
+import { startUpdates } from "./update-host.ts";
+import type { Updates } from "./updates.ts";
+
+app.setName("hukube");
 
 const appScheme = "hukube";
 const appOrigin = `${appScheme}://app`;
@@ -58,6 +63,11 @@ let engine: ChildProcess | undefined;
 let endpoint: EngineEndpoint | undefined;
 let quitting = false;
 let quitRequested = false;
+let updates: Updates | undefined;
+const quit = new Quit(
+  () => app.quit(),
+  () => updates?.install(),
+);
 const openWork = new Map<number, OpenWork>();
 
 /**
@@ -195,6 +205,7 @@ function createWindow(url: URL = appUrl("/")!) {
     });
     if (response === 1) event.preventDefault();
     else {
+      quit.cancelled();
       quitRequested = false;
       closing = false;
     }
@@ -240,7 +251,7 @@ app.on("before-quit", () => {
 ipcMain.handle("hukube:engine", (event) => (fromUi(event) ? endpoint : undefined));
 ipcMain.on("hukube:open-window", (event, path: unknown) => {
   const url = fromUi(event) && typeof path === "string" ? appUrl(path) : undefined;
-  if (url) createWindow(url);
+  if (url && !quit.restarting) createWindow(url);
 });
 ipcMain.on("hukube:open-external", (event, url: unknown) => {
   if (fromUi(event) && typeof url === "string") openExternal(url);
@@ -249,15 +260,19 @@ ipcMain.on("hukube:open-external", (event, url: unknown) => {
 // The Engine stops only once every window has agreed to close. Stopping it
 // in before-quit ended Exec Sessions before their window could ask, and left
 // a window whose close was cancelled without an Engine.
-app.on("will-quit", () => {
+app.on("will-quit", (event) => {
+  if (!quit.willQuit()) {
+    event.preventDefault();
+    return;
+  }
   quitting = true;
   engine?.kill();
 });
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" && !quit.restarting) app.quit();
 });
 app.on("activate", () => {
-  if (endpoint && BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (endpoint && !quit.restarting && BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
 app
@@ -266,6 +281,19 @@ app
     serveUi();
     endpoint = await startEngine();
     createWindow();
+    // Failure to initialize updates never prevents ordinary startup.
+    updates = await startUpdates(
+      () => quit.restart(),
+      () => {
+        if (!quit.restarting) return;
+        quit.failed();
+        quitRequested = false;
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      },
+    ).catch((error: unknown) => {
+      console.error("Could not initialize updates", error);
+      return undefined;
+    });
   })
   .catch((err: unknown) => {
     dialog.showErrorBox("hukube could not start", err instanceof Error ? err.message : String(err));

@@ -6,14 +6,17 @@ directories:
 files:
   - out/**
   - package.json
-extraResources:
-  - from: ../../engine/bin/hukube-engine
-    to: engine/hukube-engine
-  - from: ../app/dist
-    to: ui
+publish:
+  provider: github
+  owner: jimeh
+  repo: hukube
+  releaseType: release
 mac:
+  hardenedRuntime: true
+  binaries:
+    - Contents/Resources/engine/hukube-engine
   category: public.app-category.developer-tools
   target: [dmg, zip]
 linux:
   category: Development
-  target: [AppImage, dir]
+  target: [AppImage]

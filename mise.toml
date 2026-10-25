@@ -133,10 +133,51 @@ description = "Build the Engine, UI, and desktop Host"
 depends = ["build:engine", "build:ui", "build:desktop"]
 
 [tasks.package]
-description = "Package the desktop app for the current platform"
-depends = ["build"]
-dir = "apps/desktop"
-run = "bun run package"
+description = "Build a non-publishing snapshot package with public updates disabled"
+depends = ["build:ui", "build:desktop"]
+run = "bun apps/desktop/scripts/package.ts snapshot"
+
+[tasks."package:release"]
+description = "Build signed release candidates without publishing (requires release identity and signing inputs)"
+depends = ["build:ui", "build:desktop", "release:check"]
+run = "bun apps/desktop/scripts/package.ts release"
+
+[tasks."package:test"]
+description = "Build a package for a controlled loopback update feed"
+depends = ["build:ui", "build:desktop"]
+run = "bun apps/desktop/scripts/package.ts test"
+
+[tasks."update:lifecycle"]
+description = "Verify packaged multi-window update cancellation and Engine shutdown boundaries"
+run = "bun apps/desktop/scripts/verify-lifecycle.ts"
+
+[tasks."update:verify"]
+description = "Build two test versions and verify a real update against a loopback feed"
+depends = ["build:ui", "build:desktop"]
+run = "bun apps/desktop/scripts/verify-update.ts"
+
+[tasks."release:check"]
+description = "Check that Release Please owns consistent app and lockfile versions"
+run = "bun apps/desktop/scripts/check-release-config.ts"
+
+[tasks."release:verify"]
+description = "Verify packaged CPU identity, Engine, signature and notarization"
+run = "bun apps/desktop/scripts/verify-package.ts"
+
+[tasks."release:assemble"]
+description = "Validate all release candidates and merge architecture metadata"
+depends = ["release:check"]
+run = "bun apps/desktop/scripts/release.ts assemble"
+
+[tasks."release:guard"]
+description = "Refuse a release unless draft, tag, main ancestry and version agree"
+depends = ["release:check"]
+run = "bun apps/desktop/scripts/release.ts guard"
+
+[tasks."release:publish"]
+description = "Attach verified candidates to a complete draft and publish once (CI only)"
+depends = ["release:check"]
+run = "bun apps/desktop/scripts/release.ts publish"
 
 [tasks.web]
 description = "Serve the built UI from the Engine (web Host), open the printed URL"
@@ -195,7 +236,7 @@ run = "bun scripts/check-mise-lock.ts"
 
 [tasks.lint]
 description = "Run all linters"
-depends = ["lint:ts", "lint:go", "lint:actions", "lint:mise"]
+depends = ["lint:ts", "lint:go", "lint:actions", "lint:mise", "release:check"]
 
 [tasks."pin:actions"]
 description = "Pin GitHub Actions in workflows to commit SHAs"
