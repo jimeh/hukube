@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+# electron-updater has already replaced the AppImage in this mode.
+if [ -n "${APPIMAGE_EXIT_AFTER_INSTALL:-}" ]; then
+  exit 0
+fi
+
+APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)}
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$APPDIR/hukube" "$@"

@@ -96,7 +96,14 @@ try {
       ),
     )
     .toBe("Check for Updates…");
-  await instance.evaluate(({ dialog, Menu }) => {
+  await instance.evaluate(({ app, dialog, Menu }) => {
+    app.once("quit", () => {
+      (
+        process as unknown as { mainModule: { require(name: string): { close(): void } } }
+      ).mainModule
+        .require("node:inspector")
+        .close();
+    });
     dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); // Later
     Menu.getApplicationMenu()!.getMenuItemById("hukube-updates")!.click();
   });
@@ -126,11 +133,12 @@ try {
       )
       .toBe("Restart to Update to 0.0.2…");
     // Use the real menu and native prompt; only its response is driven here.
+    const closed = instance.waitForEvent("close", { timeout: 60_000 });
     await instance.evaluate(({ dialog, Menu }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
       Menu.getApplicationMenu()!.getMenuItemById("hukube-updates")!.click();
     });
-    await instance.waitForEvent("close", { timeout: 60_000 });
+    await closed;
     instance = undefined;
     if (process.platform === "linux") {
       expect(

@@ -97,6 +97,18 @@ try {
   } else {
     const image = join(directory, `hukube-${identity.version}-linux-x64.AppImage`);
     execFileSync(image, ["--appimage-extract"], { cwd: scratch, stdio: "ignore" });
+    const extracted = join(scratch, "squashfs-root");
+    if (
+      (await readFile(join(extracted, "AppRun"), "utf8")) !==
+      (await readFile(resolve(import.meta.dirname, "../build/AppRun"), "utf8"))
+    )
+      throw new Error("AppImage replaced the sandbox-preserving launcher.");
+    const desktopFiles = (await readdir(extracted)).filter((name) => name.endsWith(".desktop"));
+    if (
+      desktopFiles.length !== 1 ||
+      (await readFile(join(extracted, desktopFiles[0]!), "utf8")).includes("--no-sandbox")
+    )
+      throw new Error("AppImage desktop entry disables the sandbox or is missing.");
     executable = join(scratch, "squashfs-root/hukube");
     resources = join(scratch, "squashfs-root/resources");
     for (const file of [executable, join(resources, "engine/hukube-engine")])
@@ -168,6 +180,7 @@ try {
         ...identity,
         verified: true,
         signed: mode === "release" && target.startsWith("mac"),
+        sandbox: target === "linux-x64",
         hashes,
       },
       null,

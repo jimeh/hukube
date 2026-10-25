@@ -21,6 +21,7 @@ env["KUBECONFIG"] = join(root, "e2e/fixtures/empty-kubeconfig.yaml");
 env["HUKUBE_USER_DATA_DIR"] = scratch;
 env["APPIMAGE_EXTRACT_AND_RUN"] = "1";
 const instance = await electron.launch({ executablePath: executable, args: ["--no-sandbox"], env });
+const appProcess = instance.process();
 let hasClosed = false;
 instance.once("close", () => {
   hasClosed = true;
@@ -33,7 +34,14 @@ try {
       window as unknown as { hukubeDesktop: { engine(): Promise<{ url: string; token: string }> } }
     ).hukubeDesktop.engine(),
   );
-  await instance.evaluate(({ app, autoUpdater, dialog, Menu }) => {
+  let entry: { calls: number; windows: number; engineAlive: boolean } | undefined;
+  let output = "";
+  instance.process().stdout!.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+    const match = output.match(/HUKUBE_INSTALLER_ENTRY:({[^\n]+})/);
+    if (match) entry = JSON.parse(match[1]!);
+  });
+  await instance.evaluate(({ app, autoUpdater, dialog, Menu, BrowserWindow }, healthUrl) => {
     const test = globalThis as unknown as {
       installCalls: number;
       prompts: string[];
@@ -42,6 +50,19 @@ try {
     test.installCalls = 0;
     test.prompts = [];
     test.answers = [1, 0];
+    // A debugged Electron process waits for its Node inspector after quit.
+    // Disconnect only once the real quit event proves the lifecycle completed.
+    app.on("will-quit", (event) =>
+      process.stdout.write(`HUKUBE_WILL_QUIT:prevented=${event.defaultPrevented}\n`),
+    );
+    app.once("quit", () => {
+      process.stdout.write("HUKUBE_QUIT_EVENT\n");
+      (
+        process as unknown as { mainModule: { require(name: string): { close(): void } } }
+      ).mainModule
+        .require("node:inspector")
+        .close();
+    });
     const modules = (
       process as unknown as {
         mainModule: {
@@ -66,6 +87,20 @@ try {
     };
     prototype["quitAndInstall"] = () => {
       test.installCalls++;
+      const child = (
+        process as unknown as {
+          mainModule: {
+            require(name: string): { execFileSync(command: string, args: string[]): void };
+          };
+        }
+      ).mainModule.require("node:child_process");
+      child.execFileSync("curl", ["--fail", "--silent", "--max-time", "2", healthUrl]);
+      process.stdout.write(
+        `HUKUBE_INSTALLER_ENTRY:${JSON.stringify({ calls: test.installCalls, windows: BrowserWindow.getAllWindows().length, engineAlive: true })}\n`,
+      );
+      // MacUpdater 6.8 with autoRunAppAfterInstall=false quits synchronously.
+      // A nested quit inside the first will-quit is ignored by Electron.
+      app.quit();
     };
     dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
     dialog.showMessageBoxSync = (...args: unknown[]) => {
@@ -73,8 +108,7 @@ try {
       return test.answers.shift() ?? 0;
     };
     Menu.getApplicationMenu()!.getMenuItemById("hukube-updates")!.click();
-    void app;
-  });
+  }, `${endpoint.url}/healthz`);
   await expect
     .poll(() =>
       instance.evaluate(
@@ -123,21 +157,19 @@ try {
       ({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("hukube-updates")?.label,
     ),
   ).toBe("Restart to Update to 0.0.2…");
+  const closed = instance.waitForEvent("close", { timeout: 30_000 });
   await instance.evaluate(({ Menu }) => {
     (globalThis as unknown as { answers: number[] }).answers = [1];
     Menu.getApplicationMenu()!.getMenuItemById("hukube-updates")!.click();
   });
-  await expect
-    .poll(() =>
-      instance.evaluate(() => (globalThis as unknown as { installCalls: number }).installCalls),
-    )
-    .toBe(1);
-  expect(instance.windows()).toHaveLength(0);
-  // The installer has begun, but has not yet requested its final quit.
-  expect((await fetch(`${endpoint.url}/healthz`)).ok).toBe(true);
-  const closed = instance.waitForEvent("close");
-  await instance.evaluate(({ app }) => app.quit());
-  await closed;
+  await closed.catch((error: unknown) => {
+    throw new Error(
+      `Installer did not finish quitting; last entry=${JSON.stringify(entry)}, closed=${hasClosed}, output=${output.slice(-2000)}`,
+      { cause: error },
+    );
+  });
+  await expect.poll(() => entry).toEqual({ calls: 1, windows: 0, engineAlive: true });
+  await expect.poll(() => output.includes("HUKUBE_QUIT_EVENT")).toBe(true);
   await expect
     .poll(async () => {
       try {
@@ -148,9 +180,18 @@ try {
     })
     .toBe(false);
   console.log(
-    `PASS: ${target} every window can cancel an update restart; edits/Exec Session prompts survive retry; the Engine stays alive through consent and installer entry, then stops on final quit.`,
+    `PASS: ${target} every window can cancel an update restart; edits/Exec Session prompts survive retry; the Engine stays alive through consent and installer entry, then completes the installer's synchronous final quit.`,
   );
 } finally {
-  if (!hasClosed) await instance.close();
+  if (!hasClosed) {
+    const deadline = setTimeout(() => {
+      if (appProcess.exitCode === null) appProcess.kill("SIGKILL");
+    }, 5000);
+    try {
+      await instance.close();
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
   await rm(scratch, { recursive: true, force: true });
 }

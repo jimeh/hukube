@@ -125,7 +125,7 @@ mise run release:verify -- .data/packages/snapshot/0.1.0-snapshot/mac-arm64 mac-
 mise run update:verify -- arm64
 ```
 
-`package` builds a `-snapshot` version under `.data/packages/snapshot/`. Its
+`package` builds a `-snapshot` version under `.data/packages/snapshot/`. On macOS, `mise run package -- x64 0.1.0-snapshot linux` can also build a Linux snapshot for archive inspection; native Linux launch/update verification still belongs on Linux. Its
 menu explains that updates are unavailable. Both snapshots and ordinary
 development runs have public checks disabled. `package:test` builds stable
 throwaway versions with a separate marker. Only these test packages accept
@@ -153,6 +153,20 @@ installation and signed Mac installation cannot be claimed from a local unsigned
 Mac run. The first credential-equipped release must also verify public GitHub
 update discovery from an installed preceding signed version to the next signed
 version. A first release has no preceding public version.
+
+## Linux sandbox requirements
+
+The AppImage desktop entry supplies no sandbox-disabling arguments. Packaging
+replaces electron-builder v26's generated AppRun with a small launcher that
+forwards caller arguments, preserves the bundled library path, and honors the
+updater's install-only exit. Package verification checks the actual extracted
+launcher and desktop entry before candidates can be published.
+
+The Linux host must permit Chromium's sandbox, including the user namespaces it
+needs. A host policy that blocks them can prevent startup. Hukube does not
+silently disable the sandbox or change system policy. Automated test launches
+pass a development/test-only flag where CI's namespace policy requires it; that
+flag is not in either shipped launcher.
 
 ## Update behavior and trust
 

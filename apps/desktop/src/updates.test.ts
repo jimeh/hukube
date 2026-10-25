@@ -87,9 +87,10 @@ it("never contacts a feed for unavailable installations", async () => {
   expect(feedback.error).toHaveBeenCalledWith("Use a writable AppImage.");
 });
 
-it("waits for every window before installing or stopping the Engine and permits a cancelled retry", () => {
+it("waits for every window before installing or stopping the Engine and permits a cancelled retry", async () => {
   const quitApp = vi.fn<() => void>();
-  const install = vi.fn<() => void>();
+  const installed = Promise.withResolvers<void>();
+  const install = vi.fn<() => void>(() => installed.resolve());
   const quit = new Quit(quitApp, install);
   quit.restart();
   // beforeunload can cancel without reaching will-quit.
@@ -99,6 +100,8 @@ it("waits for every window before installing or stopping the Engine and permits 
   quit.restart();
   expect(quitApp).toHaveBeenCalledTimes(2);
   expect(quit.willQuit()).toBe(false);
+  expect(install).not.toHaveBeenCalled();
+  await installed.promise;
   expect(install).toHaveBeenCalledOnce();
   // Installer's later quit may now stop the Engine.
   expect(quit.willQuit()).toBe(true);

@@ -22,7 +22,11 @@ export class Quit {
   willQuit(): boolean {
     if (!this.restarting || this.installing) return true;
     this.installing = true;
-    this.install();
+    // Electron ignores app.quit() while the first quit is still in progress.
+    // Let will-quit return and be cancelled before a synchronous installer quit.
+    setImmediate(() => {
+      if (this.restarting && this.installing) this.install();
+    });
     return false;
   }
 

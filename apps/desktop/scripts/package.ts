@@ -1,16 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile, copyFile, chmod } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { build, Platform, Arch } from "electron-builder";
 import { parse } from "yaml";
 import { identity, packageVersion } from "../src/release/inventory.ts";
 
-const [mode = "snapshot", architecture = process.arch, versionOverride] = process.argv.slice(2);
+const [
+  mode = "snapshot",
+  architecture = process.arch,
+  versionOverride,
+  platform = process.platform,
+] = process.argv.slice(2);
 if (!["darwin", "linux"].includes(process.platform))
   throw new Error("Only macOS and Linux are supported.");
+if (
+  platform !== process.platform &&
+  !(mode === "snapshot" && process.platform === "darwin" && platform === "linux")
+)
+  throw new Error(
+    "Only Linux snapshots can be cross-packaged from macOS; release/test packages require their native OS.",
+  );
 if (!["snapshot", "release", "test"].includes(mode) || !["arm64", "x64"].includes(architecture))
-  throw new Error("Usage: package.ts snapshot|release|test arm64|x64 [test-version]");
+  throw new Error("Usage: package.ts snapshot|release|test arm64|x64 [version] [darwin|linux]");
+if (platform === "linux" && architecture !== "x64")
+  throw new Error("Linux packages currently target x64.");
 const desktop = resolve(import.meta.dirname, "..");
 const root = resolve(desktop, "../..");
 const pkg = JSON.parse(await readFile(join(desktop, "package.json"), "utf8"));
@@ -48,7 +62,7 @@ if (!signing) {
   delete process.env["CSC_KEY_PASSWORD"];
   delete process.env["APPLE_API_KEY"];
 }
-const target = `${process.platform === "darwin" ? "mac" : process.platform}-${architecture}`;
+const target = `${platform === "darwin" ? "mac" : platform}-${architecture}`;
 const output = resolve(root, `.data/packages/${mode}/${version}/${target}`);
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
@@ -71,7 +85,7 @@ execFileSync(
     env: {
       ...process.env,
       CGO_ENABLED: "0",
-      GOOS: process.platform === "darwin" ? "darwin" : "linux",
+      GOOS: platform,
       GOARCH: architecture === "x64" ? "amd64" : "arm64",
     },
   },
@@ -80,7 +94,7 @@ await writeFile(join(output, "engine/identity.json"), JSON.stringify({ version, 
 await build({
   projectDir: desktop,
   publish: "never",
-  targets: (process.platform === "darwin" ? Platform.MAC : Platform.LINUX).createTarget(
+  targets: (platform === "darwin" ? Platform.MAC : Platform.LINUX).createTarget(
     undefined,
     architecture === "arm64" ? Arch.arm64 : Arch.x64,
   ),
@@ -89,7 +103,7 @@ await build({
     extends: null,
     directories: { output },
     ...(mode === "test" ? { appId: "io.github.jimeh.hukube.update-test" } : {}),
-    artifactName: "hukube-${version}-${os}-${arch}.${ext}",
+    artifactName: `hukube-${version}-${target}.\${ext}`,
     extraMetadata: {
       version,
       ...(mode === "test"
@@ -103,6 +117,13 @@ await build({
       { from: join(output, "engine/identity.json"), to: "engine/identity.json" },
       { from: resolve(root, "apps/app/dist"), to: "ui" },
     ],
+    afterPack: async (context) => {
+      if (context.electronPlatformName !== "linux") return;
+      // AppImageTarget copies appOutDir over its generated launcher. Preserve
+      // Chromium's sandbox instead of the builder's automatic opt-out.
+      await copyFile(join(desktop, "build/AppRun"), join(context.appOutDir, "AppRun"));
+      await chmod(join(context.appOutDir, "AppRun"), 0o755);
+    },
     forceCodeSigning: signing && process.platform === "darwin",
     mac: {
       ...parse(await readFile(join(desktop, "electron-builder.yml"), "utf8")).mac,

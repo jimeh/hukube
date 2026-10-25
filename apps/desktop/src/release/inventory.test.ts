@@ -47,6 +47,7 @@ it("assembles both Mac architectures and refuses incomplete inventories, forged 
           target,
           verified: true,
           signed: target.startsWith("mac"),
+          sandbox: target === "linux-x64",
           hashes: Object.fromEntries(
             names
               .filter((n) => n.includes(target))

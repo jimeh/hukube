@@ -18,5 +18,6 @@ mac:
   category: public.app-category.developer-tools
   target: [dmg, zip]
 linux:
+  executableArgs: []
   category: Development
   target: [AppImage]

@@ -99,7 +99,8 @@ export async function assemble(directory: string, version: string, sha: string) 
       report["sha"] !== sha ||
       report["target"] !== target ||
       report["verified"] !== true ||
-      (target.startsWith("mac") && report["signed"] !== true)
+      (target.startsWith("mac") && report["signed"] !== true) ||
+      (target === "linux-x64" && report["sandbox"] !== true)
     )
       throw new Error(`Missing platform verification: ${target}`);
     const hashes = report["hashes"] as Record<string, string> | undefined;
