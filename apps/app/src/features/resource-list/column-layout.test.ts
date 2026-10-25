@@ -27,12 +27,12 @@ const stored = (ids: string[], hidden: string[] = []): StoredColumnLayout => ({
 const resolve = (
   value: StoredColumnLayout | null = null,
   columns = cells(["A", "B"]),
-  all = true,
+  one = false,
 ) =>
   resolveColumnLayout({
     type: "widgets",
     namespaced: true,
-    allNamespaces: all,
+    oneNamespace: one,
     columns,
     rows: [],
     stored: value,
@@ -138,12 +138,22 @@ describe("resolveColumnLayout", () => {
     expect(ids(showColumn(layout, "cell:A", false)!)).toContain("cell:Elsewhere");
     expect(ids(moveColumn(layout, "name", 1)!)).toContain("cell:Elsewhere");
   });
-  it("shows Namespace only for namespaced types covering every Namespace", () => {
-    expect(shown(resolve(null, cells(["A"]), false))).not.toContain("namespace");
+  it("hides Namespace while one Namespace is chosen and shows it for several", () => {
+    const one = resolve(stored(["name", "namespace", "age"]), [], true);
+    expect(shown(one)).toEqual(["name", "age"]);
+    expect(one.available.map((c) => c.id)).toContain("namespace");
+    expect(shown(resolve(stored(["name", "namespace", "age"]), [], false))).toEqual([
+      "name",
+      "namespace",
+      "age",
+    ]);
+  });
+  it("shows Namespace only for namespaced types not narrowed to one Namespace", () => {
+    expect(shown(resolve(null, cells(["A"]), true))).not.toContain("namespace");
     const layout = resolveColumnLayout({
       type: "nodes",
       namespaced: false,
-      allNamespaces: true,
+      oneNamespace: false,
       columns: [],
       rows: [],
       stored: null,
@@ -200,7 +210,7 @@ describe("tuned defaults", () => {
         resolveColumnLayout({
           type: "pods",
           namespaced: true,
-          allNamespaces: true,
+          oneNamespace: false,
           columns: pod,
           rows: [],
           stored: null,
@@ -223,7 +233,7 @@ describe("tuned defaults", () => {
       const layout = resolveColumnLayout({
         type,
         namespaced: true,
-        allNamespaces: true,
+        oneNamespace: false,
         columns: event,
         rows: [],
         stored: null,
@@ -247,7 +257,7 @@ describe("tuned defaults", () => {
       const layout = resolveColumnLayout({
         type: "events",
         namespaced: true,
-        allNamespaces: true,
+        oneNamespace: false,
         columns,
         rows: [],
         stored: null,
@@ -261,7 +271,7 @@ describe("tuned defaults", () => {
       const layout = resolveColumnLayout({
         type: "events",
         namespaced: true,
-        allNamespaces: true,
+        oneNamespace: false,
         columns,
         rows: [],
         stored: stored(["name", "cell:Message"], ["cell:Message"]),
@@ -272,7 +282,7 @@ describe("tuned defaults", () => {
       resolveColumnLayout({
         type: "events",
         namespaced: true,
-        allNamespaces: true,
+        oneNamespace: false,
         columns: event,
         rows: [],
         stored: stored(["name", "cell:Message"], ["name", "cell:Message"]),
@@ -320,8 +330,8 @@ describe("column edits", () => {
     expect(showColumn(layout, "cell:Unknown", true)).toBeUndefined();
   });
   it("skips Namespace when a single Namespace is selected", () => {
-    const narrowed = resolve(layout.stored, cells(["A", "B"]), false);
-    expect(shown(resolve(moveColumn(narrowed, "name", 1), cells(["A", "B"]), false))).toEqual([
+    const narrowed = resolve(layout.stored, cells(["A", "B"]), true);
+    expect(shown(resolve(moveColumn(narrowed, "name", 1), cells(["A", "B"]), true))).toEqual([
       "cell:B",
       "name",
       "age",
@@ -343,7 +353,7 @@ describe("shownSort", () => {
     const layout = resolve(
       stored(["name", "namespace", "age", "cell:A", "cell:B"], ["cell:A"]),
       cells(["A", "B"]),
-      false,
+      true,
     );
     for (const sort of [
       { field: "column" as const, column: "A", desc: true },

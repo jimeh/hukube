@@ -110,14 +110,15 @@ export function defaultColumnLayout(
 export function resolveColumnLayout({
   type,
   namespaced,
-  allNamespaces,
+  oneNamespace,
   columns,
   rows,
   stored,
 }: {
   type: string;
   namespaced: boolean;
-  allNamespaces: boolean;
+  /** Whether exactly one Namespace is chosen, so every row is in the same one. */
+  oneNamespace: boolean;
   columns: Column[] | undefined;
   rows: Row[];
   stored: StoredColumnLayout | null;
@@ -149,7 +150,7 @@ export function resolveColumnLayout({
   }
   let shown = entries
     .filter(
-      (c) => available.has(columnId(c)) && !c.hidden && (c.source !== "namespace" || allNamespaces),
+      (c) => available.has(columnId(c)) && !c.hidden && (c.source !== "namespace" || !oneNamespace),
     )
     .map((c) => available.get(columnId(c))!);
   if (shown.length === 0) {

@@ -78,7 +78,7 @@ export function ColumnHeaders({
   onEdit,
   onShow,
   scrollRef,
-  allNamespaces,
+  oneNamespace,
   hasStored,
 }: ColumnHeadersProps & { scrollRef: RefObject<HTMLDivElement | null> }) {
   const [marker, setMarker] = useState<{ id: string; edge: DropEdge }>();
@@ -141,7 +141,7 @@ export function ColumnHeaders({
           onSort={onSort}
           onEdit={onEdit}
           onShow={onShow}
-          allNamespaces={allNamespaces}
+          oneNamespace={oneNamespace}
           hasStored={hasStored}
           marker={marker?.id === column.id ? marker.edge : undefined}
         />
@@ -160,7 +160,7 @@ function ColumnHeader({
   onEdit,
   onShow,
   marker,
-  allNamespaces,
+  oneNamespace,
   hasStored,
 }: ColumnHeadersProps & {
   column: ListColumn;
@@ -250,7 +250,7 @@ function ColumnHeader({
           <ColumnMenuItems
             context
             layout={layout}
-            allNamespaces={allNamespaces}
+            oneNamespace={oneNamespace}
             hasStored={hasStored}
             onEdit={onEdit}
             onShow={onShow}
