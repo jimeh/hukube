@@ -7,15 +7,20 @@
   "type": "module",
   "main": "out/main.cjs",
   "scripts": {
-    "build": "bun build src/main.ts --outfile out/main.cjs --target node --format cjs --external electron && bun build src/preload.ts --outfile out/preload.cjs --target node --format cjs --external electron",
+    "build": "bun build src/main.ts --outfile out/main.cjs --target node --format cjs --external electron --external electron-updater && bun build src/preload.ts --outfile out/preload.cjs --target node --format cjs --external electron",
     "start": "bun run build && electron .",
-    "package": "electron-builder --config electron-builder.yml",
+    "package": "bun scripts/package.ts snapshot",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   },
   "devDependencies": {
     "@hukube/host": "workspace:*",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^26.6.5",
     "electron": "^44.7.2",
-    "electron-builder": "^26.17.0"
+    "electron-builder": "26.17.0",
+    "yaml": "^2.8.3"
   }
 }
