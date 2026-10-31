@@ -133,8 +133,35 @@ export interface PreferenceSnapshot {
   revision: string;
   values: Values;
   drafts: Partial<Record<Field, Draft>>;
+  /** Sent fields awaiting a settled outcome and fresh validated readback. */
+  unconfirmed: Field[];
   error?: string;
   defaults: boolean;
+}
+export function fieldStatus(snapshot: PreferenceSnapshot, field: Field): string {
+  const draft = snapshot.drafts[field];
+  if (draft && draft.status !== "Saved") return draft.status;
+  if (!snapshot.loaded) return "";
+  if (!snapshot.fresh || snapshot.unconfirmed.includes(field))
+    return "Last confirmed value. Checking…";
+  return rawValue(snapshot.raw, field) === undefined ? "Using defaults" : "Saved";
+}
+export function sectionStatus(snapshot: PreferenceSnapshot, touched: Field[]): string {
+  const drafts = touched.map((field) => snapshot.drafts[field]);
+  if (drafts.some((draft) => draft?.status === "Not saved")) return "Not saved";
+  if (drafts.some((draft) => draft?.status === "Saving")) return "Saving…";
+  if (!snapshot.loaded) return "Preferences unavailable";
+  if (!snapshot.fresh || touched.some((field) => snapshot.unconfirmed.includes(field)))
+    return "Checking preferences…";
+  return touched.every((field) => rawValue(snapshot.raw, field) === undefined)
+    ? "Using defaults"
+    : "Saved";
+}
+export function hasPreferenceOpenWork(snapshot: PreferenceSnapshot): boolean {
+  return (
+    snapshot.unconfirmed.length > 0 ||
+    Object.values(snapshot.drafts).some((draft) => draft.status !== "Saved")
+  );
 }
 function intendedValue(field: Field, draft: Draft): Values[Field] {
   return field in maximums
@@ -166,6 +193,7 @@ export function createPreferenceStore(
     revision: "",
     values: defaults,
     drafts: {},
+    unconfirmed: [],
     defaults: true,
   };
   const listeners = new Set<() => void>();
@@ -184,7 +212,11 @@ export function createPreferenceStore(
     timer: ReturnType<typeof setTimeout>;
   }[] = [];
   const show = (patch: Partial<PreferenceSnapshot>) => {
-    current = { ...current, ...patch };
+    // Retry ownership can disappear on discard, but sent evidence survives in active/recovery work.
+    const sent = [...queue, ...(active ? [active] : [])].flatMap((intent) =>
+      intent.sent ? Object.keys(intent.sent.changes) : [],
+    );
+    current = { ...current, ...patch, unconfirmed: fields.filter((field) => sent.includes(field)) };
     for (const listener of listeners) listener();
   };
   const update = (intent: IntentFields, patch: Partial<Draft>) => {
@@ -259,8 +291,8 @@ export function createPreferenceStore(
         confirmed.observed[field] = intent.sent.observed[field];
         confirmed.generations[field] = intent.sent.generations[field];
       }
-    settle(confirmed);
     intent.sent = undefined;
+    settle(confirmed);
   };
   const open = () => {
     if (disposed) return;
@@ -383,6 +415,7 @@ export function createPreferenceStore(
               observed: { ...intent.observed },
               generations: { ...intent.generations },
             };
+            show({});
             // The timer changes presentation only. A sent put is never cancelled or duplicated while unresolved.
             const deadline = setTimeout(
               () =>
@@ -407,8 +440,12 @@ export function createPreferenceStore(
             if (
               failure &&
               !["conflict", "disconnected", "unavailable", "unknown"].includes(code(failure))
-            )
+            ) {
+              // A terminal refusal proves this attempt did not write. No readback is required for it.
+              intent.sent = undefined;
               throw failure;
+            }
+            if (failure && code(failure) === "conflict") intent.sent = undefined;
             await fresh();
             reconcileSent(intent);
             if (matches(intent)) {

@@ -72,10 +72,10 @@ function harness(initial: unknown = null, legacy?: "light" | "dark") {
     retired,
     value: () => value,
     emit,
-    remote: (next: unknown) => {
+    remote: (next: unknown, deliver = true) => {
       value = next;
       revision += "r";
-      emit();
+      if (deliver) emit();
     },
     read: (held: boolean) => {
       holdRead = held;
@@ -874,4 +874,135 @@ it("never applies an obsolete unwritten reduction to a real document after read 
     logStreams: { maxLines: 20 },
   });
   stop();
+});
+
+it.each(["success", "unknown written", "unknown unwritten", "refused"] as const)(
+  "keeps discarded sent evidence unconfirmed until %s reconciles",
+  async (outcome) => {
+    const h = harness({ version: 1, logStreams: { maxLines: 80 } });
+    await ready(h);
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers<void>();
+    h.write(() => pending.promise);
+    h.store.change("maxLines", "1");
+    expect(h.puts).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10000);
+    h.store.discard(["maxLines"]);
+    expect(h.store.getSnapshot()).toMatchObject({
+      values: { maxLines: 80 },
+      drafts: {},
+      unconfirmed: ["maxLines"],
+    });
+    // The original watch can still report the old matching value while the put is unresolved.
+    h.emit();
+    expect(h.store.getSnapshot()).toMatchObject({ unconfirmed: ["maxLines"] });
+    h.read(true);
+    if (outcome === "success" || outcome === "unknown written") h.remote(h.puts[0]!.value, false);
+    if (outcome === "success") pending.resolve();
+    else
+      pending.reject(
+        new EngineRequestError({
+          code: outcome === "refused" ? "internal" : "disconnected",
+          message: outcome,
+        }),
+      );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.store.getSnapshot().drafts).toEqual({});
+    expect(h.puts).toHaveLength(1);
+    expect(h.watches).toHaveLength(outcome === "refused" ? 1 : 2);
+    expect(h.store.getSnapshot()).toMatchObject({
+      unconfirmed: outcome === "refused" ? [] : ["maxLines"],
+      fresh: outcome === "refused",
+      values: { maxLines: 80 },
+    });
+    h.read(false);
+    h.emit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.store.getSnapshot()).toMatchObject({
+      unconfirmed: [],
+      fresh: true,
+      values: { maxLines: outcome === "unknown unwritten" || outcome === "refused" ? 80 : 1 },
+    });
+    expect(h.puts).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+it.each(["error", "timeout", "disconnect"] as const)(
+  "retains discarded certainty through fresh readback %s and reconnects without another put",
+  async (failure) => {
+    const h = harness({ version: 1, logStreams: { maxLines: 80 } });
+    await ready(h);
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers<void>();
+    h.write(() => pending.promise);
+    h.store.change("maxLines", "1");
+    h.store.discard(["maxLines"]);
+    h.read(true);
+    h.remote(h.puts[0]!.value, false);
+    pending.reject(new EngineRequestError({ code: "disconnected", message: "unknown" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.watches).toHaveLength(2);
+    if (failure === "error")
+      h.watches.at(-1)!.listener.error({ code: "internal", message: "read failed" });
+    else {
+      if (failure === "disconnect") h.connection("reconnecting");
+      await vi.advanceTimersByTimeAsync(10000);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.store.getSnapshot()).toMatchObject({
+      fresh: false,
+      unconfirmed: ["maxLines"],
+      drafts: {},
+      values: { maxLines: 80 },
+    });
+    h.store.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.store.getSnapshot()).toMatchObject({ unconfirmed: ["maxLines"] });
+    h.read(false);
+    h.connection("open");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.store.getSnapshot()).toMatchObject({
+      fresh: true,
+      unconfirmed: [],
+      drafts: {},
+      values: { maxLines: 1 },
+    });
+    expect(h.puts).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+it("retains sent certainty across a newer generation and an early matching watch without losing the draft", async () => {
+  const h = harness({ version: 1, logStreams: { maxLines: 80 } });
+  await ready(h);
+  vi.useFakeTimers();
+  const pending = Promise.withResolvers<void>();
+  h.write(() => pending.promise);
+  h.store.change("maxLines", "1");
+  h.store.change("maxLines", "2");
+  h.remote(h.puts[0]!.value);
+  expect(h.store.getSnapshot()).toMatchObject({
+    unconfirmed: ["maxLines"],
+    drafts: { maxLines: { value: "2", status: "Not saved" } },
+  });
+  h.read(true);
+  pending.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.store.getSnapshot()).toMatchObject({
+    unconfirmed: ["maxLines"],
+    drafts: { maxLines: { value: "2", status: "Not saved" } },
+  });
+  expect(h.puts).toHaveLength(1);
+  h.write();
+  h.read(false);
+  h.emit();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.store.getSnapshot()).toMatchObject({
+    unconfirmed: [],
+    values: { maxLines: 2 },
+    drafts: { maxLines: { value: "2", status: "Saved", conflict: false } },
+  });
+  expect(h.puts).toHaveLength(2);
+  expect(vi.getTimerCount()).toBe(0);
 });

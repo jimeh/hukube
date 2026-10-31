@@ -13,7 +13,15 @@ import {
 } from "@hukube/ui/components/alert-dialog";
 import { DefinitionManager } from "../overview/definition-manager.tsx";
 import { useOpenClusters } from "../clusters/open-clusters.ts";
-import { defaults, logFields, maximums, type Field, type NumericField } from "./preferences.ts";
+import {
+  defaults,
+  logFields,
+  maximums,
+  fieldStatus,
+  sectionStatus,
+  type Field,
+  type NumericField,
+} from "./preferences.ts";
 import { usePreferences } from "./store.ts";
 
 const sections = {
@@ -104,20 +112,6 @@ export function SettingsPage({ visible }: { visible: boolean }) {
   const returnCluster = returnLocation.startsWith("/c/")
     ? decodeURIComponent(returnLocation.split("/")[2]!)
     : undefined;
-  const sectionStatus = (key: string) => {
-    const touched: Field[] = key === "appearance" ? ["theme"] : logFields;
-    const drafts = touched.map((field) => snapshot.drafts[field]);
-    if (drafts.some((draft) => draft?.status === "Not saved")) return "Not saved";
-    if (drafts.some((draft) => draft?.status === "Saving")) return "Saving…";
-    if (!snapshot.loaded) return "Preferences unavailable";
-    return touched.every(
-      (field) =>
-        (field === "theme" ? snapshot.raw.appearance?.theme : snapshot.raw.logStreams?.[field]) ===
-        undefined,
-    )
-      ? "Using defaults"
-      : "Saved";
-  };
   return (
     <div ref={page} hidden={!visible} className="h-full overflow-hidden" aria-label="App Settings">
       <div className="mx-auto flex h-full max-w-5xl min-w-0 flex-col gap-5 p-4 sm:p-8">
@@ -246,7 +240,9 @@ export function SettingsPage({ visible }: { visible: boolean }) {
                           </details>
                         </div>
                       )}
-                      <output className="mt-5 block text-sm">{sectionStatus(key)}</output>
+                      <PreferenceSectionStatus
+                        fields={key === "appearance" ? ["theme"] : logFields}
+                      />
                       <ResetSection section={key === "appearance" ? "appearance" : "logStreams"} />
                     </>
                   )}
@@ -341,7 +337,7 @@ export function PreferenceField({ field }: { field: Field }) {
         {draft ? (
           <>
             <p>
-              {draft.status}
+              {fieldStatus(snapshot, field)}
               {draft.error ? `: ${draft.error}` : ""}
             </p>
             {draft.conflict && <p>Engine value: {String(snapshot.values[field])}</p>}
@@ -370,16 +366,15 @@ export function PreferenceField({ field }: { field: Field }) {
             )}
           </>
         ) : (
-          snapshot.loaded &&
-          ((field === "theme"
-            ? snapshot.raw.appearance?.theme
-            : snapshot.raw.logStreams?.[field]) === undefined
-            ? "Using defaults"
-            : "Saved")
+          fieldStatus(snapshot, field)
         )}
       </div>
     </div>
   );
+}
+export function PreferenceSectionStatus({ fields }: { fields: Field[] }) {
+  const { snapshot } = usePreferences();
+  return <output className="mt-5 block text-sm">{sectionStatus(snapshot, fields)}</output>;
 }
 export function ResetSection({ section }: { section: "appearance" | "logStreams" }) {
   const { store, snapshot } = usePreferences();

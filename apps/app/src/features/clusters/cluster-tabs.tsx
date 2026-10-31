@@ -148,6 +148,7 @@ function ThemeToggle() {
   const theme = useTheme();
   const { store, snapshot } = usePreferences();
   const draft = snapshot.drafts.theme;
+  const checking = snapshot.unconfirmed.includes("theme") || (snapshot.loaded && !snapshot.fresh);
   const next = theme === "dark" ? "light" : "dark";
   return (
     <>
@@ -167,12 +168,12 @@ function ThemeToggle() {
         </TooltipTrigger>
         <TooltipContent>Switch to {next} mode</TooltipContent>
       </Tooltip>
-      {draft && draft.status !== "Saved" && (
+      {((draft && draft.status !== "Saved") || checking) && (
         <output className="max-w-40 text-xs">
           <Link to="/settings/$section" params={{ section: "appearance" }}>
-            {draft.status}
+            {draft && draft.status !== "Saved" ? draft.status : "Checking preferences…"}
           </Link>
-          {draft.error && (
+          {draft?.error && (
             <Button size="sm" variant="ghost" onClick={() => store.commit(["theme"])}>
               Retry
             </Button>
