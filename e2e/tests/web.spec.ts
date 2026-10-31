@@ -15,6 +15,12 @@ import { overviewTests } from "./overview.ts";
 import { openGoToResource, savedLayout, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
+import {
+  createPaneZoomResources,
+  observePaneZoom,
+  paneZoomExecScenario,
+  paneZoomResourceScenario,
+} from "./pane-zoom.ts";
 
 const namespace = `e2e-${Date.now().toString(36)}`;
 
@@ -38,6 +44,87 @@ test.afterAll(() => {
 // A terminal drawn with WebGL is a canvas, which a test cannot read. This
 // setting keeps the DOM renderer, whose rows are text.
 const domRenderer = () => localStorage.setItem("hukube.terminal.renderer", "dom");
+
+for (const scenario of ["Resources", "Exec and Logs"] as const) {
+  test(`Pane zoom preserves ${scenario} across native layout saves`, async ({ page }) => {
+    test.setTimeout(180_000);
+    const ownNamespace = `e2e-zoom-${Date.now().toString(36)}`;
+    kubectl("create", "namespace", ownNamespace);
+    let engine: ChildProcess | undefined;
+    try {
+      createPaneZoomResources(ownNamespace);
+      // An isolated Engine owns this test's layout; earlier suite Tabs cannot alter Pane counts.
+      const portServer = createServer();
+      portServer.listen(0, "127.0.0.1");
+      await once(portServer, "listening");
+      const port = (portServer.address() as { port: number }).port;
+      await new Promise<void>((done, reject) =>
+        portServer.close((error) => (error ? reject(error) : done())),
+      );
+      const root = resolvePath(import.meta.dirname, "../..");
+      const dataDir = mkdtempSync(resolvePath(root, ".data/e2e/pane-zoom-"));
+      const url = `http://127.0.0.1:${port}`;
+      let logs = "";
+      engine = spawn(
+        resolvePath(root, "engine/bin/hukube-engine"),
+        [
+          "--web",
+          `--ui-dir=${resolvePath(root, "apps/app/dist")}`,
+          `--listen=127.0.0.1:${port}`,
+          `--token=${engineToken}`,
+          `--kubeconfig=${kubeconfig}`,
+          `--data-dir=${dataDir}`,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      engine.stdout!.on("data", (bytes: Buffer) => {
+        logs += bytes.toString();
+      });
+      engine.stderr!.on("data", (bytes: Buffer) => {
+        logs += bytes.toString();
+      });
+      await expect
+        .poll(
+          async () => {
+            if (engine?.exitCode !== null) throw new Error(`Pane zoom Engine exited: ${logs}`);
+            return fetch(`${url}/healthz`).then(
+              (response) => response.ok,
+              () => false,
+            );
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      const wire = observePaneZoom(page);
+      await page.addInitScript(domRenderer);
+      await page.goto(`${url}/#token=${engineToken}`);
+      await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+      await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+      if (scenario === "Resources") {
+        await paneZoomResourceScenario(page, ownNamespace, wire);
+        const after = wire.saved.length;
+        await page.getByRole("button", { name: "Zoom Pane", exact: true }).first().click();
+        await wire.nextSave(after);
+        const other = await page.context().newPage();
+        try {
+          await other.goto(`${url}/c/${encodeURIComponent(clusterId)}#token=${engineToken}`);
+          await expect(other.locator(".dv-groupview:visible")).toHaveCount(2);
+          await expect(other.getByRole("button", { name: "Restore Panes" })).toHaveCount(0);
+          await expect(page.getByRole("button", { name: "Restore Panes" })).toBeVisible();
+        } finally {
+          await other.close();
+        }
+      } else await paneZoomExecScenario(page, ownNamespace, wire);
+    } finally {
+      if (engine && engine.exitCode === null && engine.signalCode === null) {
+        const exited = once(engine, "exit");
+        engine.kill("SIGKILL");
+        await exited;
+      }
+      kubectl("delete", "namespace", ownNamespace, "--wait=false");
+    }
+  });
+}
 
 test("runs, guards, restarts, and restores Exec Sessions without reopening a process", async ({
   page,

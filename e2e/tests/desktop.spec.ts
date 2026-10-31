@@ -9,10 +9,58 @@ import { expect, test } from "../fixtures.ts";
 import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
+import {
+  createPaneZoomResources,
+  observePaneZoom,
+  paneZoomExecScenario,
+  paneZoomResourceScenario,
+} from "./pane-zoom.ts";
 
 const desktopDir = resolve(import.meta.dirname, "../../apps/desktop");
 // The electron package exports the path to its binary.
 const electronBinary = createRequire(resolve(desktopDir, "package.json"))("electron") as string;
+
+for (const scenario of ["Resources", "Exec and Logs"] as const) {
+  test(`Pane zoom preserves ${scenario} in the desktop Host`, async () => {
+    test.setTimeout(180_000);
+    const namespace = `e2e-zoom-desktop-${Date.now().toString(36)}`;
+    kubectl("create", "namespace", namespace);
+    let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+    try {
+      createPaneZoomResources(namespace);
+      app = await electron.launch({
+        executablePath: electronBinary,
+        args: [desktopDir, "--no-sandbox"],
+        env: {
+          ...process.env,
+          KUBECONFIG: kubeconfig,
+          HUKUBE_USER_DATA_DIR: mkdtempSync(join(tmpdir(), "hukube-zoom-e2e-")),
+        },
+      });
+      const window = await app.firstWindow();
+      const wire = observePaneZoom(window);
+      await window.addInitScript(() => localStorage.setItem("hukube.terminal.renderer", "dom"));
+      await window.reload();
+      await window.getByRole("button", { name: new RegExp(clusterId) }).click();
+      await expect(window.getByText(/Kubernetes v\d/)).toBeVisible();
+      if (scenario === "Resources") {
+        await paneZoomResourceScenario(window, namespace, wire);
+        const after = wire.saved.length;
+        await window.getByRole("button", { name: "Zoom Pane", exact: true }).first().click();
+        await wire.nextSave(after);
+        await window.getByRole("link", { name: clusterId, exact: true }).click({ button: "right" });
+        const opened = app.waitForEvent("window");
+        await window.getByRole("menuitem", { name: "Move to new window" }).click();
+        const other = await opened;
+        await expect(other.locator(".dv-groupview:visible")).toHaveCount(2);
+        await expect(other.getByRole("button", { name: "Restore Panes" })).toHaveCount(0);
+      } else await paneZoomExecScenario(window, namespace, wire);
+    } finally {
+      await app?.close();
+      kubectl("delete", "namespace", namespace, "--wait=false");
+    }
+  });
+}
 
 test("starts its own Engine and lists the kubeconfig's clusters", async () => {
   const app = await electron.launch({

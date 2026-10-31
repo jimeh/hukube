@@ -16,6 +16,15 @@ export interface LayoutTarget {
 
 const defaultSaveDelayMs = 400;
 
+/** Zoom is local to a mounted Workspace, never part of its saved arrangement. */
+function withoutZoom(layout: SerializedDockview): SerializedDockview {
+  // Dockview 8.5.1 serializes this field but omits it from SerializedDockview.
+  const { maximizedNode: _zoom, ...grid } = layout.grid as SerializedDockview["grid"] & {
+    maximizedNode?: unknown;
+  };
+  return { ...layout, grid };
+}
+
 /**
  * Restores a Workspace layout from the Engine, then saves it back whenever it
  * changes (ADR-0009). Saves are debounced; the returned function stops
@@ -38,7 +47,7 @@ export function persistLayout(
 
   const save = () => {
     saveTimer = undefined;
-    const value: StoredLayout = { version: 1, dockview: target.toJSON() };
+    const value: StoredLayout = { version: 1, dockview: withoutZoom(target.toJSON()) };
     client.request("settings.put", { key, value }).catch((err: unknown) => {
       console.warn("Could not save the Workspace layout", err);
     });
@@ -54,7 +63,7 @@ export function persistLayout(
         watch.close();
         const stored = setting.value as StoredLayout | null;
         try {
-          if (stored?.version === 1) target.fromJSON(stored.dockview);
+          if (stored?.version === 1) target.fromJSON(withoutZoom(stored.dockview));
         } catch (err) {
           console.warn("Discarding unreadable Workspace layout", err);
           target.clear();

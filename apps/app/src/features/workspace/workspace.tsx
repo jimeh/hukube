@@ -32,6 +32,7 @@ import {
 import { rememberSessionTab, restoreSessionTabs } from "../exec/window-tabs.ts";
 
 import { openPanel, pinPanel, type ListPanelParams, type ResourcePanelParams } from "./dock.ts";
+import { PaneHeaderActions } from "./pane-header-actions.tsx";
 import { PanelTab } from "./panel-tab.tsx";
 import { StatusBar } from "./status-bar.tsx";
 import { useLayoutPersistence } from "./use-layout-persistence.ts";
@@ -204,12 +205,13 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   return (
     <WorkspaceContext value={value}>
       <div {...clusterScope(cluster)} className="flex h-full min-h-0 flex-col">
-        <div className="grid min-h-0 flex-1 grid-cols-[15rem_1fr]">
+        <div className="grid min-h-0 flex-1 grid-cols-[15rem_minmax(0,1fr)]">
           <TypeSidebar />
           <DockviewReact
             theme={theme}
             components={components}
             tabComponents={tabComponents}
+            rightHeaderActionsComponent={PaneHeaderActions}
             watermarkComponent={Watermark}
             onReady={(e) => setApi(e.api)}
           />
