@@ -12,6 +12,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { LogDocument } from "./log-document.ts";
 import type { LogEditorHandle } from "./log-editor.tsx";
 import LogStreamView, { type LogStreamViewProps } from "./log-stream-view.tsx";
+import { PreferenceRuntime } from "../settings/preference-runtime.tsx";
+import { getPreferenceStore } from "../settings/store.ts";
 import { useLogSettings } from "./log-settings.ts";
 
 const search = vi.hoisted(() => vi.fn<() => void>());
@@ -91,7 +93,11 @@ const mount = (override: Partial<LogStreamViewProps> = {}) =>
     </EngineProvider>,
   );
 const latest = () => opened.at(-1)!;
-const event = (status = ready) => act(() => latest().listener.event(status));
+const event = (status = ready) => {
+  act(() => {
+    void latest().listener.event(status);
+  });
+};
 const line = (text = "hello") =>
   act(
     () =>
@@ -105,7 +111,16 @@ beforeEach(() => {
   // The fixture's lines are from this day. A line from another day shows its date.
   vi.setSystemTime(new Date(2026, 9, 13, 12));
   search.mockClear();
-  useLogSettings.setState({ timestamps: false, wrap: true });
+  useLogSettings.setState({
+    timestamps: false,
+    wrap: true,
+    maxLines: 50000,
+    maxCharacters: 32000000,
+    maxDecorations: 200000,
+    loaded: true,
+    saveStatus: "",
+    saveError: undefined,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -467,4 +482,98 @@ it("marks Pods that come and go in a stream narrowed to a container another Pod 
   const text = screen.getByRole("textbox").textContent;
   expect(text).toContain("··· following Pod web-c ···");
   expect(text).toContain("··· Pod web is gone ···");
+});
+it("applies live budgets to visible and hidden documents without restarting and unsubscribes disposed runs", () => {
+  const view = mount();
+  event();
+  line("one");
+  line("two");
+  line("three");
+  const first = opened[0]!;
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  act(() => useLogSettings.setState({ maxLines: 1 }));
+  expect(screen.getByRole("textbox", { name: "Logs of Pod web", hidden: true }).textContent).toBe(
+    "three",
+  );
+  expect(opened).toHaveLength(1);
+  expect(first.close).not.toHaveBeenCalled();
+  expect(first.pause).not.toHaveBeenCalled();
+  line("four");
+  expect(screen.getByRole("textbox", { name: "Logs of Pod web", hidden: true }).textContent).toBe(
+    "four",
+  );
+  act(() => useLogSettings.setState({ maxLines: 100 }));
+  expect(screen.getByRole("textbox", { name: "Logs of Pod web", hidden: true }).textContent).toBe(
+    "four",
+  );
+  view.unmount();
+  expect(first.close).toHaveBeenCalledOnce();
+  act(() => useLogSettings.setState({ maxLines: 50000 }));
+});
+it("applies only confirmed Engine preferences to multiple documents, including a hidden one, after a failed save", async () => {
+  const original = useLogSettings.getState();
+  let value: unknown = { version: 1, logStreams: { maxLines: 3 } };
+  let emit!: () => void;
+  const client = {
+    ...engine,
+    getState: () => "open",
+    onStateChange: () => () => {},
+    subscribe: (_m: string, _p: unknown, listener: { data(value: unknown): void }) => {
+      emit = () => listener.data({ key: "app/preferences", revision: "r", value });
+      queueMicrotask(emit);
+      return { close() {}, update() {} };
+    },
+    request: async () => {
+      throw Object.assign(new Error("disk full"), { code: "internal" });
+    },
+  } as unknown as EngineClient;
+  const contents = (visible: boolean) => (
+    <EngineProvider client={client}>
+      <PreferenceRuntime />
+      <LogStreamView {...props} />
+      <LogStreamView {...props} target={{ ...props.target, name: "other" }} visible={visible} />
+    </EngineProvider>
+  );
+  const view = render(contents(true));
+  const store = getPreferenceStore(client);
+  try {
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(opened).toHaveLength(2);
+    act(() => {
+      for (const stream of opened) {
+        void stream.listener.event(ready);
+        void stream.listener.data(
+          ["one", "two", "three"].map((text) => ({ source: 0, time: 0, text })),
+        );
+      }
+    });
+    view.rerender(contents(false));
+    await act(async () => {
+      store.change("maxLines", "1");
+      await Promise.resolve();
+    });
+    for (const editor of screen.getAllByRole("textbox", { name: /Logs of Pod/, hidden: true }))
+      expect(editor.textContent).toBe("onetwothree");
+    act(() => {
+      value = { version: 1, logStreams: { maxLines: 1 } };
+      emit();
+    });
+    for (const editor of screen.getAllByRole("textbox", { name: /Logs of Pod/, hidden: true }))
+      expect(editor.textContent).toBe("three");
+    expect(opened).toHaveLength(2);
+    for (const stream of opened) {
+      expect(stream.pause).not.toHaveBeenCalled();
+      expect(stream.close).not.toHaveBeenCalled();
+    }
+  } finally {
+    view.unmount();
+    store.dispose();
+    useLogSettings.setState(original);
+  }
 });

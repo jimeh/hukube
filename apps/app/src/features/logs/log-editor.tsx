@@ -219,8 +219,18 @@ export default function LogEditor({
         if (removed > 0) {
           const top = editor.getScrollTop();
           const height = editor.getTopForLineNumber(removed + 1) - editor.getTopForLineNumber(1);
+          const selection = editor.getSelection();
           removeDecorations(decorationIds.splice(0, removed));
           model.applyEdits([{ range: new monaco.Range(1, 1, removed + 1, 1), text: null }]);
+          if (selection)
+            editor.setSelection(
+              new monaco.Selection(
+                Math.max(1, selection.selectionStartLineNumber - removed),
+                selection.selectionStartLineNumber > removed ? selection.selectionStartColumn : 1,
+                Math.max(1, selection.positionLineNumber - removed),
+                selection.positionLineNumber > removed ? selection.positionColumn : 1,
+              ),
+            );
           if (!follow.current)
             editor.setScrollTop(Math.max(0, top - height), monaco.editor.ScrollType.Immediate);
         }

@@ -11,14 +11,14 @@ import { refusalLines } from "../edit/field-paths.ts";
 import { useRegistry } from "../overview/registry.ts";
 import { semanticEqual } from "../overview/draft.ts";
 import { matches } from "../overview/definition.ts";
-import { useDefinitionManager } from "../overview/definition-manager.tsx";
+import { Link } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import { useResourceAccess } from "../edit/use-access.ts";
 import { DeleteDialog } from "../edit/delete-dialog.tsx";
 import { metadata } from "../edit/yaml.ts";
 import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { pinPanel } from "../workspace/dock.ts";
-import { Button } from "@hukube/ui/components/button";
+import { Button, buttonVariants } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -268,13 +268,13 @@ export function ResourcePanel({
       {registry.errors.get(address.type) || registry.error ? (
         <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1 text-xs text-warning">
           <span>{registry.errors.get(address.type) ?? registry.error}</span>
-          <Button
-            size="sm"
-            variant="link"
-            onClick={() => useDefinitionManager.getState().setOpen(true)}
+          <Link
+            to="/settings/$section"
+            params={{ section: "overview-definitions" }}
+            className={buttonVariants({ variant: "link", size: "sm" })}
           >
             Manage Overview definitions
-          </Button>
+          </Link>
           {registry.error && (
             <Button size="sm" variant="link" onClick={registryStore.retry}>
               Retry

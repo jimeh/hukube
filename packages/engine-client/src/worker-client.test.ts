@@ -217,3 +217,42 @@ it("transfers Exec input and resize to the Worker and defers byte acknowledgemen
   expect(worker.sent.at(-1)).toEqual({ kind: "stream-ack", id: opened.id, token: 2, bytes: 8 });
   client.close();
 });
+it("posts sequenced retained references before status/data acknowledgement, including old-socket completions", async () => {
+  const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+  const worker = FakeWorker.latest;
+  let finish!: () => void;
+  const handle = client.openStream(
+    "resource.logs",
+    { cluster: "c", type: "pods", name: "p", uid: "u" },
+    {
+      event: () => {
+        handle.retainSources?.([7]);
+      },
+      data: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+      gap: () => {},
+      end: () => {},
+    },
+  );
+  const open = worker.sent.at(-1)!;
+  if (open.kind !== "stream-open") throw new Error("missing open");
+  handle.retainSources?.([]);
+  worker.receive({ kind: "stream-event", id: open.id, event: { sources: [] }, token: 10 });
+  expect(worker.sent.slice(-2)).toEqual([
+    { kind: "stream-retain", id: open.id, sequence: 2, sources: [7] },
+    { kind: "stream-ack", id: open.id, token: 10, bytes: 0 },
+  ]);
+  worker.receive({ kind: "stream-data", id: open.id, data: [], bytes: 42, token: 11 });
+  worker.receive({ kind: "stream-state", id: open.id, state: "reconnecting" });
+  handle.retainSources?.([]);
+  finish();
+  await Promise.resolve();
+  expect(worker.sent.slice(-2)).toEqual([
+    { kind: "stream-retain", id: open.id, sequence: 3, sources: [] },
+    { kind: "stream-ack", id: open.id, token: 11, bytes: 42 },
+  ]);
+  handle.close();
+  client.close();
+});

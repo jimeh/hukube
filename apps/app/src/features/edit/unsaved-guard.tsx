@@ -12,19 +12,28 @@ import { holdsSession, useExecSessions } from "../exec/sessions.ts";
 
 import { useHost } from "@/lib/host.tsx";
 
+import { useSettingsOpenWork } from "../settings/open-work.ts";
+
 export function UnsavedGuard() {
+  const overviewDirty = useSettingsOpenWork((state) => state.overview);
+  const settingsDirty = useSettingsOpenWork((state) => state.preferences) ? 1 : 0;
   const host = useHost();
   const edits = useUnsavedEdits((state) => state.entries.size);
   const sessions = useExecSessions(
     (state) => [...state.entries.values()].filter(holdsSession).length,
   );
-  useEffect(() => host.reportOpenWork({ edits, sessions }), [host, edits, sessions]);
+  useEffect(
+    () => host.reportOpenWork({ edits: edits + settingsDirty + (overviewDirty ? 1 : 0), sessions }),
+    [host, edits, sessions, settingsDirty, overviewDirty],
+  );
   const guard = useUnsavedEdits((state) => state.guard);
   const dismiss = useUnsavedEdits((state) => state.dismiss);
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (
+        !useSettingsOpenWork.getState().overview &&
+        !useSettingsOpenWork.getState().preferences &&
         !useUnsavedEdits.getState().entries.size &&
         !(
           host.kind === "desktop" &&

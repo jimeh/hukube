@@ -3,6 +3,16 @@ export * from "./connection.ts";
 export * from "./methods.gen.ts";
 export type * from "./protocol.gen.ts";
 export {
+  AppPreferencesKey,
+  PreferenceDefaultTheme,
+  PreferenceDefaultWrap,
+  PreferenceDefaultTimestamps,
+  PreferenceMaxLines,
+  PreferenceMaxCharacters,
+  PreferenceMaxDecorations,
+  PreferenceDefaultLines,
+  PreferenceDefaultCharacters,
+  PreferenceDefaultDecorations,
   ColumnTypeTimestamp,
   LogStreamMaxPods,
   MaxClientMessageBytes,

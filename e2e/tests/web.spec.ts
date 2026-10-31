@@ -1636,6 +1636,43 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
       new RegExp(`${origin}.*counter`),
     );
   }
+  // A hidden Facet and the active workload keep their real Monaco instances.
+  const instances = await page.locator(".monaco-editor").count();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+  const limit = page.getByLabel("Maximum retained lines", { exact: true });
+  await limit.fill("2");
+  await limit.press("Enter");
+  await expect(limit).toHaveValue("2");
+  await page.getByRole("button", { name: /^Back to / }).click();
+  await expect(
+    workload.getByText(/oldest retained lines removed by retention limits/),
+  ).toBeVisible();
+  expect(await page.locator(".monaco-editor").count()).toBe(instances);
+  const copied = async (panel: Locator) => {
+    await panel.locator(".monaco-editor:visible").click();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.press("ControlOrMeta+C");
+    return page.evaluate(() => navigator.clipboard.readText());
+  };
+  await expect
+    .poll(async () => (await copied(workload)).trim().split("\n").length)
+    .toBeLessThanOrEqual(2);
+  await page.getByRole("tab", { name: podNames[0]!, exact: true }).click();
+  await pod.getByRole("tab", { name: "Logs", exact: true }).click();
+  await expect(pod.getByText(/oldest retained lines removed by retention limits/)).toBeVisible();
+  await expect
+    .poll(async () => (await copied(pod)).trim().split("\n").length)
+    .toBeLessThanOrEqual(2);
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+  await page.getByRole("button", { name: "Reset Log Streams", exact: true }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Reset Log Streams", exact: true })
+    .click();
+  await expect(limit).toHaveValue("50000");
+  await page.getByRole("button", { name: /^Back to / }).click();
 });
 
 async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Promise<void> {

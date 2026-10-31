@@ -18,6 +18,7 @@ import {
   TransactionHistoryIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
 import { useLogSettings } from "./log-settings.ts";
@@ -59,7 +60,8 @@ export function LogToolbar({
   setPrevious: (value: boolean) => void;
   search: () => void;
 }) {
-  const { timestamps, wrap, setTimestamps, setWrap } = useLogSettings();
+  const { timestamps, wrap, setTimestamps, setWrap, loaded, saveStatus, saveError, retrySave } =
+    useLogSettings();
   const single = containers.length === 1;
   const containerTrigger = useRef<HTMLButtonElement>(null);
   const previousToggle = useRef<HTMLButtonElement>(null);
@@ -100,6 +102,19 @@ export function LogToolbar({
   );
   return (
     <div className="@container/logs shrink-0 border-b">
+      {(saveStatus || saveError) && (
+        <output className="flex flex-wrap items-center gap-2 px-3 py-1 text-xs">
+          <span>{saveError ?? saveStatus}</span>
+          {saveError && (
+            <Button variant="link" size="sm" onClick={retrySave}>
+              Retry display preferences
+            </Button>
+          )}
+          <Link to="/settings/$section" params={{ section: "log-streams" }} className="underline">
+            Log Stream settings
+          </Link>
+        </output>
+      )}
       <div role="toolbar" aria-label="Log Stream" className="flex h-8 items-center gap-1 px-3">
         {single ? (
           // One container is a fact, not a choice.
@@ -158,8 +173,8 @@ export function LogToolbar({
           previousToggle,
         )}
         <div className="min-w-1 flex-1" />
-        {toggle("Timestamps", Clock01Icon, timestamps, setTimestamps)}
-        {toggle("Wrap", TextWrapIcon, wrap, setWrap)}
+        {toggle("Timestamps", Clock01Icon, timestamps, setTimestamps, !loaded)}
+        {toggle("Wrap", TextWrapIcon, wrap, setWrap, !loaded)}
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Button

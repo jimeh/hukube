@@ -12,9 +12,9 @@ async function openResource(page: Page, namespace: string, type: string, name: s
   return page.getByRole("tabpanel", { name, exact: true });
 }
 async function manager(page: Page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Overview definitions" }).click();
-  return page.getByRole("dialog", { name: "Overview definitions", exact: true });
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Overview definitions", exact: true }).click();
+  return page.getByRole("region", { name: "Overview definitions", exact: true });
 }
 export function overviewTests(namespace: string) {
   test("Overview shares form and YAML edits, Undo, gutter, all-Facet review, and Engine apply", async ({
@@ -43,6 +43,19 @@ export function overviewTests(namespace: string) {
     await panel.getByRole("textbox", { name: "Replicas", exact: true }).fill("2");
     await panel.getByRole("button", { name: "Done", exact: true }).click();
     await expect(panel.getByText("Unsaved changes", { exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+    await page.getByLabel("Maximum retained lines", { exact: true }).fill("unfinished");
+    await page.getByRole("button", { name: /^Back to / }).click();
+    await expect(panel.getByRole("button", { name: "Edit Replicas", exact: true })).toHaveText("2");
+    await expect(panel.getByText("Unsaved changes", { exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+    await expect(page.getByLabel("Maximum retained lines", { exact: true })).toHaveValue(
+      "unfinished",
+    );
+    await page.getByRole("button", { name: "Use Engine value", exact: true }).click();
+    await page.getByRole("button", { name: /^Back to / }).click();
     await panel.getByRole("tab", { name: /^YAML/ }).click();
     const editor = panel.locator(".monaco-editor:visible");
     await expect(editor.locator(".view-lines")).toContainText("replicas: 2");
@@ -200,7 +213,7 @@ export function overviewTests(namespace: string) {
         definitions.getByText("widgets.sample.hukube.dev saved.", { exact: true }),
       ).toBeVisible();
       installed = true;
-      await definitions.getByRole("button", { name: "Close", exact: true }).first().click();
+      await page.getByRole("button", { name: /^Back to / }).click();
       await panel.getByRole("tab", { name: /^Overview/ }).click();
       await panel.getByRole("button", { name: "Edit Size", exact: true }).click();
       await panel.getByRole("textbox", { name: "Size", exact: true }).fill("4");
@@ -233,7 +246,7 @@ export function overviewTests(namespace: string) {
         definitions.getByText("widgets.sample.hukube.dev removed.", { exact: true }),
       ).toBeVisible();
       installed = false;
-      await definitions.getByRole("button", { name: "Close", exact: true }).first().click();
+      await page.getByRole("button", { name: /^Back to / }).click();
       await expect(restored.getByRole("tab", { name: /^Overview/ })).toHaveCount(0);
       await expect(restored.getByRole("tab", { name: /^YAML/ })).toHaveAttribute(
         "aria-selected",
@@ -242,7 +255,7 @@ export function overviewTests(namespace: string) {
     } finally {
       try {
         if (installed && !page.isClosed()) {
-          const openDialog = page.getByRole("dialog", {
+          const openDialog = page.getByRole("region", {
             name: "Overview definitions",
             exact: true,
           });

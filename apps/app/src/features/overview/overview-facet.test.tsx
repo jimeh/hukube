@@ -25,6 +25,17 @@ const state = vi.hoisted(() => ({
     onStateChange: () => () => {},
   },
 }));
+// Navigation is a boundary here; the running-app tests exercise the Settings route.
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, ...props }: { children: React.ReactNode; to: string }) => (
+    <a
+      href="/settings/overview-definitions"
+      className={(props as { className?: string }).className}
+    >
+      {children}
+    </a>
+  ),
+}));
 vi.mock("@hukube/engine-client/react", () => ({
   useEngine: () => state.client,
   useConnectionState: () => "open",

@@ -119,6 +119,19 @@ function LogRun({
   const { cluster, type, namespace, name } = target;
   const document = useMemo(() => new LogDocument(type), [type]);
   useSyncExternalStore(document.subscribe, document.snapshot);
+  useEffect(() => {
+    const apply = () => {
+      const settings = useLogSettings.getState();
+      document.updateBudgets({
+        lines: settings.maxLines,
+        characters: settings.maxCharacters,
+        decorations: settings.maxDecorations,
+      });
+      document.timestamps(settings.timestamps);
+    };
+    apply();
+    return useLogSettings.subscribe(apply);
+  }, [document]);
   const current = useEffectEvent(() => visible);
   const remember = useEffectEvent(setKnown);
   useEffect(() => {
@@ -182,15 +195,22 @@ function LogRun({
             );
         },
         end: (value) => {
-          if (active) setEnd(value);
+          if (active) {
+            document.end();
+            setEnd(value);
+          }
         },
       },
     );
     stream.current = handle;
+    const references = () => handle.retainSources?.(document.retainedSources());
+    references();
+    const stopReferences = document.subscribe(references);
     if (!current()) hiddenTimer.current = setTimeout(() => handle.pause(), 10_000);
     return () => {
       active = false;
       clearTimeout(hiddenTimer.current);
+      stopReferences();
       handle.close();
       stream.current = undefined;
     };
@@ -207,6 +227,8 @@ function LogRun({
   const count = sources.length;
   const one = count === 1;
   const hasLines = document.rows.length > 0;
+  const [hadLines, setHadLines] = useState(false);
+  if (hasLines && !hadLines) setHadLines(true);
   const waiting = sources.filter((source) => source.state === "waiting");
   // An init container that completed is where it should be, not a problem to report.
   const initContainers = new Set(
@@ -340,6 +362,10 @@ function LogRun({
         text: `Showing the ${status.followed} newest of ${status.pods} Pods. Open a Pod to see its own logs.`,
       });
   }
+  if (document.evictedLines)
+    notices.push({
+      text: `${document.evictedLines.toLocaleString()} oldest retained lines removed by retention limits.${hasLines ? "" : " No line currently fits the retention limits."}`,
+    });
   if (hasLines && empty) {
     notices.push({
       text: `${empty.title}${empty.title === "Not permitted" ? ":" : "."} ${empty.description}`,
@@ -376,12 +402,20 @@ function LogRun({
         </output>
       ))}
       <div className="min-h-0 flex-1">
-        {hasLines ? (
-          <LogEditor
-            ref={editor}
-            document={document}
-            wrap={wrap}
-            label={`Logs of ${kind} ${name}`}
+        {hadLines && (
+          <div className="h-full" hidden={!hasLines}>
+            <LogEditor
+              ref={editor}
+              document={document}
+              wrap={wrap}
+              label={`Logs of ${kind} ${name}`}
+            />
+          </div>
+        )}
+        {hasLines ? null : document.evictedLines ? (
+          <Notice
+            title="No retained lines fit"
+            description="No line currently fits the retention limits. Increasing a limit permits future lines but does not restore removed content."
           />
         ) : loading ? (
           <LogLoading />

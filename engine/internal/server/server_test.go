@@ -579,3 +579,38 @@ func TestSettingsCASExplicitEmptyRevision(t *testing.T) {
 		return m.Type == protocol.ServerTypeData && setting.Revision != "" && string(setting.Value) == `{"version":1,"entries":{}}`
 	})
 }
+
+func TestAppPreferencesGuardedValidation(t *testing.T) {
+	ts := newTestServer(t)
+	writer := mustDial(t, ts)
+	empty := ""
+	for i, p := range []protocol.SettingPut{
+		{Key: protocol.AppPreferencesKey, Value: json.RawMessage(`{"version":1}`)},
+		{Key: protocol.AppPreferencesKey, Value: json.RawMessage(`{"version":1,"logStreams":{"maxLines":0}}`), IfRevision: &empty},
+	} {
+		id := uint64(i + 1)
+		writer.send(protocol.ClientMessage{ID: id, Type: protocol.ClientTypeRequest, Method: protocol.RequestSettingsPut.Name, Params: params(p)})
+		writer.await(id, func(m protocol.ServerMessage, _ json.RawMessage) bool {
+			return m.Type == protocol.ServerTypeError && m.Error.Code == protocol.ErrorCodeInvalid
+		})
+	}
+	writer.send(protocol.ClientMessage{ID: 3, Type: protocol.ClientTypeSubscribe, Method: protocol.TopicSettingsWatch.Name, Params: params(protocol.SettingKey{Key: protocol.AppPreferencesKey})})
+	writer.await(3, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		var setting protocol.Setting
+		_ = json.Unmarshal(data, &setting)
+		if m.Type != protocol.ServerTypeData {
+			return false
+		}
+		if setting.Revision != "" || string(setting.Value) != "null" {
+			t.Fatalf("invalid writes persisted: %+v", setting)
+		}
+		return true
+	})
+	writer.send(protocol.ClientMessage{ID: 4, Type: protocol.ClientTypeRequest, Method: protocol.RequestSettingsPut.Name, Params: params(protocol.SettingPut{Key: protocol.AppPreferencesKey, Value: json.RawMessage(`{"version":1,"appearance":{"theme":"light"},"future":42}`), IfRevision: &empty})})
+	writer.await(4, func(m protocol.ServerMessage, _ json.RawMessage) bool { return m.Type == protocol.ServerTypeResult })
+	writer.await(3, func(m protocol.ServerMessage, data json.RawMessage) bool {
+		var setting protocol.Setting
+		_ = json.Unmarshal(data, &setting)
+		return m.Type == protocol.ServerTypeData && setting.Revision != "" && string(setting.Value) == `{"version":1,"appearance":{"theme":"light"},"future":42}`
+	})
+}

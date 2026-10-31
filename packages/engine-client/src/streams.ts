@@ -20,6 +20,10 @@ import {
  * hold what opening the stream again needs.
  */
 export interface StreamCodec<M extends StreamMethod> {
+  retainSources?(ids: readonly number[]): void;
+  pin?(ids: readonly number[]): () => void;
+  end?(): void;
+  dispose?(): void;
   readonly input: boolean;
   readonly pausable: boolean;
   /** Called before each socket opens. */
@@ -139,6 +143,9 @@ class SocketStream implements EngineStream {
     this.#codec = codecs[method]();
   }
 
+  retainSources(ids: readonly number[]): void {
+    this.#codec.retainSources?.(ids);
+  }
   state(state: StreamState): void {
     if (!this.#closed) this.listener.state?.(state);
   }
@@ -165,6 +172,7 @@ class SocketStream implements EngineStream {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#codec.dispose?.();
     this.#disconnect();
     this.pool.release(this);
     this.pool.forget(this);
@@ -228,6 +236,7 @@ class SocketStream implements EngineStream {
     this.#disconnect(1000);
     this.pool.release(this);
     this.state("ended");
+    this.#codec.end?.();
     this.listener.end(end);
   }
   connect(): void {
@@ -307,7 +316,12 @@ class SocketStream implements EngineStream {
         received += data.byteLength;
         const entry = { total: received, done: false };
         pendingConsumption.push(entry);
+        const release =
+          this.method === "resource.logs"
+            ? this.#codec.pin?.((lines as StreamData["resource.logs"]).map((line) => line.source))
+            : undefined;
         const acknowledge = () => {
+          release?.();
           if (this.#socket !== socket || entry.done) return;
           entry.done = true;
           while (pendingConsumption[0]?.done) consumed = pendingConsumption.shift()!.total;
@@ -336,7 +350,20 @@ class SocketStream implements EngineStream {
         this.#flushInput();
       } else if (message?.type === "event") {
         if (this.#codec.input) this.#attached = true;
-        this.listener.event(this.#codec.event(message.event as Streams[StreamMethod]["event"]));
+        const event = this.#codec.event(message.event as Streams[StreamMethod]["event"]);
+        const release =
+          this.method === "resource.logs"
+            ? this.#codec.pin?.(
+                (event as Streams["resource.logs"]["event"]).sources.map((source) => source.id),
+              )
+            : undefined;
+        try {
+          const result = this.listener.event(event);
+          if (result) void Promise.resolve(result).then(release, release);
+          else release?.();
+        } catch {
+          release?.();
+        }
       } else if (message?.type === "gap" && message.gap) this.listener.gap(message.gap);
       else if (message?.type === "end" && message.end) this.#end(message.end);
     };

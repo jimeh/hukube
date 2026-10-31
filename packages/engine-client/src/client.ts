@@ -30,7 +30,7 @@ export interface StreamData {
 }
 export interface StreamListener<M extends StreamMethod> {
   state?: (state: StreamState) => void;
-  event: (event: Streams[M]["event"]) => void;
+  event: (event: Streams[M]["event"]) => M extends "resource.logs" ? void | Promise<void> : void;
   data: (data: StreamData[M]) => void | Promise<void>;
   gap: (gap: StreamGap) => void;
   /**
@@ -42,6 +42,8 @@ export interface StreamListener<M extends StreamMethod> {
   end: (end: StreamEnd) => void;
 }
 export interface EngineStream {
+  /** Local-only source ownership, independent of byte acknowledgement and sockets. */
+  retainSources?(ids: readonly number[]): void;
   /** Sends stdin. A Worker client transfers ownership of the buffer. No effect on Log Streams. */
   write(data: Uint8Array): void;
   /** Replaces the terminal size. It has no effect on a Log Stream. */

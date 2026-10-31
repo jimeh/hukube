@@ -1,30 +1,39 @@
 import { useSyncExternalStore } from "react";
-
 export type Theme = "dark" | "light";
-
-const storageKey = "hukube.theme";
+let current: Theme = "dark";
 const listeners = new Set<() => void>();
-
-function read(): Theme {
-  return localStorage.getItem(storageKey) === "light" ? "light" : "dark";
-}
-
-/** Applies the stored theme to the document. Dark is the default. */
-export function applyStoredTheme() {
-  const theme = read();
+function paint(theme: Theme) {
+  current = theme;
   document.documentElement.classList.toggle("dark", theme === "dark");
   document.documentElement.style.colorScheme = theme;
+  for (const listener of listeners) listener();
 }
-
-export function setTheme(theme: Theme) {
-  localStorage.setItem(storageKey, theme);
-  applyStoredTheme();
-  for (const l of listeners) l();
+/** The bootstrap cache is deliberately separate from the legacy migration candidate. */
+export function applyStoredTheme() {
+  let value: string | null = null;
+  try {
+    value = localStorage.getItem("hukube.theme-cache") ?? localStorage.getItem("hukube.theme");
+  } catch {
+    /* Storage is optional. */
+  }
+  paint(value === "light" ? "light" : "dark");
 }
-
+export function applyConfirmedTheme(theme: Theme) {
+  paint(theme);
+  try {
+    localStorage.setItem("hukube.theme-cache", theme);
+  } catch {
+    /* Engine persistence is independent. */
+  }
+}
 export function useTheme(): Theme {
-  return useSyncExternalStore((l) => {
-    listeners.add(l);
-    return () => listeners.delete(l);
-  }, read);
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    () => current,
+  );
 }

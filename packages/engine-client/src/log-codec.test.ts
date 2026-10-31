@@ -87,3 +87,45 @@ it("forgets a Pod that left a stream narrowed to a container another Pod lacks",
   codec.decode(frame(8));
   expect(codec.params(params).resume).toEqual([expect.objectContaining({ podUid: "uid3" })]);
 });
+it("reclaims historical metadata only after retained and posted delivery owners drain, across reconnect and instance changes", () => {
+  const codec = new LogCodec();
+  codec.retainSources([]);
+  const old = codec.event(status).sources[0]!.id;
+  const pendingStatus = codec.pin([old]);
+  codec.decode(frame());
+  const pendingData = codec.pin([old]);
+  codec.retainSources([old]);
+  for (let i = 1; i <= 200; i++) {
+    codec.beginSocket();
+    codec.event({ ...status, ready: false, sources: [] });
+    const next = codec.event({
+      ...status,
+      sources: [{ ...source, podUid: `uid-${i}`, id: 7, instance: `run-${i}` }],
+    }).sources[0]!.id;
+    expect(next).toBeGreaterThan(old);
+    expect(codec.decode(frame(7, 4))).toHaveLength(1);
+    expect(codec.decode(frame(7, 4))).toHaveLength(0);
+    codec.decode(frame());
+    codec.retainSources([old]);
+    expect(codec.metadataSnapshot()).toMatchObject({
+      identities: 2,
+      wireSources: 1,
+      cursors: 1,
+      exited: 1,
+    });
+  }
+  codec.retainSources([]);
+  expect(codec.metadataSnapshot().identities).toBe(2);
+  pendingData();
+  expect(codec.metadataSnapshot().identities).toBe(2);
+  pendingStatus();
+  expect(codec.metadataSnapshot().identities).toBe(1);
+  codec.end();
+  expect(codec.metadataSnapshot()).toEqual({
+    identities: 0,
+    wireSources: 0,
+    cursors: 0,
+    exited: 0,
+    pins: 0,
+  });
+});

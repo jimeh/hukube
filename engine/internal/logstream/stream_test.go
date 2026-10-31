@@ -974,3 +974,43 @@ func TestLogStatusInterval(t *testing.T) {
 		}
 	}
 }
+
+// The codec may forget a wire source only after its last ordered frame.
+type retirementCapture struct{ events []string }
+
+func (c *retirementCapture) Frame(frame []byte, _ int) {
+	for _, r := range decodeFrame(frame) {
+		c.events = append(c.events, "frame:"+string(r.content))
+	}
+}
+func (c *retirementCapture) Status(s protocol.LogStreamStatus) {
+	instance := "absent"
+	if len(s.Sources) > 0 {
+		instance = s.Sources[0].Instance
+	}
+	c.events = append(c.events, "status:"+instance)
+}
+func TestLogRetirementFlushesBeforeSourceRemovalAndInstanceChange(t *testing.T) {
+	for _, change := range []string{"remove", "instance"} {
+		t.Run(change, func(t *testing.T) {
+			out := &retirementCapture{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s := &stream{ctx: ctx, out: out, t: DefaultTiming, sources: map[int]*sourceEntry{7: {source: protocol.LogSource{ID: 7, Instance: "old"}}}, batch: []record{{source: 7, content: []byte("old line")}}}
+			if change == "remove" {
+				s.removePod(&followedPod{cancel: func() {}, readers: map[string]*containerReader{"main": {id: 7, cancel: func() {}}}})
+				s.statusLocked(true)
+			} else {
+				r := &containerReader{s: s, id: 7, ctx: ctx}
+				r.instance("new")
+			}
+			want := "absent"
+			if change == "instance" {
+				want = "new"
+			}
+			if !reflect.DeepEqual(out.events, []string{"status:old", "frame:old line", "status:" + want}) {
+				t.Fatalf("retirement order: %v", out.events)
+			}
+		})
+	}
+}
