@@ -577,3 +577,100 @@ it("applies only confirmed Engine preferences to multiple documents, including a
     useLogSettings.setState(original);
   }
 });
+
+it("dismisses only the loss notice, coalesces routine losses and announces a new settings loss, including while hidden", () => {
+  useLogSettings.setState({ maxLines: 3 });
+  const view = mount();
+  event();
+  for (const text of ["one", "two", "three", "four"]) line(text);
+  const dismiss = screen.getByRole("button", { name: "Dismiss retention notice" });
+  const announcement = screen
+    .getAllByRole("status")
+    .find((node) => node.textContent?.includes("retention limits"))!;
+  expect(announcement.textContent).toContain("1 oldest retained lines");
+  line("five");
+  expect(announcement.textContent).toContain("1 oldest retained lines");
+  expect(screen.getByText("2 oldest retained lines removed by retention limits.")).toBeDefined();
+  dismiss.focus();
+  fireEvent.click(dismiss);
+  expect(document.activeElement).toBe(screen.getByRole("toolbar", { name: "Log Stream" }));
+  expect(screen.queryByRole("button", { name: "Dismiss retention notice" })).toBeNull();
+  expect(screen.getByRole("textbox").textContent).toBe("threefourfive");
+  line("six");
+  expect(screen.queryByText(/oldest retained lines/)).toBeNull();
+  act(() => useLogSettings.setState({ maxLines: 4 }));
+  act(() => useLogSettings.setState({ maxLines: 3, wrap: false }));
+  expect(screen.queryByText(/oldest retained lines/)).toBeNull();
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  act(() => useLogSettings.setState({ maxLines: 1 }));
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} />
+    </EngineProvider>,
+  );
+  expect(screen.getAllByText("5 oldest retained lines removed by retention limits.")).toHaveLength(
+    2,
+  );
+  expect(screen.getByRole("textbox").textContent).toBe("six");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  act(() => useLogSettings.setState({ maxCharacters: 1 }));
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
+  expect(screen.getByText("No retained lines fit")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  expect(document.activeElement).toBe(screen.getByRole("toolbar", { name: "Log Stream" }));
+  expect(screen.getByText("No retained lines fit")).toBeDefined();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(opened).toHaveLength(1);
+  expect(latest().close).not.toHaveBeenCalled();
+  expect(latest().pause).not.toHaveBeenCalled();
+});
+
+it("shows the first new loss after replay clears a dismissed document", () => {
+  useLogSettings.setState({ maxLines: 1 });
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  const previousStatus = { ...ready, sources: [{ ...source, previous: true }] };
+  event(previousStatus);
+  line("old one");
+  line("old two");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  act(() => latest().listener.state?.("reconnecting"));
+  event(previousStatus);
+  line("replayed one");
+  expect(screen.queryByRole("button", { name: "Dismiss retention notice" })).toBeNull();
+  line("replayed two");
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
+  expect(screen.getByRole("textbox").textContent).toBe("replayed two");
+  expect(screen.getAllByText("1 oldest retained lines removed by retention limits.")).toHaveLength(
+    2,
+  );
+  expect(opened).toHaveLength(2);
+});
+
+it("does not carry a dismissed loss into a replacement document", () => {
+  useLogSettings.setState({ maxLines: 1 });
+  const view = mount();
+  event();
+  line("one");
+  line("two");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView
+        {...props}
+        target={{ ...props.target, type: "deployments.apps" }}
+        kind="Deployment"
+      />
+    </EngineProvider>,
+  );
+  event();
+  line("replacement one");
+  line("replacement two");
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
+  expect(screen.getByRole("textbox").textContent).toBe("replacement two");
+});

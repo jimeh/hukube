@@ -28,6 +28,37 @@ const logs = z
 export const preferenceSchema = z
   .object({ version: z.literal(1), appearance: appearance.optional(), logStreams: logs.optional() })
   .passthrough();
+function decodePreferences(value: unknown): Preferences {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "version" in value &&
+    typeof value.version === "number" &&
+    value.version !== 1
+  )
+    throw new Error(
+      "This Hukube version cannot read these app preferences. Update Hukube, then retry. Your saved preferences have not been changed.",
+    );
+  const result = preferenceSchema.safeParse(value);
+  if (!result.success) {
+    const labels: Record<string, string> = {
+      version: "preference version",
+      appearance: "Appearance",
+      "appearance.theme": "Theme",
+      logStreams: "Log Streams",
+      "logStreams.maxLines": "Maximum retained lines",
+      "logStreams.maxCharacters": "Maximum retained characters",
+      "logStreams.maxDecorations": "Maximum styled ranges",
+      "logStreams.wrap": "Wrap",
+      "logStreams.timestamps": "Timestamps",
+    };
+    const field = labels[result.error.issues[0]?.path.join(".") ?? ""];
+    throw new Error(
+      `The saved app preferences contain an invalid value${field ? ` for ${field}` : ""}. Correct the stored app preferences, then retry. Your saved preferences have not been changed.`,
+    );
+  }
+  return result.data;
+}
 export type Preferences = z.infer<typeof preferenceSchema>;
 export const defaults = {
   theme: PreferenceDefaultTheme as "light" | "dark",
@@ -202,9 +233,7 @@ export function createPreferenceStore(
           if (mine !== epoch || disposed || client.getState() !== "open") return;
           try {
             const raw =
-              setting.value === null
-                ? { version: 1 as const }
-                : preferenceSchema.parse(setting.value);
+              setting.value === null ? { version: 1 as const } : decodePreferences(setting.value);
             if (typeof setting.revision !== "string")
               throw new Error("Missing preference revision");
             const drafts = { ...current.drafts };
@@ -428,6 +457,7 @@ export function createPreferenceStore(
       commit([field]);
     },
     reset: (section: "appearance" | "logStreams") => {
+      if (!current.loaded || current.error) return;
       const touched = section === "appearance" ? ["theme" as const] : logFields;
       for (const field of touched) {
         edit(

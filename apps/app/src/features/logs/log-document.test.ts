@@ -155,3 +155,49 @@ it("collects retired descriptors and colors through repeated rollouts while pres
   doc.end();
   expect(doc.metadataSnapshot()).toEqual({ sources: 0, colors: 0, retained: 0 });
 });
+
+it("generates notices for first loss, settings eviction and first loss after Clear, keeping cumulative counts and sequences", () => {
+  const doc = new LogDocument("pods", { lines: 3, characters: 100, decorations: 100 });
+  const append = (texts: string[]) =>
+    doc.append(texts.map((text) => ({ source: 7, time: 1, text })));
+  expect(doc.lossGeneration).toBe(0);
+  append(["one", "two", "three", "four"]);
+  expect(doc.lossGeneration).toBe(1);
+  append(["five", "six"]);
+  expect(doc.evictedLines).toBe(3);
+  expect(doc.lossGeneration).toBe(1);
+  doc.updateBudgets({ ...doc.budgets, lines: 4 });
+  doc.updateBudgets({ ...doc.budgets, lines: 3 });
+  expect(doc.lossGeneration).toBe(1);
+  doc.updateBudgets({ ...doc.budgets, lines: 2 });
+  expect(doc.evictedLines).toBe(4);
+  expect(doc.lossGeneration).toBe(2);
+  doc.timestamps(true);
+  // Formatted prefixes now exceed the character budget only after it is reduced.
+  doc.updateBudgets({ ...doc.budgets, characters: 1 });
+  expect(doc.evictedLines).toBe(6);
+  expect(doc.lossGeneration).toBe(3);
+  doc.clear();
+  expect(doc.evictedLines).toBe(0);
+  expect(doc.lossGeneration).toBe(3);
+  append(["seven"]);
+  expect(doc.rows).toEqual([]);
+  expect(doc.lossGeneration).toBe(4);
+  expect(doc.evictedLines).toBe(1);
+  doc.updateBudgets({ ...doc.budgets, characters: 100 });
+  append(["eight"]);
+  expect(doc.rows[0]!.sequence).toBe(7);
+  expect(doc.lossGeneration).toBe(4);
+});
+
+it("starts a new loss generation when confirmed timestamp formatting evicts more content", () => {
+  const doc = new LogDocument("pods", { lines: 2, characters: 30, decorations: 100 });
+  doc.append(["one", "two", "three"].map((text) => ({ source: 7, time: 1, text })));
+  expect(doc.lossGeneration).toBe(1);
+  doc.timestamps(true);
+  expect(doc.evictedLines).toBe(2);
+  expect(doc.lossGeneration).toBe(2);
+  doc.timestamps(true);
+  doc.timestamps(false);
+  expect(doc.lossGeneration).toBe(2);
+});

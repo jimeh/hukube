@@ -46,7 +46,9 @@ export function LogToolbar({
   select,
   setPrevious,
   search,
+  ref: toolbarRef,
 }: {
+  ref?: React.Ref<HTMLDivElement>;
   containers: LogContainer[];
   container: string;
   previous: boolean;
@@ -115,7 +117,13 @@ export function LogToolbar({
           </Link>
         </output>
       )}
-      <div role="toolbar" aria-label="Log Stream" className="flex h-8 items-center gap-1 px-3">
+      <div
+        ref={toolbarRef}
+        role="toolbar"
+        aria-label="Log Stream"
+        tabIndex={-1}
+        className="flex h-8 items-center gap-1 px-3 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
         {single ? (
           // One container is a fact, not a choice.
           <span className="min-w-0 truncate font-mono" title={containers[0]!.name}>

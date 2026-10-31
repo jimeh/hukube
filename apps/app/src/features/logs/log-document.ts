@@ -90,6 +90,8 @@ export class LogDocument {
   #colorCursor = 0;
   #prefixSample: string | undefined;
   evictedLines = 0;
+  /** First loss since Clear, or a settings change that removes more retained rows. */
+  lossGeneration = 0;
 
   #characters = 0;
   #decorations = 0;
@@ -143,7 +145,7 @@ export class LogDocument {
     )
       return;
     this.budgets = { ...budgets };
-    this.#trim();
+    this.#trim(true);
     this.#prune();
     this.#changed();
   }
@@ -212,7 +214,7 @@ export class LogDocument {
   timestamps(value: boolean): void {
     if (value !== this.#timestamps) {
       this.#timestamps = value;
-      this.#rebuild();
+      this.#rebuild(true);
     }
   }
   append(lines: LogLine[]): void {
@@ -234,7 +236,7 @@ export class LogDocument {
     this.#characters += row.text.length + 1;
     this.#decorations += row.spans.length;
   }
-  #trim(): void {
+  #trim(settingsChange = false): void {
     let count = 0;
     while (
       this.rows.length - count > this.budgets.lines ||
@@ -254,15 +256,16 @@ export class LogDocument {
           if (uses) this.#usage.set(entry.line.source, uses);
           else this.#usage.delete(entry.line.source);
         }
+      if (!this.evictedLines || settingsChange) this.lossGeneration++;
       this.evictedLines += count;
       this.#prune();
     }
   }
-  #rebuild(): void {
+  #rebuild(settingsChange = false): void {
     this.rows = this.#entries.map((entry) => this.#format(entry));
     this.#characters = this.rows.reduce((sum, row) => sum + row.text.length + 1, 0);
     this.#decorations = this.rows.reduce((sum, row) => sum + row.spans.length, 0);
-    this.#trim();
+    this.#trim(settingsChange);
     this.rewrites++;
     this.#changed();
   }

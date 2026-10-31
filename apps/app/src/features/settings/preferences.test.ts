@@ -250,14 +250,64 @@ it("migrates only an explicit legacy choice after readback, merges other fields,
   expect(absent.puts).toHaveLength(0);
   expect(absent.store.getSnapshot().values).toEqual(defaults);
 });
-it("blocks writes after malformed/future snapshots while retaining last known runtime", async () => {
-  const h = harness({ version: 1, appearance: { theme: "light" } });
-  await ready(h);
-  h.remote({ version: 2 });
-  h.store.change("wrap", false);
+it.each([
+  [
+    { version: 2 },
+    "This Hukube version cannot read these app preferences. Update Hukube, then retry.",
+  ],
+  [{ version: 1, logStreams: { maxLines: 0 } }, "invalid value for Maximum retained lines"],
+  [{ version: 1, appearance: null }, "invalid value for Appearance"],
+  [{ version: 1, logStreams: { wrap: "yes" } }, "invalid value for Wrap"],
+])(
+  "explains unreadable snapshot %j, refuses writes and resets, retains state/drafts, and recovers on retry",
+  async (invalid, explanation) => {
+    const h = harness({ version: 1, appearance: { theme: "light" }, logStreams: { maxLines: 12 } });
+    await ready(h);
+    h.store.edit("maxLines", "27");
+    const confirmed = h.store.getSnapshot();
+    h.remote(invalid);
+    expect(h.store.getSnapshot().error).toContain(explanation);
+    expect(h.store.getSnapshot().error).toContain("Your saved preferences have not been changed.");
+    expect(h.store.getSnapshot().error).not.toMatch(/invalid_type|invalid_value|\[\s*\{/);
+    h.store.commit(["maxLines"]);
+    h.store.reset("logStreams");
+    expect(h.puts).toHaveLength(0);
+    expect(h.store.getSnapshot()).toMatchObject({
+      fresh: false,
+      raw: confirmed.raw,
+      values: confirmed.values,
+      drafts: confirmed.drafts,
+    });
+    h.read(true);
+    h.store.retry();
+    expect(h.store.getSnapshot().fresh).toBe(false);
+    h.remote(confirmed.raw);
+    await ready(h);
+    expect(h.store.getSnapshot().error).toBeUndefined();
+    expect(h.store.getSnapshot().drafts.maxLines?.value).toBe("27");
+    h.read(false);
+    h.store.commit(["maxLines"]);
+    await saved(h, "maxLines");
+    expect(h.store.getSnapshot().values.maxLines).toBe(27);
+  },
+);
+it("explains an initially unreadable snapshot without loading defaults or writing a reset", async () => {
+  const h = harness({ version: 2 }, "light");
+  await vi.waitFor(() =>
+    expect(h.store.getSnapshot().error).toContain("Update Hukube, then retry."),
+  );
+  h.store.reset("appearance");
+  expect(h.store.getSnapshot()).toMatchObject({ loaded: false, fresh: false, drafts: {} });
   expect(h.puts).toHaveLength(0);
-  expect(h.store.getSnapshot().values.theme).toBe("light");
-  expect(h.store.getSnapshot().error).toContain("Cannot load");
+  h.remote({ version: 1, appearance: { theme: "dark" } });
+  await ready(h);
+  expect(h.puts).toHaveLength(0);
+});
+it("preserves Engine IO and network error messages", async () => {
+  const h = harness();
+  await ready(h);
+  h.watches[0]!.listener.error({ code: "internal", message: "disk read failed" });
+  expect(h.store.getSnapshot().error).toBe("Cannot load app preferences: disk read failed");
 });
 it("reconciles an unknown written outcome, retries a settled unwritten outcome, and detects superseded readback", async () => {
   const written = harness();

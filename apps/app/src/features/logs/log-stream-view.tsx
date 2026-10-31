@@ -115,9 +115,17 @@ function LogRun({
   const stream = useRef<EngineStream | undefined>(undefined);
   const hiddenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const editor = useRef<LogEditorHandle>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const [acknowledgedLoss, setAcknowledgedLoss] = useState<{
+    document: symbol;
+    generation: number;
+  }>();
   const { timestamps, wrap } = useLogSettings();
   const { cluster, type, namespace, name } = target;
-  const document = useMemo(() => new LogDocument(type), [type]);
+  const [document, documentIdentity] = useMemo(
+    () => [new LogDocument(type), Symbol()] as const,
+    [type],
+  );
   useSyncExternalStore(document.subscribe, document.snapshot);
   useEffect(() => {
     const apply = () => {
@@ -362,10 +370,6 @@ function LogRun({
         text: `Showing the ${status.followed} newest of ${status.pods} Pods. Open a Pod to see its own logs.`,
       });
   }
-  if (document.evictedLines)
-    notices.push({
-      text: `${document.evictedLines.toLocaleString()} oldest retained lines removed by retention limits.${hasLines ? "" : " No line currently fits the retention limits."}`,
-    });
   if (hasLines && empty) {
     notices.push({
       text: `${empty.title}${empty.title === "Not permitted" ? ":" : "."} ${empty.description}`,
@@ -377,6 +381,7 @@ function LogRun({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <LogToolbar
+        ref={toolbar}
         containers={containers}
         container={container}
         previous={previous}
@@ -401,6 +406,24 @@ function LogRun({
           {notice.action}
         </output>
       ))}
+      {visible &&
+        document.evictedLines > 0 &&
+        (!acknowledgedLoss ||
+          acknowledgedLoss.document !== documentIdentity ||
+          document.lossGeneration > acknowledgedLoss.generation) && (
+          <RetentionNotice
+            key={`${type}:${document.lossGeneration}`}
+            count={document.evictedLines}
+            hasLines={hasLines}
+            dismiss={() => {
+              setAcknowledgedLoss({
+                document: documentIdentity,
+                generation: document.lossGeneration,
+              });
+              toolbar.current?.focus();
+            }}
+          />
+        )}
       <div className="min-h-0 flex-1">
         {hadLines && (
           <div className="h-full" hidden={!hasLines}>
@@ -428,6 +451,29 @@ function LogRun({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function RetentionNotice({
+  count,
+  hasLines,
+  dismiss,
+}: {
+  count: number;
+  hasLines: boolean;
+  dismiss: () => void;
+}) {
+  const text = `${count.toLocaleString()} oldest retained lines removed by retention limits.${hasLines ? "" : " No line currently fits the retention limits."}`;
+  // Counts continue to update visually; announce only when this loss generation is shown.
+  const [announcement] = useState(text);
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 text-muted-foreground">
+      <output className="sr-only">{announcement}</output>
+      <span className="min-w-0 flex-1 break-words">{text}</span>
+      <Button variant="outline" size="sm" aria-label="Dismiss retention notice" onClick={dismiss}>
+        Dismiss
+      </Button>
     </div>
   );
 }
