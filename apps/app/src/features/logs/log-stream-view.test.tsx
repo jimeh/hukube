@@ -674,3 +674,56 @@ it("does not carry a dismissed loss into a replacement document", () => {
   expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
   expect(screen.getByRole("textbox").textContent).toBe("replacement two");
 });
+
+it.each([false, true])(
+  "applies a combined timestamp/budget snapshot atomically to visible and hidden documents (timestamps %s)",
+  (timestamps) => {
+    useLogSettings.setState({
+      timestamps: !timestamps,
+      maxLines: 10,
+      maxCharacters: timestamps ? 12 : 1000,
+      maxDecorations: timestamps ? 3 : 100,
+    });
+    // oxlint-disable-next-line unicorn/consistent-function-scoping -- Keep this fixture local to its owning regression.
+    const contents = (visible: boolean) => (
+      <EngineProvider client={engine}>
+        <LogStreamView {...props} />
+        <LogStreamView {...props} target={{ ...props.target, name: "other" }} visible={visible} />
+      </EngineProvider>
+    );
+    const view = render(contents(true));
+    act(() => {
+      for (const stream of opened) {
+        void stream.listener.event(ready);
+        void stream.listener.data(
+          ["one", "two", "six"].map((text) => ({
+            source: 0,
+            time: 1,
+            text,
+            spans: [[0, 1, 1, -1, 0]],
+          })),
+        );
+      }
+    });
+    view.rerender(contents(false));
+    act(() =>
+      useLogSettings.setState({
+        timestamps,
+        maxCharacters: timestamps ? 1000 : 12,
+        maxDecorations: timestamps ? 100 : 3,
+      }),
+    );
+    for (const editor of screen.getAllByRole("textbox", { name: /Logs of Pod/, hidden: true })) {
+      expect(editor.querySelectorAll("p")).toHaveLength(3);
+      expect(editor.textContent).toContain("six");
+      expect(editor.textContent?.includes(".001")).toBe(timestamps);
+    }
+    expect(screen.queryByText(/oldest retained lines/)).toBeNull();
+    expect(opened).toHaveLength(2);
+    for (const stream of opened) {
+      expect(stream.close).not.toHaveBeenCalled();
+      expect(stream.pause).not.toHaveBeenCalled();
+    }
+    view.unmount();
+  },
+);

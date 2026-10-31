@@ -120,7 +120,7 @@ function LogRun({
     document: symbol;
     generation: number;
   }>();
-  const { timestamps, wrap } = useLogSettings();
+  const { wrap } = useLogSettings();
   const { cluster, type, namespace, name } = target;
   const [document, documentIdentity] = useMemo(
     () => [new LogDocument(type), Symbol()] as const,
@@ -130,12 +130,12 @@ function LogRun({
   useEffect(() => {
     const apply = () => {
       const settings = useLogSettings.getState();
-      document.updateBudgets({
+      document.applyPreferences({
+        timestamps: settings.timestamps,
         lines: settings.maxLines,
         characters: settings.maxCharacters,
         decorations: settings.maxDecorations,
       });
-      document.timestamps(settings.timestamps);
     };
     apply();
     return useLogSettings.subscribe(apply);
@@ -229,7 +229,6 @@ function LogRun({
     else hiddenTimer.current = setTimeout(() => stream.current?.pause(), 10_000);
     return () => clearTimeout(hiddenTimer.current);
   }, [visible]);
-  useEffect(() => document.timestamps(timestamps), [document, timestamps]);
 
   const sources = status?.sources ?? [];
   const count = sources.length;

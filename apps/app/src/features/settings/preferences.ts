@@ -115,11 +115,15 @@ export interface Draft {
   conflict?: boolean;
   reset?: "appearance" | "logStreams";
 }
-interface Intent {
+interface IntentFields {
   changes: Partial<Values>;
   observed: Partial<Record<Field, unknown>>;
   generations: Partial<Record<Field, number>>;
+}
+interface Intent extends IntentFields {
   attempts: number;
+  /** Evidence of the last sent attempt, independent of its remaining retry ownership. */
+  sent?: IntentFields;
 }
 export interface PreferenceSnapshot {
   connected: boolean;
@@ -131,6 +135,18 @@ export interface PreferenceSnapshot {
   drafts: Partial<Record<Field, Draft>>;
   error?: string;
   defaults: boolean;
+}
+function intendedValue(field: Field, draft: Draft): Values[Field] {
+  return field in maximums
+    ? numericValue(field as NumericField, String(draft.value))
+    : (draft.value as Values[Field]);
+}
+function draftMatches(field: Field, draft: Draft, actual: unknown): boolean {
+  try {
+    return actual === intendedValue(field, draft);
+  } catch {
+    return false;
+  }
 }
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const code = (error: unknown) =>
@@ -171,7 +187,7 @@ export function createPreferenceStore(
     current = { ...current, ...patch };
     for (const listener of listeners) listener();
   };
-  const update = (intent: Intent, patch: Partial<Draft>) => {
+  const update = (intent: IntentFields, patch: Partial<Draft>) => {
     const drafts = { ...current.drafts };
     for (const field of fields)
       if (drafts[field] && drafts[field].generation === intent.generations[field])
@@ -195,7 +211,7 @@ export function createPreferenceStore(
         rawValue(current.raw, field as Field) !== intent.observed[field as Field] &&
         rawValue(current.raw, field as Field) !== intent.changes[field as Field],
     );
-  const settle = (intent: Intent) => {
+  const settle = (intent: IntentFields) => {
     update(intent, { status: "Saved", error: undefined, conflict: false });
     // Local successors were observed while this write was pending, not against a remote edit.
     for (const queued of queue)
@@ -219,6 +235,32 @@ export function createPreferenceStore(
           conflict: false,
         };
     show({ drafts });
+  };
+  // A newer committed field owns all future retries. Keep sent evidence for readback.
+  const abandon = (touched: Field[]) => {
+    for (const intent of [...queue, ...(active ? [active] : [])])
+      for (const field of touched) {
+        delete intent.changes[field];
+        delete intent.observed[field];
+        delete intent.generations[field];
+      }
+    for (let i = queue.length - 1; i >= 0; i--)
+      if (!Object.keys(queue[i]!.changes).length && !queue[i]!.sent) queue.splice(i, 1);
+  };
+  const reconcileSent = (intent: Intent) => {
+    if (!intent.sent) return;
+    const confirmed: IntentFields = { changes: {}, observed: {}, generations: {} };
+    for (const field of fields)
+      if (
+        Object.hasOwn(intent.sent.changes, field) &&
+        rawValue(current.raw, field) === intent.sent.changes[field]
+      ) {
+        Object.assign(confirmed.changes, { [field]: intent.sent.changes[field] });
+        confirmed.observed[field] = intent.sent.observed[field];
+        confirmed.generations[field] = intent.sent.generations[field];
+      }
+    settle(confirmed);
+    intent.sent = undefined;
   };
   const open = () => {
     if (disposed) return;
@@ -250,7 +292,7 @@ export function createPreferenceStore(
               const actual = rawValue(raw, field);
               drafts[field] = {
                 ...draft,
-                conflict: actual !== draft.observed && actual !== draft.value,
+                conflict: actual !== draft.observed && !draftMatches(field, draft, actual),
               };
             }
             show({
@@ -311,6 +353,7 @@ export function createPreferenceStore(
         if (disposed) break;
         const intent = queue.shift()!;
         active = intent;
+        reconcileSent(intent);
         if (matches(intent)) {
           settle(intent);
           active = undefined;
@@ -318,6 +361,11 @@ export function createPreferenceStore(
         }
         try {
           for (;;) {
+            // Discard/supersession may run while the preceding put or readback awaits.
+            if (matches(intent)) {
+              settle(intent);
+              break;
+            }
             if (conflict(intent)) {
               update(intent, {
                 status: "Not saved",
@@ -330,6 +378,11 @@ export function createPreferenceStore(
               throw new Error("Preferences kept changing. Review and retry.");
             update(intent, { status: "Saving", error: undefined, conflict: false });
             const value = compose(current.raw, intent.changes);
+            intent.sent = {
+              changes: { ...intent.changes },
+              observed: { ...intent.observed },
+              generations: { ...intent.generations },
+            };
             // The timer changes presentation only. A sent put is never cancelled or duplicated while unresolved.
             const deadline = setTimeout(
               () =>
@@ -357,6 +410,7 @@ export function createPreferenceStore(
             )
               throw failure;
             await fresh();
+            reconcileSent(intent);
             if (matches(intent)) {
               settle(intent);
               break;
@@ -374,7 +428,7 @@ export function createPreferenceStore(
           update(intent, { status: "Not saved", error: message(error) });
           // Only committed intents can resume after connection recovery.
           if (code(error) === "not_connected") show({ fresh: false });
-          if (!current.fresh) {
+          if (!current.fresh && (Object.keys(intent.changes).length || intent.sent)) {
             intent.attempts = 0;
             queue.unshift(intent);
           }
@@ -410,10 +464,7 @@ export function createPreferenceStore(
       if (draft.conflict && !keepMine) return;
       let value: Values[Field];
       try {
-        value =
-          field in maximums
-            ? numericValue(field as NumericField, String(draft.value))
-            : (draft.value as Values[Field]);
+        value = intendedValue(field, draft);
         compose(current.raw, { [field]: value });
       } catch (error) {
         show({ drafts: { ...current.drafts, [field]: { ...draft, error: message(error) } } });
@@ -424,10 +475,7 @@ export function createPreferenceStore(
       intent.generations[field] = draft.generation;
     }
     if (!Object.keys(intent.changes).length) return;
-    // Coalesce only identical field groups; section resets remain atomic.
-    for (let i = queue.length - 1; i >= 0; i--)
-      if (Object.keys(queue[i]!.changes).join() === Object.keys(intent.changes).join())
-        queue.splice(i, 1);
+    abandon(Object.keys(intent.changes) as Field[]);
     queue.push(intent);
     void pump();
   }
@@ -471,9 +519,7 @@ export function createPreferenceStore(
       commit(touched, true);
     },
     discard: (touched: Field[]) => {
-      for (let i = queue.length - 1; i >= 0; i--)
-        if (Object.keys(queue[i]!.changes).some((field) => touched.includes(field as Field)))
-          queue.splice(i, 1);
+      abandon(touched);
       const drafts = { ...current.drafts };
       for (const field of touched) delete drafts[field];
       show({ drafts });

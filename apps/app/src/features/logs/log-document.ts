@@ -126,7 +126,13 @@ export class LogDocument {
     };
   }
   updateBudgets(budgets: typeof logBudgets): void {
+    this.applyPreferences({ ...budgets, timestamps: this.#timestamps });
+  }
+  /** Apply one confirmed snapshot before formatting or enforcing any retention limit. */
+  applyPreferences(settings: typeof logBudgets & { timestamps: boolean }): void {
+    const { timestamps, ...budgets } = settings;
     if (
+      typeof timestamps !== "boolean" ||
       !Number.isInteger(budgets.lines) ||
       budgets.lines < 1 ||
       budgets.lines > 100000 ||
@@ -139,12 +145,19 @@ export class LogDocument {
     )
       throw new Error("Invalid log budgets");
     if (
+      timestamps === this.#timestamps &&
       budgets.lines === this.budgets.lines &&
       budgets.characters === this.budgets.characters &&
       budgets.decorations === this.budgets.decorations
     )
       return;
+    const reformat = timestamps !== this.#timestamps;
     this.budgets = { ...budgets };
+    this.#timestamps = timestamps;
+    if (reformat) {
+      this.#rebuild(true);
+      return;
+    }
     this.#trim(true);
     this.#prune();
     this.#changed();
@@ -212,10 +225,7 @@ export class LogDocument {
     return this.type === "pods" ? source.container : source.podUid;
   }
   timestamps(value: boolean): void {
-    if (value !== this.#timestamps) {
-      this.#timestamps = value;
-      this.#rebuild(true);
-    }
+    this.applyPreferences({ ...this.budgets, timestamps: value });
   }
   append(lines: LogLine[]): void {
     for (const line of lines) this.#add({ sequence: this.#sequence++, line });

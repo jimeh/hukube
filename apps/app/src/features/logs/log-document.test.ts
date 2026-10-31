@@ -201,3 +201,106 @@ it("starts a new loss generation when confirmed timestamp formatting evicts more
   doc.timestamps(false);
   expect(doc.lossGeneration).toBe(2);
 });
+
+it.each(["characters", "decorations"] as const)(
+  "applies formatting and %s capacity together in both directions, notifying once and preserving sequences/references",
+  (budget) => {
+    const doc = new LogDocument("pods", { lines: 10, characters: 1000, decorations: 100 });
+    doc.status(status);
+    doc.append(
+      ["one", "two", "six"].map((text) => ({
+        source: 7,
+        time: 1,
+        text,
+        spans: [[0, 1, 1, -1, 0]],
+      })),
+    );
+    doc.end();
+    const ids = doc.rows.map((row) => row.sequence);
+    const plain = doc.rows.map((row) => row.text);
+    const tight = budget === "characters" ? 12 : 3;
+    let notifications = 0;
+    doc.subscribe(() => notifications++);
+    // Enlarging capacity must happen before timestamps can add text/styles.
+    doc.applyPreferences({
+      lines: 3,
+      characters: budget === "characters" ? tight : 1000,
+      decorations: budget === "decorations" ? tight : 100,
+      timestamps: false,
+    });
+    doc.applyPreferences({ lines: 3, characters: 1000, decorations: 100, timestamps: true });
+    expect(doc.rows.map((row) => row.sequence)).toEqual(ids);
+    expect(doc.rows.every((row) => row.spans.length === 2)).toBe(true);
+    expect(doc.rows.every((row) => row.spans[1]!.className === "log-fg-1")).toBe(true);
+    const changes = notifications;
+    const rewrites = doc.rewrites;
+    // Reducing capacity must happen after removing timestamp text/styles.
+    const final = {
+      lines: 3,
+      characters: budget === "characters" ? tight : 1000,
+      decorations: budget === "decorations" ? tight : 100,
+      timestamps: false,
+    };
+    doc.applyPreferences(final);
+    expect(doc.rows.map((row) => row.text)).toEqual(plain);
+    expect(doc.rows.map((row) => row.sequence)).toEqual(ids);
+    expect(doc.evictedLines).toBe(0);
+    expect(doc.lossGeneration).toBe(0);
+    expect(doc.retainedSources()).toEqual([7]);
+    expect(doc.metadataSnapshot()).toEqual({ sources: 1, colors: 1, retained: 1 });
+    expect(notifications).toBe(changes + 1);
+    expect(doc.rewrites).toBe(rewrites + 1);
+    doc.applyPreferences(final);
+    expect(notifications).toBe(changes + 1);
+    expect(doc.rewrites).toBe(rewrites + 1);
+    doc.applyPreferences({ ...final, characters: 1 });
+    expect(doc.evictedLines).toBe(3);
+    expect(doc.lossGeneration).toBe(1);
+    expect(doc.metadataSnapshot()).toEqual({ sources: 0, colors: 0, retained: 0 });
+  },
+);
+
+it("resets the actual default budgets and timestamps without losing any of 50000 rows that fit the final snapshot", () => {
+  const doc = new LogDocument("pods", { lines: 100000, characters: 64000000, decorations: 400000 });
+  doc.timestamps(true);
+  doc.append(Array.from({ length: 50000 }, () => ({ source: 7, time: 1, text: "x".repeat(630) })));
+  expect(doc.rows).toHaveLength(50000);
+  const rewrites = doc.rewrites;
+  doc.applyPreferences({
+    lines: 50000,
+    characters: 32000000,
+    decorations: 200000,
+    timestamps: false,
+  });
+  expect(doc.rows).toHaveLength(50000);
+  expect(doc.rows[0]!.sequence).toBe(0);
+  expect(doc.rows.at(-1)!.sequence).toBe(49999);
+  expect(doc.rows.reduce((sum, row) => sum + row.text.length + 1, 0)).toBe(31550000);
+  expect(doc.rows.every((row) => row.text === "x".repeat(630))).toBe(true);
+  expect(doc.evictedLines).toBe(0);
+  expect(doc.rewrites).toBe(rewrites + 1);
+});
+
+it("validates every preference before mutating formatting, budgets, rows or notifications", () => {
+  const doc = new LogDocument("pods");
+  doc.append([{ source: 7, time: 1, text: "one" }]);
+  const rows = doc.rows,
+    revision = doc.revision,
+    rewrites = doc.rewrites;
+  const settings = { ...doc.budgets, timestamps: true };
+  for (const invalid of [
+    { lines: 0 },
+    { characters: 64000001 },
+    { decorations: 1.5 },
+    { timestamps: "yes" },
+  ]) {
+    expect(() => doc.applyPreferences({ ...settings, ...invalid } as typeof settings)).toThrow(
+      /Invalid/,
+    );
+    expect(doc.rows).toBe(rows);
+    expect(doc.rows[0]!.text).toBe("one");
+    expect(doc.revision).toBe(revision);
+    expect(doc.rewrites).toBe(rewrites);
+    expect(doc.budgets).toEqual({ lines: 50000, characters: 32000000, decorations: 200000 });
+  }
+});

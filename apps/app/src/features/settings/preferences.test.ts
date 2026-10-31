@@ -464,3 +464,414 @@ it("retains a timed-out readback intent and reconciles it without a duplicate pu
   expect(h.store.getSnapshot().drafts.wrap?.status).toBe("Saved");
   expect(h.puts).toHaveLength(1);
 });
+
+it.each([
+  ["maxLines", "1"],
+  ["maxCharacters", "1"],
+  ["maxDecorations", "1"],
+  ["wrap", false],
+  ["timestamps", true],
+] as const)(
+  "reset supersedes unsent %s without trimming a real document or losing unrelated fields",
+  async (field, value) => {
+    const { LogDocument } = await import("../logs/log-document.ts");
+    const h = harness({
+      version: 1,
+      future: 9,
+      appearance: { future: 8 },
+      logStreams: { future: 7 },
+    });
+    await ready(h);
+    const doc = new LogDocument("pods");
+    doc.append(
+      ["one", "two", "three"].map((text) => ({
+        source: 1,
+        time: 1,
+        text,
+        spans: [[0, 1, 1, -1, 0]],
+      })),
+    );
+    const stop = h.store.subscribe(() => {
+      const v = h.store.getSnapshot().values;
+      doc.updateBudgets({
+        lines: v.maxLines,
+        characters: v.maxCharacters,
+        decorations: v.maxDecorations,
+      });
+      doc.timestamps(v.timestamps);
+    });
+    h.connection("reconnecting");
+    h.store.change(field, value);
+    h.store.change("theme", "light");
+    h.store.reset("logStreams");
+    expect(h.puts).toHaveLength(0);
+    h.connection("open");
+    await saved(h, "maxLines");
+    expect(h.puts).toHaveLength(2);
+    expect(h.puts[0]!.value).toEqual({
+      version: 1,
+      future: 9,
+      appearance: { future: 8, theme: "light" },
+      logStreams: { future: 7 },
+    });
+    expect(h.value()).toEqual({
+      version: 1,
+      future: 9,
+      appearance: { future: 8, theme: "light" },
+      logStreams: {
+        future: 7,
+        maxLines: 50000,
+        maxCharacters: 32000000,
+        maxDecorations: 200000,
+        wrap: true,
+        timestamps: false,
+      },
+    });
+    expect(doc.rows.map((row) => row.text)).toEqual(["one", "two", "three"]);
+    expect(doc.evictedLines).toBe(0);
+    stop();
+  },
+);
+
+it("preserves the remaining atomic reset group when a later commit or discard overlaps one field", async () => {
+  for (const action of ["commit", "discard"] as const) {
+    const h = harness({
+      version: 1,
+      logStreams: { maxLines: 10, maxCharacters: 100, wrap: false, timestamps: true, future: 4 },
+    });
+    await ready(h);
+    h.connection("reconnecting");
+    h.store.reset("logStreams");
+    if (action === "commit") h.store.change("maxLines", "20");
+    else h.store.discard(["maxLines"]);
+    h.connection("open");
+    await saved(h, "timestamps");
+    if (action === "commit") await saved(h, "maxLines");
+    expect(h.puts.map((p) => (p.value as { logStreams: unknown }).logStreams)).toEqual([
+      {
+        maxLines: 10,
+        maxCharacters: 32000000,
+        maxDecorations: 200000,
+        wrap: true,
+        timestamps: false,
+        future: 4,
+      },
+      ...(action === "commit"
+        ? [
+            {
+              maxLines: 20,
+              maxCharacters: 32000000,
+              maxDecorations: 200000,
+              wrap: true,
+              timestamps: false,
+              future: 4,
+            },
+          ]
+        : []),
+    ]);
+    expect(h.store.getSnapshot().values.maxLines).toBe(action === "commit" ? 20 : 10);
+  }
+});
+
+it.each(["discard", "supersede"] as const)(
+  "%s abandons active unsent retries for unknown unwritten, written, successful and conflict outcomes",
+  async (action) => {
+    for (const outcome of ["unwritten", "written", "success", "conflict"] as const) {
+      const h = harness({ version: 1, future: 1, logStreams: { maxLines: 30, extra: 2 } });
+      await ready(h);
+      vi.useFakeTimers();
+      const pending = Promise.withResolvers<void>();
+      h.write(() => pending.promise);
+      h.store.change("maxLines", "10");
+      expect(h.puts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(h.store.getSnapshot().drafts.maxLines?.status).toBe("Not saved");
+      if (action === "discard") h.store.discard(["maxLines"]);
+      else h.store.change("maxLines", "20");
+      expect(h.puts).toHaveLength(1);
+      if (outcome === "written" || outcome === "success") h.remote(h.puts[0]!.value);
+      h.write();
+      if (outcome === "success") pending.resolve();
+      else
+        pending.reject(
+          new EngineRequestError({
+            code: outcome === "conflict" ? "conflict" : "disconnected",
+            message: outcome,
+          }),
+        );
+      await vi.runAllTimersAsync();
+      expect(
+        h.puts.map((p) => (p.value as { logStreams: { maxLines: number } }).logStreams.maxLines),
+      ).toEqual(action === "discard" ? [10] : [10, 20]);
+      expect(h.store.getSnapshot().values.maxLines).toBe(
+        action === "supersede" ? 20 : outcome === "written" || outcome === "success" ? 10 : 30,
+      );
+      expect(h.store.getSnapshot().raw).toMatchObject({ future: 1, logStreams: { extra: 2 } });
+      const draft = h.store.getSnapshot().drafts.maxLines;
+      expect(
+        draft && { value: draft.value, status: draft.status, conflict: draft.conflict },
+      ).toEqual(
+        action === "discard" ? undefined : { value: "20", status: "Saved", conflict: false },
+      );
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(["discard", "supersede"] as const)(
+  "%s survives failed readback recovery without reviving obsolete fields and still recognizes a landed predecessor",
+  async (action) => {
+    for (const landed of [false, true]) {
+      const h = harness({ version: 1, logStreams: { maxLines: 30 } });
+      await ready(h);
+      vi.useFakeTimers();
+      const pending = Promise.withResolvers<void>();
+      h.write(() => pending.promise);
+      h.store.change("maxLines", "10");
+      expect(h.puts).toHaveLength(1);
+      if (action === "discard") h.store.discard(["maxLines"]);
+      else h.store.change("maxLines", "20");
+      h.read(true);
+      if (landed) h.remote(h.puts[0]!.value);
+      h.write();
+      pending.reject(new EngineRequestError({ code: "disconnected", message: "unknown" }));
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(h.store.getSnapshot().fresh).toBe(false);
+      expect(h.puts).toHaveLength(1);
+      h.read(false);
+      h.store.retry();
+      await vi.runAllTimersAsync();
+      expect(
+        h.puts.map((p) => (p.value as { logStreams: { maxLines: number } }).logStreams.maxLines),
+      ).toEqual(action === "discard" ? [10] : [10, 20]);
+      expect(h.store.getSnapshot().values.maxLines).toBe(
+        action === "supersede" ? 20 : landed ? 10 : 30,
+      );
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("keeps real remote conflicts and valid sent ownership when newer typing is invalid or uncommitted", async () => {
+  const h = harness({ version: 1, logStreams: { maxLines: 30 } });
+  await ready(h);
+  const pending = Promise.withResolvers<void>();
+  h.write(() => pending.promise);
+  h.store.change("maxLines", "10");
+  h.store.edit("maxLines", "");
+  h.store.commit(["maxLines"]);
+  h.write();
+  pending.reject(new EngineRequestError({ code: "disconnected", message: "unknown" }));
+  await vi.waitFor(() => expect(h.puts).toHaveLength(2));
+  expect(
+    h.puts.map((p) => (p.value as { logStreams: { maxLines: number } }).logStreams.maxLines),
+  ).toEqual([10, 10]);
+  await vi.waitFor(() => expect(h.store.getSnapshot().values.maxLines).toBe(10));
+  expect(h.store.getSnapshot().drafts.maxLines).toMatchObject({ value: "", status: "Not saved" });
+  h.store.change("maxLines", "20");
+  await saved(h, "maxLines");
+  h.connection("reconnecting");
+  h.store.change("maxLines", "25");
+  h.remote({ version: 1, logStreams: { maxLines: 22 } });
+  h.connection("open");
+  await vi.waitFor(() => expect(h.store.getSnapshot().drafts.maxLines?.conflict).toBe(true));
+  expect(h.puts).toHaveLength(3);
+});
+
+it.each(["100", " 100 ", "00100"])(
+  "reconciles equal typed numeric draft %j without writing or losing raw text",
+  async (text) => {
+    const h = harness();
+    await ready(h);
+    h.store.edit("maxLines", text);
+    h.remote({ version: 1, logStreams: { maxLines: 100 } });
+    expect(h.store.getSnapshot().drafts.maxLines).toMatchObject({
+      value: text,
+      conflict: false,
+      status: "Not saved",
+    });
+    h.store.commit(["maxLines"]);
+    await saved(h, "maxLines");
+    expect(h.puts).toHaveLength(0);
+  },
+);
+
+it.each(["", " ", "1e2", "100.", "0"])(
+  "preserves invalid numeric draft %j and real remote conflict",
+  async (text) => {
+    const h = harness();
+    await ready(h);
+    h.store.edit("maxLines", text);
+    h.remote({ version: 1, logStreams: { maxLines: 100 } });
+    h.store.commit(["maxLines"]);
+    expect(h.store.getSnapshot().drafts.maxLines).toMatchObject({
+      value: text,
+      status: "Not saved",
+      conflict: true,
+    });
+    expect(h.puts).toHaveLength(0);
+  },
+);
+
+it.each(["discard", "supersede"] as const)(
+  "%s of one active reset field preserves the other reset fields as one retry after unknown unwritten outcome",
+  async (action) => {
+    const h = harness({
+      version: 1,
+      future: 1,
+      appearance: { theme: "light", extra: 2 },
+      logStreams: {
+        maxLines: 30,
+        maxCharacters: 100,
+        maxDecorations: 100,
+        wrap: false,
+        timestamps: true,
+        extra: 3,
+      },
+    });
+    await ready(h);
+    const pending = Promise.withResolvers<void>();
+    h.write(() => pending.promise);
+    h.store.reset("logStreams");
+    expect(h.puts).toHaveLength(1);
+    if (action === "discard") h.store.discard(["maxLines"]);
+    else h.store.change("maxLines", "20");
+    h.write();
+    pending.reject(new EngineRequestError({ code: "disconnected", message: "unknown" }));
+    await saved(h, "timestamps");
+    if (action === "supersede") await saved(h, "maxLines");
+    expect(h.puts.map((p) => p.value)).toEqual([
+      {
+        version: 1,
+        future: 1,
+        appearance: { theme: "light", extra: 2 },
+        logStreams: {
+          maxLines: 50000,
+          maxCharacters: 32000000,
+          maxDecorations: 200000,
+          wrap: true,
+          timestamps: false,
+          extra: 3,
+        },
+      },
+      {
+        version: 1,
+        future: 1,
+        appearance: { theme: "light", extra: 2 },
+        logStreams: {
+          maxLines: 30,
+          maxCharacters: 32000000,
+          maxDecorations: 200000,
+          wrap: true,
+          timestamps: false,
+          extra: 3,
+        },
+      },
+      ...(action === "supersede"
+        ? [
+            {
+              version: 1,
+              future: 1,
+              appearance: { theme: "light", extra: 2 },
+              logStreams: {
+                maxLines: 20,
+                maxCharacters: 32000000,
+                maxDecorations: 200000,
+                wrap: true,
+                timestamps: false,
+                extra: 3,
+              },
+            },
+          ]
+        : []),
+    ]);
+  },
+);
+
+it("does not falsely settle an equal numeric successor while a preceding write/readback remains unresolved", async () => {
+  const h = harness();
+  await ready(h);
+  const pending = Promise.withResolvers<void>();
+  h.write(() => pending.promise);
+  h.store.change("maxLines", "100");
+  h.store.edit("maxLines", " 00100 ");
+  h.remote(h.puts[0]!.value);
+  h.store.commit(["maxLines"]);
+  expect(h.store.getSnapshot().drafts.maxLines).toMatchObject({
+    value: " 00100 ",
+    conflict: false,
+    status: "Not saved",
+  });
+  h.read(true);
+  pending.resolve();
+  await vi.waitFor(() => expect(h.watches).toHaveLength(2));
+  expect(h.store.getSnapshot().drafts.maxLines?.status).toBe("Not saved");
+  h.read(false);
+  h.emit();
+  await saved(h, "maxLines");
+  expect(h.puts).toHaveLength(1);
+});
+
+it("does not advance a superseding intent over a real remote same-field change after a sent predecessor", async () => {
+  const h = harness({ version: 1, logStreams: { maxLines: 30 } });
+  await ready(h);
+  const pending = Promise.withResolvers<void>();
+  h.write(() => pending.promise);
+  h.store.change("maxLines", "10");
+  h.store.change("maxLines", "20");
+  h.remote({ version: 1, logStreams: { maxLines: 15 } });
+  pending.reject(new EngineRequestError({ code: "disconnected", message: "unknown" }));
+  await vi.waitFor(() =>
+    expect(h.store.getSnapshot().drafts.maxLines?.error).toContain("another window"),
+  );
+  expect(h.store.getSnapshot().drafts.maxLines).toMatchObject({
+    value: "20",
+    status: "Not saved",
+    conflict: true,
+  });
+  expect(h.puts).toHaveLength(1);
+  expect(h.store.getSnapshot().values.maxLines).toBe(15);
+});
+
+it("never applies an obsolete unwritten reduction to a real document after read failure and discard", async () => {
+  const { LogDocument } = await import("../logs/log-document.ts");
+  const h = harness({ version: 1, logStreams: { maxLines: 30 } });
+  await ready(h);
+  const doc = new LogDocument("pods");
+  doc.append(Array.from({ length: 25 }, (_, i) => ({ source: 1, time: 1, text: String(i) })));
+  const confirmed: unknown[] = [];
+  const stop = h.store.subscribe(() => {
+    const snapshot = h.store.getSnapshot();
+    confirmed.push(snapshot.values.maxLines);
+    doc.updateBudgets({ ...doc.budgets, lines: snapshot.values.maxLines });
+  });
+  const pending = Promise.withResolvers<void>();
+  h.write(() => pending.promise);
+  h.store.change("maxLines", "10");
+  expect(h.puts).toHaveLength(1);
+  h.read(true);
+  pending.reject(new EngineRequestError({ code: "disconnected", message: "unknown" }));
+  await vi.waitFor(() => expect(h.watches).toHaveLength(2));
+  h.watches.at(-1)!.listener.error({ code: "internal", message: "read failed" });
+  await vi.waitFor(() => expect(h.store.getSnapshot().drafts.maxLines?.status).toBe("Not saved"));
+  h.store.discard(["maxLines"]);
+  h.read(false);
+  h.write();
+  h.store.retry();
+  await ready(h);
+  h.store.change("maxLines", "20");
+  await saved(h, "maxLines");
+  expect(h.puts.map((p) => p.value)).toEqual([
+    { version: 1, appearance: {}, logStreams: { maxLines: 10 } },
+    { version: 1, appearance: {}, logStreams: { maxLines: 20 } },
+  ]);
+  expect(confirmed).not.toContain(10);
+  expect(doc.rows).toHaveLength(20);
+  expect(doc.rows[0]!.sequence).toBe(5);
+  expect(h.store.getSnapshot().raw).toEqual({
+    version: 1,
+    appearance: {},
+    logStreams: { maxLines: 20 },
+  });
+  stop();
+});
