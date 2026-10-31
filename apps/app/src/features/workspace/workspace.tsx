@@ -32,6 +32,7 @@ import {
 import { rememberSessionTab, restoreSessionTabs } from "../exec/window-tabs.ts";
 
 import { openPanel, pinPanel, type ListPanelParams, type ResourcePanelParams } from "./dock.ts";
+import { bindPaneInteractivity } from "./pane-interactivity.ts";
 import { PaneHeaderActions } from "./pane-header-actions.tsx";
 import { PanelTab } from "./panel-tab.tsx";
 import { StatusBar } from "./status-bar.tsx";
@@ -82,6 +83,10 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
     () => ({ name: "hukube", className: "dockview-theme-hukube", colorScheme }),
     [colorScheme],
   );
+
+  useEffect(() => {
+    if (api) return bindPaneInteractivity(api);
+  }, [api]);
 
   useLayoutPersistence(api, cluster, () => {
     if (api) restoreSessionTabs(api, cluster);

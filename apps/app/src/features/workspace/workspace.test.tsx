@@ -92,7 +92,7 @@ vi.mock("dockview-react", () => ({
           if (mocks.broken) throw new Error("invalid layout");
         },
         activeGroup: { id: "active-pane" },
-        groups: [{ id: "first-pane" }],
+        groups: [],
         getPanel: (id: string) => mocks.panels.find((panel) => panel.id === id),
         addPanel: (options: (typeof mocks.addOptions)[number] & { id: string; title: string }) => {
           mocks.addOptions.push(options);
@@ -109,6 +109,9 @@ vi.mock("dockview-react", () => ({
           register(mocks.added, fn),
         onDidRemovePanel: (fn: typeof mocks.removed extends Set<infer T> ? T : never) =>
           register(mocks.removed, fn),
+        onDidAddGroup: () => ({ dispose: () => {} }),
+        onDidRemoveGroup: () => ({ dispose: () => {} }),
+        onDidMaximizedGroupChange: () => ({ dispose: () => {} }),
         onDidLayoutChange: () => ({ dispose: () => {} }),
         onDidActivePanelChange: () => ({ dispose: () => {} }),
       };

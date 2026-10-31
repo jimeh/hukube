@@ -152,6 +152,62 @@ async function assertVisibleFocus(page: Page) {
   ).toBe(true);
 }
 
+/** Traverse a complete keyboard cycle, checking the mounted hidden subtree and AX tree. */
+async function assertHiddenPaneExcluded(page: Page, hidden: Locator, restore: Locator) {
+  await expect(hidden).toHaveCount(1);
+  expect(await hidden.evaluate((element) => element.getBoundingClientRect().width)).toBe(0);
+  await expect(restore).toBeFocused();
+  const visited = new Set<string>();
+  let cycled = false;
+  for (let index = 0; index < 160; index++) {
+    await page.keyboard.press("Tab");
+    const focus = await page.evaluate(() => {
+      const element = document.activeElement as HTMLElement;
+      const group = element.closest(".dv-groupview");
+      return {
+        hidden:
+          !!group && (group.getBoundingClientRect().width === 0 || !!group.closest("[inert]")),
+        label: element.outerHTML,
+      };
+    });
+    expect(focus.hidden, `Tab reached hidden Pane: ${focus.label}`).toBe(false);
+    visited.add(focus.label);
+    if (await restore.evaluate((element) => element === document.activeElement)) {
+      cycled = true;
+      break;
+    }
+  }
+  expect(cycled, "Tab must complete a cycle back to Restore Panes").toBe(true);
+  expect(visited.size, "Tab must traverse meaningful visible app controls").toBeGreaterThan(5);
+  // Playwright's DOM-derived ariaSnapshot includes inert descendants when the
+  // snapshot root is inside them. Inspect Chromium's native AX tree instead.
+  const session = await page.context().newCDPSession(page);
+  try {
+    const index = await hidden.evaluate((element) =>
+      Array.from(document.querySelectorAll(".dv-groupview")).indexOf(element),
+    );
+    const { root } = await session.send("DOM.getDocument");
+    const { nodeIds } = await session.send("DOM.querySelectorAll", {
+      nodeId: root.nodeId,
+      selector: ".dv-groupview",
+    });
+    const { nodes } = await session.send("Accessibility.getPartialAXTree", {
+      nodeId: nodeIds[index],
+      fetchRelatives: false,
+    });
+    expect(nodes[0]?.ignored, "Chromium must exclude the hidden Pane from its native AX tree").toBe(
+      true,
+    );
+    expect(
+      nodes[0]?.ignoredReasons?.some(
+        ({ name }) => name === "inertElement" || name === "inertSubtree",
+      ),
+    ).toBe(true);
+  } finally {
+    await session.detach();
+  }
+}
+
 /** Retain real public Monaco objects to detect reconstruction as well as lost draft/selection. */
 async function captureDraft(page: Page, editor: Locator) {
   const element = await editor.elementHandle();
@@ -219,6 +275,21 @@ export async function paneZoomResourceScenario(
   const right = pane(page, resourceNames[0]);
   const header = right.locator(".dv-tabs-and-actions-container");
   const height = (await header.boundingBox())!.height;
+  // A hidden Resource must keep its draft/model while its header and edit actions
+  // are excluded from both native Tab traversal and the accessibility tree.
+  const listPane = pane(page, "configmaps");
+  await listPane.getByRole("button", { name: "Zoom Pane" }).click();
+  await assertHiddenPaneExcluded(
+    page,
+    right,
+    listPane.getByRole("button", { name: "Restore Panes" }),
+  );
+  await go(page, namespace, "configmaps", resourceNames[0]);
+  await expect(page.getByRole("button", { name: "Restore Panes" })).toHaveCount(0);
+  await expect(draft).toBeVisible();
+  await assertVisibleFocus(page);
+  await tabToZoom(page, right.getByRole("button", { name: "Zoom Pane" }));
+  await expect(right.getByRole("button", { name: "Zoom Pane" })).toBeFocused();
   const zoom = right.getByRole("button", { name: "Zoom Pane" });
   await zoom.click();
   const restore = right.getByRole("button", { name: "Restore Panes" });

@@ -9,11 +9,13 @@ import {
 import { useEffect } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Setting } from "@hukube/engine-client";
+import { bindPaneInteractivity } from "./pane-interactivity.ts";
 import { PaneHeaderActions } from "./pane-header-actions.tsx";
 import { persistLayout } from "./layout-persistence.ts";
 import { openPanel, type ResourcePanelParams } from "./dock.ts";
 import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
 
+const interactivity: (() => void)[] = [];
 let mounted = 0;
 let unmounted = 0;
 function Content({ api }: IDockviewPanelProps) {
@@ -41,6 +43,7 @@ beforeEach(() => {
   mounted = unmounted = 0;
 });
 afterEach(() => {
+  interactivity.splice(0).forEach((dispose) => dispose());
   cleanup();
   useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
   vi.clearAllTimers();
@@ -77,6 +80,7 @@ function view() {
       onReady={(event) => {
         api = event.api;
         api.layout(1200, 800);
+        interactivity.push(bindPaneInteractivity(api));
       }}
     />,
   );
@@ -349,7 +353,7 @@ it("disposes header subscriptions on unmount while the native Workspace remains 
     />,
   );
   await settle();
-  expect(disposals).toHaveLength(events.length + 2);
+  expect(disposals).toHaveLength(events.length + 1);
   header.unmount();
   for (const dispose of disposals) expect(dispose).toHaveBeenCalledOnce();
   act(() => first.group.api.maximize());
@@ -382,6 +386,10 @@ it("keeps zoom independent in two mounted Workspaces and retains it while hidden
 
 it("uses native openPanel, close, move and split semantics without stranding hidden Tabs", async () => {
   const { api, add } = view();
+  const assertInteractivity = () => {
+    for (const group of api.groups)
+      expect(group.element.hasAttribute("inert")).toBe(!group.api.isVisible);
+  };
   const first = add("a");
   const second = add("b", "a", "right");
   const open = (id: string, pane?: string, beside?: string) =>
@@ -398,6 +406,7 @@ it("uses native openPanel, close, move and split semantics without stranding hid
     );
   fireEvent.click(control(first.group));
   await settle();
+  assertInteractivity();
   open("preview", "a");
   expect(first.group.api.isMaximized()).toBe(true);
   expect(second.api.isVisible).toBe(false);
@@ -408,23 +417,162 @@ it("uses native openPanel, close, move and split semantics without stranding hid
   expect(second.api.isVisible).toBe(false);
   open("b");
   await settle();
+  assertInteractivity();
   expect(first.group.api.isMaximized()).toBe(false);
   expect(second.api.isVisible).toBe(true);
   fireEvent.click(control(first.group));
   await settle();
+  assertInteractivity();
   open("beside", undefined, "a");
+  assertInteractivity();
   expect(first.group.api.isMaximized()).toBe(false);
   fireEvent.click(control(first.group));
   await settle();
+  assertInteractivity();
   const split = add("split", "a", "below");
+  assertInteractivity();
   expect(first.group.api.isMaximized()).toBe(false);
   fireEvent.click(control(first.group));
   await settle();
+  assertInteractivity();
   act(() => split.api.moveTo({ group: second.group }));
+  assertInteractivity();
   expect(first.group.api.isMaximized()).toBe(false);
   fireEvent.click(control(first.group));
   await settle();
+  assertInteractivity();
   act(() => first.api.close());
   expect(api.groups.every((group) => !group.api.isMaximized())).toBe(true);
+  assertInteractivity();
   expect(api.activePanel?.api.isVisible).toBe(true);
+});
+
+it.each([true, false])(
+  "makes native-hidden Panes inert on %s active entry without replacing content",
+  async (active) => {
+    const { api, add } = view();
+    const first = add("a");
+    const second = add("b", "a", "right");
+    const field = within(second.group.element).getByRole<HTMLTextAreaElement>("textbox");
+    field.value = "retained draft";
+    field.setSelectionRange(2, 7);
+    if (active) act(() => first.api.setActive());
+    fireEvent.click(control(first.group));
+    expect(second.group.api.isVisible).toBe(false);
+    expect(second.group.element.hasAttribute("inert")).toBe(true);
+    expect(first.group.element.hasAttribute("inert")).toBe(false);
+    const button = control(first.group, "Restore Panes");
+    act(() => {
+      api.toJSON();
+    });
+    expect(second.group.element.hasAttribute("inert")).toBe(true);
+    expect(document.activeElement).toBe(button);
+    act(() => second.api.setActive());
+    expect(second.group.element.hasAttribute("inert")).toBe(false);
+    expect(within(second.group.element).getByRole("textbox")).toBe(field);
+    expect(field.value).toBe("retained draft");
+    expect([field.selectionStart, field.selectionEnd]).toEqual([2, 7]);
+    expect(mounted).toBe(2);
+    expect(unmounted).toBe(0);
+  },
+);
+
+it("initializes already hidden groups and releases only its own inertness on disposal", () => {
+  const { api, add } = view();
+  const first = add("a");
+  const second = add("b", "a", "right");
+  const third = add("c", "b", "below");
+  interactivity.pop()!();
+  third.group.element.setAttribute("inert", "");
+  act(() => first.group.api.maximize());
+  const dispose = bindPaneInteractivity(api);
+  expect(second.group.element.hasAttribute("inert")).toBe(true);
+  expect(third.group.element.hasAttribute("inert")).toBe(true);
+  dispose();
+  expect(second.group.element.hasAttribute("inert")).toBe(false);
+  expect(third.group.element.hasAttribute("inert")).toBe(true);
+  act(() => {
+    first.group.api.exitMaximized();
+    first.group.api.maximize();
+  });
+  expect(second.group.element.hasAttribute("inert")).toBe(false);
+});
+
+it("keeps ancestor recovery inertness and does not steal focus from another Workspace", async () => {
+  const { api, add, container } = view();
+  const first = add("a");
+  const second = add("b", "a", "right");
+  const other = document.createElement("button");
+  document.body.append(other);
+  other.focus();
+  container.setAttribute("inert", "");
+  act(() => first.group.api.maximize());
+  expect(second.group.element.hasAttribute("inert")).toBe(true);
+  act(() => {
+    api.toJSON();
+  });
+  act(() => first.group.api.exitMaximized());
+  expect(second.group.element.hasAttribute("inert")).toBe(false);
+  expect(container.hasAttribute("inert")).toBe(true);
+  expect(document.activeElement).toBe(other);
+  container.removeAttribute("inert");
+  other.remove();
+  await settle();
+});
+
+it("repairs external maximize focus even when native inert blurs before the maximize notification", async () => {
+  const { add } = view();
+  const first = add("a");
+  const second = add("b", "a", "right");
+  const field = within(second.group.element).getByRole<HTMLTextAreaElement>("textbox");
+  field.focus();
+  // jsdom has no native inert focus behavior. Reproduce the browser's blur at
+  // the attribute write, before Dockview delivers its maximize notification.
+  const setAttribute = second.group.element.setAttribute.bind(second.group.element);
+  const blur = vi.spyOn(second.group.element, "setAttribute").mockImplementation((name, value) => {
+    setAttribute(name, value);
+    if (name === "inert") field.blur();
+  });
+  act(() => first.group.api.maximize());
+  await settle();
+  expect(blur).toHaveBeenCalledWith("inert", "");
+  expect(second.group.element.hasAttribute("inert")).toBe(true);
+  expect(document.activeElement).toBe(control(first.group, "Restore Panes"));
+  blur.mockRestore();
+});
+
+it("disposes removed and reloaded group subscriptions and binds their replacements", () => {
+  const { api, add } = view();
+  const first = add("a");
+  const second = add("b", "a", "right");
+  interactivity.pop()!();
+  const disposals: ReturnType<typeof vi.fn>[] = [];
+  for (const group of api.groups) {
+    const event = group.api.onDidVisibilityChange;
+    vi.spyOn(group.api, "onDidVisibilityChange").mockImplementation((listener) => {
+      const subscription = event(listener);
+      const dispose = vi.fn<() => void>(() => subscription.dispose());
+      disposals.push(dispose);
+      return { dispose };
+    });
+  }
+  const dispose = bindPaneInteractivity(api);
+  const saved = api.toJSON();
+  act(() => second.api.close());
+  expect(disposals[1]).toHaveBeenCalledOnce();
+  act(() => api.fromJSON(saved));
+  expect(disposals[0]).toHaveBeenCalledOnce();
+  const restored = api.getPanel("a")!;
+  const peer = api.getPanel("b")!;
+  act(() => restored.group.api.maximize());
+  expect(peer.group.element.hasAttribute("inert")).toBe(true);
+  dispose();
+  expect(peer.group.element.hasAttribute("inert")).toBe(false);
+  expect(disposals.every((entry) => entry.mock.calls.length === 1)).toBe(true);
+  act(() => {
+    restored.group.api.exitMaximized();
+    restored.group.api.maximize();
+  });
+  expect(peer.group.element.hasAttribute("inert")).toBe(false);
+  expect(first).not.toBe(restored);
 });

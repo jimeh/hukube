@@ -1,13 +1,12 @@
 import { Button } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
-import { Maximize01Icon, Minimize01Icon } from "@hugeicons/core-free-icons";
+import { ArrowExpand01Icon, ArrowShrink01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewHeaderActionsProps } from "dockview-react";
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 /** Native layout state is the authority, including exits caused by navigation. */
 export function PaneHeaderActions({ api, containerApi }: IDockviewHeaderActionsProps) {
-  const button = useRef<HTMLButtonElement>(null);
   const snapshot = useCallback(() => {
     if (api.location.type !== "grid") return "hidden";
     if (api.isMaximized()) return "restore";
@@ -32,25 +31,6 @@ export function PaneHeaderActions({ api, containerApi }: IDockviewHeaderActionsP
   );
   const state = useSyncExternalStore(subscribe, snapshot);
 
-  useEffect(() => {
-    const subscription = containerApi.onDidMaximizedGroupChange((event) => {
-      if (!event.isMaximized || event.group.api !== api) return;
-      const control = button.current;
-      if (!control?.isConnected || control.closest("[hidden], [inert]")) return;
-      const focused = document.activeElement;
-      if (
-        containerApi.groups.some(
-          (group) =>
-            group.api.location.type === "grid" &&
-            group.api !== api &&
-            group.element.contains(focused),
-        )
-      )
-        control.focus({ preventScroll: true });
-    });
-    return () => subscription.dispose();
-  }, [api, containerApi]);
-
   if (state === "hidden") return null;
   const maximized = state === "restore";
   const label = maximized ? "Restore Panes" : "Zoom Pane";
@@ -61,7 +41,6 @@ export function PaneHeaderActions({ api, containerApi }: IDockviewHeaderActionsP
           delay={400}
           render={
             <Button
-              ref={button}
               type="button"
               variant="ghost"
               size="icon-sm"
@@ -86,7 +65,7 @@ export function PaneHeaderActions({ api, containerApi }: IDockviewHeaderActionsP
             />
           }
         >
-          <HugeiconsIcon icon={maximized ? Minimize01Icon : Maximize01Icon} aria-hidden />
+          <HugeiconsIcon icon={maximized ? ArrowShrink01Icon : ArrowExpand01Icon} aria-hidden />
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
       </Tooltip>
