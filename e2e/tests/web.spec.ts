@@ -1646,7 +1646,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await expect(limit).toHaveValue("2");
   await page.getByRole("button", { name: /^Back to / }).click();
   await expect(
-    workload.getByText(/oldest retained lines removed by retention limits/),
+    workload.getByRole("button", { name: "Dismiss retention notice", exact: true }),
   ).toBeVisible();
   expect(await page.locator(".monaco-editor").count()).toBe(instances);
   const copied = async (panel: Locator) => {
@@ -1660,7 +1660,9 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
     .toBeLessThanOrEqual(2);
   await page.getByRole("tab", { name: podNames[0]!, exact: true }).click();
   await pod.getByRole("tab", { name: "Logs", exact: true }).click();
-  await expect(pod.getByText(/oldest retained lines removed by retention limits/)).toBeVisible();
+  await expect(
+    pod.getByRole("button", { name: "Dismiss retention notice", exact: true }),
+  ).toBeVisible();
   await expect
     .poll(async () => (await copied(pod)).trim().split("\n").length)
     .toBeLessThanOrEqual(2);
