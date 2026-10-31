@@ -158,13 +158,22 @@ async function captureDraft(page: Page, editor: Locator) {
   return page.evaluateHandle(async (dom) => {
     interface Model {
       getValue(): string;
+      getValueInRange(range: unknown): string;
     }
     interface Editor {
       getDomNode(): HTMLElement;
       getModel(): Model;
       getSelection(): { toString(): string } | null;
     }
-    for (const { name } of performance.getEntriesByType("resource")) {
+    // Custom-scheme Electron resources may not appear in Performance entries.
+    const scripts = document.querySelectorAll<HTMLScriptElement | HTMLLinkElement>(
+      'script[src], link[rel="modulepreload"]',
+    );
+    const urls = new Set([
+      ...performance.getEntriesByType("resource").map(({ name }) => name),
+      ...Array.from(scripts, (node) => ("src" in node ? node.src : node.href)),
+    ]);
+    for (const name of urls) {
       if (!name.endsWith(".js")) continue;
       const module = (await import(/* @vite-ignore */ name)) as Record<
         string,
@@ -227,6 +236,12 @@ export async function paneZoomResourceScenario(
     if (await toggle.count()) await toggle.click();
     for (const width of [1024, 640]) {
       await page.setViewportSize({ width, height: 900 });
+      await expect
+        .poll(async () => {
+          const box = (await restore.boundingBox())!;
+          return box.x + box.width;
+        })
+        .toBeLessThanOrEqual(width);
       const bounds = (await restore.boundingBox())!;
       expect(bounds.width).toBeGreaterThanOrEqual(24);
       expect(bounds.height).toBeGreaterThanOrEqual(24);
@@ -269,6 +284,12 @@ export async function paneZoomResourceScenario(
   await right.getByRole("button", { name: "Zoom Pane" }).click();
   await page.setViewportSize({ width: 540, height: 900 });
   const narrowRestore = right.getByRole("button", { name: "Restore Panes" });
+  await expect
+    .poll(async () => {
+      const box = (await narrowRestore.boundingBox())!;
+      return box.x + box.width;
+    })
+    .toBeLessThanOrEqual(540);
   const narrowBounds = (await narrowRestore.boundingBox())!;
   expect(narrowBounds.x + narrowBounds.width).toBeLessThanOrEqual(540);
   expect(narrowBounds.width).toBeGreaterThanOrEqual(24);
@@ -277,7 +298,11 @@ export async function paneZoomResourceScenario(
   await preview.click();
   await expect(right.getByRole("button", { name: "Restore Panes" })).toBeVisible();
   // Reorder by a real drag. Splitting a Tab off accepts the native exit.
-  await preview.dragTo(tab(page, resourceNames[0]), { targetPosition: { x: 5, y: 15 } });
+  const firstTab = tab(page, resourceNames[0]);
+  const firstTabBounds = (await firstTab.boundingBox())!;
+  await preview.dragTo(firstTab, {
+    targetPosition: { x: firstTabBounds.width / 2, y: firstTabBounds.height / 2 },
+  });
   await expect(right.getByRole("button", { name: "Restore Panes" })).toBeVisible();
   const content = right.locator(".dv-content-container");
   const box = (await content.boundingBox())!;
@@ -333,6 +358,8 @@ export async function paneZoomExecScenario(
   await list.getByRole("row", { name: new RegExp(`${zoomPod} ${namespace}`) }).click();
   const pod = page.getByRole("tabpanel", { name: zoomPod, exact: true });
   await pod.getByRole("tab", { name: "Logs", exact: true }).click();
+  // Keep this observation Tab when a later sidebar click opens another preview.
+  await tab(page, zoomPod).dblclick();
   await expect(pod.locator(".monaco-editor:visible .view-lines")).toContainText("zoom-log-");
   await pod.getByRole("button", { name: "Open an Exec Session", exact: true }).click();
   const session = page.getByRole("tabpanel", { name: `app in ${zoomPod}`, exact: true });
@@ -348,10 +375,23 @@ export async function paneZoomExecScenario(
   await go(page, namespace, "configmaps", resourceNames[1]);
   await tab(page, title).click();
   const logEditor = pod.locator(".monaco-editor:visible");
-  await logEditor.click();
-  await page.keyboard.press("ControlOrMeta+Home");
-  await page.keyboard.press("Shift+End");
+  const logSelection = await captureDraft(page, logEditor);
+  const selectedLogText = () =>
+    logSelection.evaluate(({ editor, model }) => model.getValueInRange(editor.getSelection()));
+  await logEditor.getByRole("textbox").focus();
+  await page.keyboard.press("ControlOrMeta+A");
+  await expect.poll(selectedLogText).toContain("zoom-log-");
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(selectedLogText).toBe("");
+  for (let character = 0; character < 10; character++) {
+    await page.keyboard.press("Shift+ArrowRight");
+    await expect.poll(selectedLogText).toHaveLength(character + 1);
+  }
+  await logSelection.dispose();
   const logModel = await captureDraft(page, logEditor);
+  expect(
+    await logModel.evaluate(({ editor, model }) => model.getValueInRange(editor.getSelection())),
+  ).toMatch(/zoom-log-\d/);
   const originalLog = wire.streams
     .filter((stream) => stream.method === "resource.logs" && stream.params?.["name"] === zoomPod)
     .at(-1)!;

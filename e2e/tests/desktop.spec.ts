@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -56,7 +57,13 @@ for (const scenario of ["Resources", "Exec and Logs"] as const) {
         await expect(other.getByRole("button", { name: "Restore Panes" })).toHaveCount(0);
       } else await paneZoomExecScenario(window, namespace, wire);
     } finally {
-      await app?.close();
+      // A failed draft/session assertion must not strand teardown in its close guard.
+      const child = app?.process();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGTERM");
+        await exited;
+      }
       kubectl("delete", "namespace", namespace, "--wait=false");
     }
   });
