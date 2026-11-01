@@ -81,6 +81,7 @@ export class CommandRuntime {
   // Compare published palette output, never callback identity or copied owner state.
   private paletteObservation?: { content: string; types?: WorkspaceValue["types"] };
   private held = new Set<string>();
+  private returnFocus?: { origin: Origin; target: Origin; closed: boolean };
   readonly chords = new Chords<Origin>((hint) => this.show({ hint }));
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -88,6 +89,7 @@ export class CommandRuntime {
   };
   getSnapshot = () => this.view;
   private show(patch: Partial<View>) {
+    if (patch.palette) this.returnFocus = undefined;
     this.view = { ...this.view, ...patch };
     this.paletteObservation = this.observePalette();
     for (const fn of this.listeners) fn();
@@ -110,6 +112,12 @@ export class CommandRuntime {
       this.config?.route !== config.route
     )
       this.chords.cancel();
+    if (
+      this.config?.route !== config.route ||
+      config.modalCount > (this.config?.modalCount ?? 0) ||
+      config.connection === "outdated"
+    )
+      this.returnFocus = undefined;
     const mapChanged = this.config?.map !== config.map;
     this.config = config;
     if (mapChanged) this.show({});
@@ -127,6 +135,7 @@ export class CommandRuntime {
     };
   }
   refreshAvailability() {
+    if (this.returnFocus && !this.valid(this.returnFocus.target)) this.returnFocus = undefined;
     if (this.chords.pending && !this.valid(this.chords.pending.origin)) this.chords.cancel();
     if (
       this.config?.connection === "outdated" ||
@@ -456,32 +465,50 @@ export class CommandRuntime {
     if (this.view.palette) this.show({ palette: { ...this.view.palette, prompt: undefined } });
   }
   closePalette(restore = true) {
+    if (!restore) this.returnFocus = undefined;
     const origin = this.view.palette?.origin;
     if (!origin) return;
+    this.returnFocus = restore
+      ? { origin, target: this.valid(origin) ? origin : this.capture(), closed: false }
+      : undefined;
     this.show({ palette: undefined });
-    if (restore) {
-      const restoreOrigin = () => {
-        if (origin.route !== this.config?.route || (this.config?.modalCount ?? 0) > 0) return;
-        if (origin.element?.isConnected && origin.element.getClientRects().length)
-          origin.element.focus();
-        else {
-          const fallback = this.valid(origin) ? origin : this.capture();
-          const focus = fallback.surface?.read().focus;
-          if (focus) focus();
-          else
-            document
-              .querySelector<HTMLElement>('nav[aria-label=Clusters] [aria-label="Command palette"]')
-              ?.focus({ preventScroll: true });
-        }
-      };
-      requestAnimationFrame(() => {
-        if (this.held.size) this.returnFocus = restoreOrigin;
-        else restoreOrigin();
-      });
-    }
+  }
+  // Base UI retains its focus scope through the exit animation. finalFocus=false
+  // disables auto-return, but not its restoration of focus inside the closing popup.
+  paletteClosed() {
+    if (this.view.palette || !this.returnFocus) return;
+    this.returnFocus.closed = true;
+    this.restorePaletteFocus();
+  }
+  private restorePaletteFocus() {
+    const pending = this.returnFocus;
+    if (!pending?.closed || this.held.size) return;
+    // The completion callback precedes the unmount commit. Cross that commit and
+    // its focus cleanup once; key release and every invalidation still gate the job.
+    requestAnimationFrame(() => {
+      if (this.returnFocus !== pending || this.held.size) return;
+      this.returnFocus = undefined;
+      if (this.view.palette || (this.config?.modalCount ?? 0) > 0 || !this.valid(pending.target))
+        return;
+      const { origin, target } = pending;
+      if (
+        this.valid(origin) &&
+        origin.element?.isConnected &&
+        origin.element.getClientRects().length &&
+        !origin.element.closest("[inert]")
+      )
+        origin.element.focus();
+      else {
+        const focus = target.surface?.read().focus;
+        if (focus) focus();
+        else
+          document
+            .querySelector<HTMLElement>('nav[aria-label=Clusters] [aria-label="Command palette"]')
+            ?.focus({ preventScroll: true });
+      }
+    });
   }
 
-  private returnFocus?: () => void;
   setRecording(recording: boolean) {
     this.chords.cancel();
     this.show({ recording });
@@ -503,11 +530,7 @@ export class CommandRuntime {
       event.stopImmediatePropagation();
       if (event.type === "keyup") {
         this.held.delete(physical);
-        if (!this.held.size) {
-          const focus = this.returnFocus;
-          this.returnFocus = undefined;
-          requestAnimationFrame(() => focus?.());
-        }
+        if (!this.held.size) this.restorePaletteFocus();
       }
       return;
     }

@@ -113,6 +113,9 @@ export function CommandRuntime() {
         onOpenChange={(open) => {
           if (!open) commands.closePalette();
         }}
+        onOpenChangeComplete={(open) => {
+          if (!open) commands.paletteClosed();
+        }}
         title={palette?.mode === "resources" ? "Go to Resource" : "Command palette"}
         description="Actions use the target captured when this palette opened"
         finalFocus={false}

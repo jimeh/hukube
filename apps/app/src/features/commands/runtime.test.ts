@@ -366,20 +366,170 @@ it("completes chords once and cancels on target changes, Escape, recording and r
   h.rt.configure({ ...h.config, route: "/settings/appearance" });
   expect(h.rt.chords.pending).toBeUndefined();
 });
-it("keeps Enter release inside the palette before returning terminal focus", () => {
+it.each(["Enter", "Escape"])(
+  "waits for palette close completion after %s release before returning focus",
+  (closingKey) => {
+    const h = harness(),
+      focus = vi.spyOn(h.input, "focus");
+    h.rt.openPalette("commands", h.rt.capture());
+    h.rt.key(new KeyboardEvent("keydown", { key: closingKey, code: closingKey, cancelable: true }));
+    h.rt.closePalette();
+    expect(focus).not.toHaveBeenCalled();
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      const event = new KeyboardEvent(type, {
+        key: closingKey,
+        code: closingKey,
+        repeat: type === "keydown",
+        cancelable: true,
+      });
+      h.rt.key(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(terminalVerdicts.get(event)).toBe("handled");
+    }
+    expect(focus).not.toHaveBeenCalled();
+    h.rt.paletteClosed();
+    expect(focus).toHaveBeenCalledOnce();
+  },
+);
+it.each(["Enter", "Escape"])("waits for %s release when the palette closes first", (closingKey) => {
   const h = harness(),
     focus = vi.spyOn(h.input, "focus");
   h.rt.openPalette("commands", h.rt.capture());
-  h.rt.key(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", cancelable: true }));
+  h.rt.key(new KeyboardEvent("keydown", { key: closingKey, code: closingKey }));
   h.rt.closePalette();
+  h.rt.paletteClosed();
   expect(focus).not.toHaveBeenCalled();
-  const press = new KeyboardEvent("keypress", { key: "Enter", code: "Enter", cancelable: true });
-  h.rt.key(press);
-  expect(press.defaultPrevented).toBe(true);
-  const up = new KeyboardEvent("keyup", { key: "Enter", code: "Enter", cancelable: true });
-  h.rt.key(up);
-  expect(up.defaultPrevented).toBe(true);
+  h.rt.key(new KeyboardEvent("keyup", { key: closingKey, code: closingKey }));
   expect(focus).toHaveBeenCalledOnce();
+});
+function focusFrames() {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => {
+    frames.push(fn);
+    return frames.length;
+  });
+  return () => {
+    for (const fn of frames.splice(0)) fn(0);
+  };
+}
+it("ignores cancelled close completion and queued focus after a rapid reopen", () => {
+  const frame = focusFrames(),
+    h = harness(),
+    focus = vi.spyOn(h.input, "focus");
+  const origin = h.rt.capture();
+  h.rt.openPalette("commands", origin);
+  h.rt.closePalette();
+  h.rt.paletteClosed();
+  h.rt.openPalette("commands", origin);
+  h.rt.paletteClosed();
+  frame();
+  expect(focus).not.toHaveBeenCalled();
+  expect(h.rt.getSnapshot().palette).toBeDefined();
+  h.rt.closePalette();
+  frame();
+  expect(focus).not.toHaveBeenCalled();
+  h.rt.paletteClosed();
+  frame();
+  expect(focus).toHaveBeenCalledOnce();
+});
+it.each([
+  "blur",
+  "route",
+  "workspace",
+  "hidden",
+  "panel",
+  "pane",
+  "params",
+  "uid",
+  "modal",
+  "outdated",
+])("invalidates queued palette focus on %s, even if that boundary later reverses", (boundary) => {
+  const frame = focusFrames(),
+    h = harness(),
+    focus = vi.spyOn(h.input, "focus");
+  h.rt.openPalette("commands", h.rt.capture());
+  h.rt.closePalette();
+  h.rt.paletteClosed();
+  switch (boundary) {
+    case "blur":
+      h.rt.blur();
+      break;
+    case "route":
+      h.rt.configure({ ...h.config, route: "/" });
+      h.rt.configure(h.config);
+      break;
+    case "workspace":
+      h.rt.registerWorkspace("c", { ...h.owner, token: {} });
+      h.rt.registerWorkspace("c", h.owner);
+      break;
+    case "hidden":
+      h.owner.value.active = false;
+      h.rt.refreshAvailability();
+      h.owner.value.active = true;
+      break;
+    case "outdated":
+      h.rt.configure({ ...h.config, connection: "outdated" });
+      h.rt.configure(h.config);
+      break;
+    case "panel":
+      h.replace();
+      h.rt.refreshAvailability();
+      break;
+    case "pane": {
+      const group = h.panel().group;
+      Object.assign(h.panel(), { group: {} });
+      h.rt.refreshAvailability();
+      Object.assign(h.panel(), { group });
+      break;
+    }
+    case "params": {
+      const params = h.panel().params;
+      Object.assign(h.panel(), { params: {} });
+      h.rt.refreshAvailability();
+      Object.assign(h.panel(), { params });
+      break;
+    }
+    case "uid":
+      h.uid("two");
+      h.rt.refreshAvailability();
+      h.uid("one");
+      break;
+    case "modal":
+      h.rt.configure({ ...h.config, modalCount: 1 });
+      h.rt.configure(h.config);
+      break;
+  }
+  frame();
+  expect(focus).not.toHaveBeenCalled();
+});
+it.each(["app.openSettings", "manifest.review", "tab.close", "editor.find"] as const)(
+  "does not steal focus from a %s handoff after close completion or key release",
+  (command) => {
+    const frame = focusFrames(),
+      h = harness(),
+      focus = vi.spyOn(h.input, "focus");
+    const origin = h.rt.capture();
+    h.rt.openPalette("commands", origin);
+    h.rt.key(new KeyboardEvent("keydown", { key: "Enter", code: "Enter" }));
+    h.rt.closePalette();
+    h.rt.paletteClosed();
+    expect(h.rt.invoke(command, {}, origin)).toBe(true);
+    h.rt.key(new KeyboardEvent("keyup", { key: "Enter", code: "Enter" }));
+    frame();
+    expect(focus).not.toHaveBeenCalled();
+  },
+);
+it("never returns to a connected element belonging to a replaced target", () => {
+  const h = harness(),
+    focus = vi.spyOn(h.input, "focus");
+  h.rt.openPalette("commands", h.rt.capture());
+  h.replace();
+  const fallback = vi.fn<() => void>();
+  h.rt.registerSurface({ element: h.root, read: () => ({ kind: "editor", focus: fallback }) });
+  h.rt.closePalette();
+  h.rt.paletteClosed();
+  expect(focus).not.toHaveBeenCalled();
+  expect(fallback).toHaveBeenCalledOnce();
 });
 
 it("toggles the terminal's Go to Resource shortcut and switches mode after palette focus moves", () => {
@@ -512,6 +662,7 @@ it("returns focus to a surviving owner when the original surface disappears", ()
   h.root.append(next);
   h.rt.registerSurface({ element: next, read: () => ({ kind: "editor", focus }) });
   h.rt.closePalette();
+  h.rt.paletteClosed();
   expect(focus).toHaveBeenCalledOnce();
 });
 
