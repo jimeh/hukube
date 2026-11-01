@@ -1,4 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { spawn } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
 import { engineToken } from "./env.ts";
 
 /** The raw process reads one sentinel byte after all palette input has finished. */
@@ -139,21 +143,81 @@ export function commandTests() {
     page,
     context,
   }) => {
-    await page.goto(`/#token=${engineToken}`);
-    const original = await keyboardSetting(page);
-    // settings.put intentionally cannot recreate an absent setting. Never turn a
-    // missing shared document into a persisted one merely to run this test.
-    test.skip(
-      !original.value ||
-        typeof original.value !== "object" ||
-        !("version" in original.value) ||
-        original.value.version !== 1,
-      "Requires an existing version-1 keyboard document so cleanup can restore it exactly",
+    // This test needs a restorable document. Seed only its own empty-kubeconfig
+    // Engine, leaving the suite's Engine and keybindings untouched.
+    const root = resolvePath(import.meta.dirname, "../..");
+    const scratch = mkdtempSync(join(tmpdir(), "hukube-keyboard-e2e-"));
+    const config = join(scratch, "kubeconfig");
+    const data = join(scratch, "engine");
+    const baseline = { version: 1, rules: [], disabledDefaults: [], future: { keep: true } };
+    writeFileSync(
+      config,
+      JSON.stringify({
+        apiVersion: "v1",
+        kind: "Config",
+        clusters: [],
+        contexts: [],
+        users: [],
+        "current-context": "",
+      }),
     );
+    mkdirSync(join(data, "settings"), { recursive: true });
+    writeFileSync(join(data, "settings", "app%2Fkeybindings.json"), JSON.stringify(baseline));
+    const engine = spawn(
+      join(root, "engine/bin/hukube-engine"),
+      [
+        "--web",
+        "--ui-dir",
+        join(root, "apps/app/dist"),
+        "--listen",
+        "127.0.0.1:0",
+        `--token=${engineToken}`,
+        "--kubeconfig",
+        config,
+        "--data-dir",
+        data,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let url = "",
+      logs = "";
+    engine.stdout.on("data", (chunk: Buffer) => {
+      logs = (logs + chunk.toString()).slice(-8192);
+      for (const line of logs.split("\n")) {
+        try {
+          const record = JSON.parse(line) as { url?: string };
+          if (record.url) url = record.url;
+        } catch {
+          /* Wait for a complete ready record. */
+        }
+      }
+    });
+    engine.stderr.on("data", (chunk: Buffer) => {
+      logs = (logs + chunk.toString()).slice(-8192);
+    });
     const other = await context.newPage();
+    let original: Awaited<ReturnType<typeof keyboardSetting>> | undefined;
     try {
+      await expect
+        .poll(
+          async () => {
+            if (engine.exitCode !== null || engine.signalCode !== null)
+              throw Error(`Keyboard test Engine exited: ${logs}`);
+            return url
+              ? fetch(`${url}/healthz`).then(
+                  (r) => r.ok,
+                  () => false,
+                )
+              : false;
+          },
+          { message: "owned keyboard test Engine readiness", timeout: 15000 },
+        )
+        .toBe(true);
+      await page.goto(`${url}/#token=${engineToken}`);
+      original = await keyboardSetting(page);
+      expect(original.value).toEqual(baseline);
       for (const p of [page, other]) {
-        await p.goto(`/settings/keyboard-shortcuts#token=${engineToken}`);
+        await p.goto(`${url}/settings/keyboard-shortcuts#token=${engineToken}`);
         await p.getByRole("button", { name: "Add binding for Open Settings", exact: true }).click();
         await p
           .getByLabel("One or two strokes (space separated)")
@@ -164,6 +228,11 @@ export function commandTests() {
       await page.getByRole("button", { name: "Save shortcuts", exact: true }).click();
       await expect(page.getByText("Saved shortcuts", { exact: true })).toBeVisible();
       await expect(other.getByText(/Conflict with Engine revision/)).toBeVisible();
+      await other.keyboard.press("ControlOrMeta+Alt+U");
+      await other.keyboard.press("ControlOrMeta+Shift+P");
+      await expect(other.getByRole("combobox", { name: "Search commands" })).toBeFocused();
+      await expect(other).toHaveURL(/keyboard-shortcuts/);
+      await other.keyboard.press("Escape");
       await other
         .getByRole("button", { name: "Save reviewed draft over this revision", exact: true })
         .click();
@@ -171,8 +240,32 @@ export function commandTests() {
       await other.keyboard.press("ControlOrMeta+Alt+I");
       await expect(other).toHaveURL(/settings\/appearance/);
     } finally {
-      await keyboardSetting(page, original.value);
-      await other.close();
+      try {
+        if (original) {
+          await keyboardSetting(page, original.value);
+          expect((await keyboardSetting(page)).value).toEqual(original.value);
+        }
+      } finally {
+        await other.close();
+        engine.kill("SIGTERM");
+        try {
+          await expect
+            .poll(() => engine.exitCode !== null || engine.signalCode !== null, {
+              message: "owned keyboard test Engine exit",
+            })
+            .toBe(true);
+        } finally {
+          if (engine.exitCode === null && engine.signalCode === null) {
+            engine.kill("SIGKILL");
+            await expect
+              .poll(() => engine.exitCode !== null || engine.signalCode !== null, {
+                message: "owned keyboard test Engine forced exit",
+              })
+              .toBe(true);
+          }
+          rmSync(scratch, { recursive: true, force: true });
+        }
+      }
     }
   });
 }
