@@ -536,6 +536,10 @@ export function createPreferenceStore(
 
       for (const scope of ["appearance", "retention", "display"] as const) {
         const save = saves[scope];
+        if (save.migration && save.phase === "error" && (revision !== "" || raw !== null)) {
+          saves[scope] = emptySave();
+          continue;
+        }
         const blocked = save.changes?.find((change) => sectionErrors[sectionFor(change.path)]);
         if (blocked)
           saves[scope] = {

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useOpenClusters } from "@/features/clusters/open-clusters.ts";
 
 import { SettingsFocusReturnContext } from "./focus-return.ts";
-import { SettingsPage, type SettingsCategory } from "./settings-page.tsx";
+import { SaveStatus, SettingsPage, type SettingsCategory } from "./settings-page.tsx";
 
 interface PreferenceHarness {
   client: EngineClient;
@@ -162,6 +162,30 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+it.each([
+  [
+    "conflict",
+    {
+      phase: "conflict" as const,
+      message: "Not saved: changed in another window",
+      paths: ["appearance.theme" as const],
+    },
+    "Theme: Not saved: changed in another window",
+  ],
+  [
+    "repair",
+    { phase: "error" as const, message: "Not repaired: section changed in another window" },
+    "Not repaired: section changed in another window",
+  ],
+])("announces the visible %s message without internal scope text", (_kind, save, message) => {
+  render(<SaveStatus save={save} />);
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).toBe(message);
+  expect(alert.textContent).not.toMatch(
+    /appearance|logStreamsRepair|recovery|preference save failed/i,
+  );
+});
 
 it("works without a Cluster and saves and resets the Engine-shared theme after read-back", async () => {
   const h = await mountPage("appearance");

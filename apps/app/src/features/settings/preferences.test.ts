@@ -680,6 +680,17 @@ it("retains failed intent, retries it, and confirms a disconnected write from re
     message: "Not saved: disk full",
   });
   expect(h.store.getSnapshot().display.logStreams.wrap).toBe(false);
+  server.commit({ version: 1, appearance: { theme: "dark" }, logStreams: { timestamps: true } });
+  server.broadcast();
+  expect(h.store.getSnapshot().saves.display).toMatchObject({
+    phase: "error",
+    message: "Not saved: disk full",
+  });
+  expect(h.store.getSnapshot().display.logStreams).toMatchObject({
+    wrap: false,
+    timestamps: true,
+  });
+  expect(server.puts).toHaveLength(1);
   await h.store.retry("display");
   expect(h.store.getSnapshot().saves.display.phase).toBe("saved");
 
@@ -742,6 +753,41 @@ it("migrates a valid legacy theme only for a wholly absent document and Engine s
   });
   expect(engineDark.effective.appearance.theme).toBe("dark");
 });
+
+it.each([
+  ["theme-less", { version: 1, logStreams: { wrap: false } }],
+  ["different-theme", { version: 1, appearance: { theme: "dark" } }],
+] as const)(
+  "retires a terminally failed legacy migration after a fresh %s document",
+  async (_kind, remote) => {
+    const server = new SettingsServer();
+    server.behaviors.push(async () => {
+      throw new EngineRequestError({ code: "unavailable", message: "disk full" });
+    });
+    const h = storeFor(server, "light");
+    await until(() =>
+      expect(h.store.getSnapshot().saves.appearance).toMatchObject({
+        phase: "error",
+        message: "Not saved: disk full",
+      }),
+    );
+    // The operation leaves pendingOperations in the queue promise's finally handler.
+    await Promise.resolve();
+    expect(server.puts).toHaveLength(1);
+
+    server.commit(remote);
+    server.broadcast();
+
+    expect(server.puts).toHaveLength(1);
+    expect(h.store.getSnapshot()).toMatchObject({
+      effective: { appearance: { theme: "dark" } },
+      display: { appearance: { theme: "dark" } },
+      saves: { appearance: { phase: "idle" } },
+    });
+    expect(h.cache()).toBe("dark");
+    h.stop();
+  },
+);
 
 it("retires legacy theme migration when watch delivery creates a theme-less document", async () => {
   const server = new SettingsServer();

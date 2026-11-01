@@ -1469,7 +1469,11 @@ it("trims a hidden mounted document on confirmed budget updates without reopenin
   expect(opened).toHaveLength(1);
   expect(screen.getByRole("textbox").textContent).toBe("four");
   fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-  expect(screen.queryByText(/Older retained log entries/)).toBeNull();
+  expect(
+    screen.queryByText(
+      "Older log entries were discarded to stay within retention limits and cannot be restored.",
+    ),
+  ).toBeNull();
   stopPreferences();
 });
 

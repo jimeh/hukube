@@ -28,7 +28,6 @@ import {
   type PreferencePath,
   type PreferenceSaveState,
   type PreferenceSection,
-  type PreferenceScope,
 } from "./preferences.ts";
 import { useSettingsFocusReturn } from "./focus-return.ts";
 
@@ -146,12 +145,12 @@ export function SettingsPage({
               <Button size="sm" variant="destructive" onClick={() => setReplaceOpen(true)}>
                 Replace stored preferences
               </Button>
-              <SaveStatus scope="recovery" save={snapshot.saves.recovery} />
+              <SaveStatus save={snapshot.saves.recovery} />
             </AlertDescription>
           </Alert>
         )}
         {snapshot.status !== "malformed" && snapshot.saves.recovery.phase !== "idle" && (
-          <SaveStatus scope="recovery" save={snapshot.saves.recovery} />
+          <SaveStatus save={snapshot.saves.recovery} />
         )}
 
         <div className="flex flex-col gap-4 md:grid md:grid-cols-[13rem_minmax(0,1fr)] md:gap-8">
@@ -279,7 +278,7 @@ function SectionRepair({ section, label }: { section: PreferenceSection; label: 
           </AlertDescription>
         </Alert>
       )}
-      <SaveStatus scope={`${section}Repair`} save={save} />
+      <SaveStatus save={save} />
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
           <AlertDialogTitle>Repair {label} section?</AlertDialogTitle>
@@ -350,7 +349,6 @@ function AppearanceSettings() {
           Reset section
         </Button>
         <SaveStatus
-          scope="appearance"
           save={snapshot.saves.appearance}
           onRetry={(overwrite) => void store.retry("appearance", overwrite)}
           onUseCurrent={() => store.acceptCurrent("appearance")}
@@ -602,7 +600,6 @@ function LogStreamSettings() {
             !invalid && <output className="text-xs text-muted-foreground">Unsaved changes</output>
           ) : (
             <SaveStatus
-              scope="retention"
               save={snapshot.saves.retention}
               onRetry={retryChanges}
               retryLabel={retryIsReset ? "Retry reset" : "Retry pending limits"}
@@ -675,7 +672,6 @@ function LogStreamSettings() {
             Reset section
           </Button>
           <SaveStatus
-            scope="display"
             save={snapshot.saves.display}
             onRetry={(overwrite) => void store.retry("display", overwrite)}
             onUseCurrent={() => store.acceptCurrent("display")}
@@ -735,13 +731,11 @@ function OverviewSettings() {
 }
 
 export function SaveStatus({
-  scope,
   save,
   onRetry,
   retryLabel,
   onUseCurrent,
 }: {
-  scope: PreferenceScope | `${PreferenceSection}Repair`;
   save: PreferenceSaveState;
   onRetry?: (overwriteCurrent: boolean) => void;
   retryLabel?: string;
@@ -776,7 +770,6 @@ export function SaveStatus({
           )}
         </AlertDescription>
       )}
-      <span className="sr-only">{scope} preference save failed.</span>
     </Alert>
   );
 }
