@@ -34,5 +34,39 @@ export async function assertLogFiltering(panel: Locator) {
   await panel.getByRole("button", { name: "Search", exact: true }).click();
   await find.fill("counter 0 from");
   await expect(editor.locator(".matchesCount")).toHaveText("1 of 1");
+  await find.fill("counter 1 from");
+  await expect(editor.locator(".matchesCount")).toHaveText("1 of 1");
+  await find.press("Enter");
   await find.press("Escape");
+
+  // Select backwards from the second line's end to the first line's start.
+  // Hiding that end must stop before the third line, then Clear must recover it.
+  const input = editor.getByRole("textbox", { name: /^Logs of / });
+  await input.press("End");
+  await input.press("Shift+Home");
+  await input.press("Shift+ArrowUp");
+  const original = await copiedSelection(editor);
+  expect(original).toContain("counter 0 from");
+  expect(original).toContain("counter 1 from");
+  expect(original).not.toContain("counter 2 from");
+  await filter.click();
+  await panel.getByRole("textbox", { name: "Exclude text" }).fill("counter 1 from");
+  await expect.poll(() => copiedSelection(editor)).not.toContain("counter 1 from");
+  const hidden = await copiedSelection(editor);
+  expect(hidden).toContain("counter 0 from");
+  expect(hidden).not.toContain("counter 2 from");
+  await panel.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect.poll(() => copiedSelection(editor)).toBe(original);
+}
+
+/** Observe Monaco's copy payload without depending on the Host's OS clipboard. */
+async function copiedSelection(editor: Locator) {
+  const result = await editor.getByRole("textbox", { name: /^Logs of / }).evaluate((element) => {
+    const clipboardData = new DataTransfer();
+    const event = new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData });
+    element.dispatchEvent(event);
+    return { handled: event.defaultPrevented, text: clipboardData.getData("text/plain") };
+  });
+  expect(result.handled).toBe(true);
+  return result.text;
 }

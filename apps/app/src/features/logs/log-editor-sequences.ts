@@ -49,9 +49,17 @@ export function restorePosition(
   anchor: SequencePosition,
   maxColumn: (line: number) => number,
 ): { lineNumber: number; column: number } {
-  const lineNumber = Math.max(1, sequenceIndex(sequences, anchor.sequence) + 1);
-  if (anchor.afterRow) return { lineNumber: lineNumber + 1, column: 1 };
-  return { lineNumber, column: Math.min(anchor.column, maxColumn(lineNumber)) };
+  // An after-row endpoint is before the first strictly newer row. Missing
+  // ordinary endpoints also stop at the following row's start, never inside it.
+  const index = sequenceLowerBound(sequences, anchor.sequence + (anchor.afterRow ? 1 : 0));
+  const lineNumber = index + 1;
+  return {
+    lineNumber,
+    column:
+      !anchor.afterRow && sequences[index] === anchor.sequence
+        ? Math.min(anchor.column, maxColumn(lineNumber))
+        : 1,
+  };
 }
 
 /** The watermark belongs to original arrivals, never the last projected row. */

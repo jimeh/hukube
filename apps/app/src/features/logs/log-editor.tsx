@@ -255,14 +255,8 @@ export default function LogEditor({
         editor.setSelection(
           new monaco.Selection(start.lineNumber, start.column, end.lineNumber, end.column),
         );
-        // Keep the resolved fallback and clamped columns, but preserve affinity
-        // when the next model line is now an appended entry rather than EOF.
-        selectionAnchor.start.sequence =
-          sequences[sequenceIndex(sequences, selectionAnchor.start.sequence)]!;
-        selectionAnchor.start.column = start.column;
-        selectionAnchor.end.sequence =
-          sequences[sequenceIndex(sequences, selectionAnchor.end.sequence)]!;
-        selectionAnchor.end.column = end.column;
+        // A fallback or column clamp is temporary. Keep the original identities
+        // until the user moves the selection, so Clear can restore hidden ends.
         selectionChanged = false;
       }
       if (follow.current)

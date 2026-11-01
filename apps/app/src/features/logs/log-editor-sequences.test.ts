@@ -16,13 +16,13 @@ it("diffs sparse append and head pruning, including no surviving rows, without i
   expect(sequenceEdits([5, 9], [1, 5, 9])).toBeUndefined();
 });
 
-it("anchors both selection endpoints and top rows by sequence across append, pruning and rewrites, clamping columns", () => {
+it("anchors surviving endpoints with clamped columns and keeps the viewport fallback separate", () => {
   const start = anchorPosition([2, 5, 10], 2, 19)!;
   const end = anchorPosition([2, 5, 10], 3, 2)!;
   expect(restorePosition([5, 10, 30], start, () => 8)).toEqual({ lineNumber: 1, column: 8 });
   expect(restorePosition([5, 10, 30], end, () => 8)).toEqual({ lineNumber: 2, column: 2 });
-  expect(restorePosition([2, 10], start, () => 30)).toEqual({ lineNumber: 2, column: 19 });
-  expect(restorePosition([2], end, () => 1)).toEqual({ lineNumber: 1, column: 1 });
+  expect(restorePosition([2, 10], start, () => 30)).toEqual({ lineNumber: 2, column: 1 });
+  expect(restorePosition([2], end, () => 1)).toEqual({ lineNumber: 2, column: 1 });
   expect(anchorPosition([], 1, 1)).toBeUndefined();
   expect(sequenceIndex([2, 5, 10], 6)).toBe(2);
   expect(sequenceIndex([2, 5, 10], 100)).toBe(2);
@@ -47,11 +47,11 @@ it("preserves the trailing newline endpoint across unchanged projections, append
   expect(restorePosition([5, 10, 30], end, () => 20)).toEqual({ lineNumber: 3, column: 1 });
 });
 
-it("keeps after-row affinity through rewrite and empty projection recovery with the same removal fallback", () => {
+it("keeps after-row boundaries before following entries through hiding and empty projection recovery", () => {
   const end = anchorPosition([2, 5, 10], 4, 1)!;
   expect(restorePosition([2, 5, 10], end, () => 3)).toEqual({ lineNumber: 4, column: 1 });
   expect(restorePosition([2, 5], end, () => 20)).toEqual({ lineNumber: 3, column: 1 });
-  expect(restorePosition([2, 30, 40], end, () => 20)).toEqual({ lineNumber: 3, column: 1 });
+  expect(restorePosition([2, 30, 40], end, () => 20)).toEqual({ lineNumber: 2, column: 1 });
   expect(anchorPosition([], 1, 1)).toBeUndefined();
   expect(restorePosition([2, 5, 10], end, () => 20)).toEqual({ lineNumber: 4, column: 1 });
 });
@@ -61,4 +61,27 @@ it("distinguishes a caret at the final row start from one after its newline", ()
   const after = anchorPosition([2, 5, 10], 4, 1)!;
   expect(restorePosition([5, 10, 30], start, () => 20)).toEqual({ lineNumber: 2, column: 1 });
   expect(restorePosition([5, 10, 30], after, () => 20)).toEqual({ lineNumber: 3, column: 1 });
+});
+
+it("restores a hidden mid-row endpoint at the following row start and recovers its original column on clear", () => {
+  const end = anchorPosition([1, 2, 3], 3, 4)!;
+  expect(restorePosition([1, 2, 4, 5], end, () => 40)).toEqual({ lineNumber: 3, column: 1 });
+  expect(restorePosition([1, 2], end, () => 40)).toEqual({ lineNumber: 3, column: 1 });
+  expect(restorePosition([], end, () => 1)).toEqual({ lineNumber: 1, column: 1 });
+  expect(restorePosition([1, 2, 3, 4, 5], end, () => 40)).toEqual({ lineNumber: 3, column: 4 });
+  expect(end).toEqual({ sequence: 3, column: 4 });
+});
+
+it("collapses fully evicted forward and backward selections before newer unselected payload", () => {
+  const start = anchorPosition([1, 2, 3], 1, 2)!;
+  const end = anchorPosition([1, 2, 3], 4, 1)!;
+  for (const endpoints of [
+    [start, end],
+    [end, start],
+  ]) {
+    expect(endpoints.map((anchor) => restorePosition([4, 5], anchor, () => 40))).toEqual([
+      { lineNumber: 1, column: 1 },
+      { lineNumber: 1, column: 1 },
+    ]);
+  }
 });
