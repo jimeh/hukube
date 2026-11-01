@@ -409,7 +409,8 @@ export class Harness {
         "--no-lb",
         "--no-rollback",
         "--api-port",
-        "127.0.0.1:0",
+        // k3d records literal port 0 in kubeconfig; its allocator requires "random".
+        "127.0.0.1:random",
         "--wait",
         "--timeout",
         "180s",

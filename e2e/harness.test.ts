@@ -334,7 +334,7 @@ describe("owned Cluster lifecycle", () => {
         runtime.owner.cluster,
         "--no-rollback",
         "--api-port",
-        "127.0.0.1:0",
+        "127.0.0.1:random",
         "--kubeconfig-update-default=false",
         "--kubeconfig-switch-context=false",
         `${ownerLabel}=${encodeOwner(runtime.owner.root)}@server:0`,
