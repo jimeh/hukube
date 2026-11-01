@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useImperativeHandle, useRef, type Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { commandTestWorkspace } from "../commands/test-runtime.ts";
+import { commands } from "../commands/runtime.ts";
 import { useCommandSurface } from "../commands/owners.ts";
 const commandOwners: (() => void)[] = [];
 import { YamlFacet } from "./yaml-facet.tsx";
@@ -368,3 +369,33 @@ it("announces Copied for two seconds after copying a deleted Resource's edits", 
   expect(screen.getByRole("button", { name: "Copy YAML" })).toBeDefined();
   h.unmount();
 });
+
+it.each(["pointer", "palette", "keyboard"] as const)(
+  "returns to YAML's editor after %s Review and Back to editing",
+  async (source) => {
+    const h = setup();
+    await editText();
+    const input = screen.getByRole("textbox", { name: "Manifest" });
+    input.focus();
+    let invoked = true;
+    await act(async () => {
+      const origin = commands.capture();
+      if (source === "palette") commands.openPalette("commands", origin);
+      if (source === "pointer")
+        fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+      else if (source === "palette") invoked = commands.invoke("manifest.review", {}, origin);
+      else {
+        commands.key(
+          new KeyboardEvent("keydown", { key: "s", code: "KeyS", metaKey: true, cancelable: true }),
+        );
+        commands.key(new KeyboardEvent("keyup", { key: "s", code: "KeyS", metaKey: true }));
+      }
+    });
+    expect(invoked).toBe(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Back to editing" }));
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    h.unmount();
+    commands.closePalette(false);
+    commands.blur();
+  },
+);

@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState, useSyncExternalStore } from "react";
 import type { DockviewPanelApi } from "dockview-react";
 import type { ResourceData } from "@hukube/engine-client";
 import { formatResourceUri, type Facet } from "@hukube/k8s";
+import { compileKeymap, emptyDocument } from "../commands/keyboard.ts";
+import { commands } from "../commands/runtime.ts";
+import { commandTestWorkspace } from "../commands/test-runtime.ts";
+const commandOwners: (() => void)[] = [];
 import { ResourcePanel } from "../resource/resource-panel.tsx";
 import { WorkspaceContext } from "../workspace/workspace-context.tsx";
 import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
@@ -20,7 +24,8 @@ const state = vi.hoisted(() => ({
   store: undefined as ReturnType<typeof createRegistryStore> | undefined,
   client: {
     subscribe: () => ({ close: () => {}, update: () => {} }),
-    request: () => Promise.resolve({ edit: { allowed: true }, delete: { allowed: true } }),
+    request: (_method: string): Promise<unknown> =>
+      Promise.resolve({ edit: { allowed: true }, delete: { allowed: true } }),
     getState: () => "open",
     onStateChange: () => () => {},
   },
@@ -76,6 +81,7 @@ vi.mock("../resource/yaml-editor.tsx", () => ({
     />
   ),
 }));
+vi.mock("../edit/diff-editor.tsx", () => ({ default: () => <div>Diff</div> }));
 vi.mock("../resource/events-facet.tsx", () => ({
   EventsFacet: () => <div>Live Events</div>,
   EventsBadge: () => null,
@@ -114,7 +120,11 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  commands.closePalette(false);
+  commands.blur();
   cleanup();
+  for (const off of commandOwners.splice(0)) off();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
 });
@@ -139,7 +149,9 @@ function Harness({ type = "deployments.apps", facet }: { type?: string; facet?: 
         openExecSession: () => {},
       }}
     >
-      <ResourcePanel api={api} params={params} />
+      <div data-command-panel="panel">
+        <ResourcePanel api={api} params={params} />
+      </div>
       <output aria-label="Tab params">{JSON.stringify(params)}</output>
     </WorkspaceContext>
   );
@@ -521,3 +533,92 @@ it("keeps normal Secret annotations visible", () => {
   render(<Harness type="secrets" />);
   expect(screen.getByText("useful annotation")).toBeDefined();
 });
+
+it.each(["pointer", "palette", "keyboard", "removed-origin"] as const)(
+  "retains Overview's prepared field return focus through %s Review dispatch",
+  async (source) => {
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
+      {},
+    ] as unknown as DOMRectList);
+    vi.spyOn(state.client, "request").mockImplementation((method) =>
+      Promise.resolve(
+        method === "resource.review"
+          ? {
+              before: deployment,
+              desired: deployment,
+              after: deployment,
+              edited: [["spec", "replicas"]],
+              changedOnCluster: [],
+              overlaps: [],
+              setByCluster: [],
+              ignored: [],
+              warnings: [],
+            }
+          : { edit: { allowed: true }, delete: { allowed: true } },
+      ),
+    );
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Replicas" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Replicas" }), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    commandOwners.push(
+      commandTestWorkspace({ id: "panel" }, () =>
+        JSON.parse(screen.getByLabelText("Tab params").textContent),
+      ),
+    );
+    if (source === "keyboard")
+      commands.configure({
+        route: "/c/c",
+        platform: "mac",
+        host: "web",
+        connection: "open",
+        modalCount: 0,
+        map: compileKeymap(
+          {
+            ...emptyDocument,
+            rules: [
+              {
+                id: "review-overview",
+                command: "manifest.review",
+                keys: ["Mod+S"],
+                when: "",
+                scope: "app",
+                enabled: true,
+              },
+            ],
+          },
+          "mac",
+        ),
+        preferencesReady: () => true,
+        preference: () => {},
+        settings: () => {},
+      });
+    const toolbar = screen.getByRole("button", { name: "Review changes" });
+    toolbar.focus();
+    const origin = commands.capture();
+    expect(origin.resource).toBeDefined();
+    if (source === "removed-origin") {
+      const temporary = document.createElement("button");
+      document.body.append(temporary);
+      origin.element = temporary;
+      temporary.remove();
+    }
+    let invoked = true;
+    await act(async () => {
+      if (source !== "pointer") commands.openPalette("commands", origin);
+      if (source === "keyboard") {
+        commands.key(
+          new KeyboardEvent("keydown", { key: "s", code: "KeyS", metaKey: true, cancelable: true }),
+        );
+        commands.key(new KeyboardEvent("keyup", { key: "s", code: "KeyS", metaKey: true }));
+      } else if (source === "pointer") fireEvent.click(toolbar);
+      else invoked = commands.invoke("manifest.review", {}, origin);
+    });
+    expect(invoked).toBe(true);
+    const back = await screen.findByRole("button", { name: "Back to editing" });
+    fireEvent.click(back);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit Replicas" })),
+    );
+  },
+);

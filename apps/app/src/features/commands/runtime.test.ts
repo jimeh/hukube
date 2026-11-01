@@ -72,7 +72,7 @@ function harness(rules: Rule[] = []) {
   root.append(input);
   document.body.append(root);
   input.focus();
-  let uid = "one";
+  let uid: string | undefined = "one";
   const find = vi.fn<() => void>(),
     review = vi.fn<() => void>();
   const unregister = rt.registerSurface({
@@ -94,7 +94,7 @@ function harness(rules: Rule[] = []) {
     replace: () => {
       panel = { ...panel };
     },
-    uid: (v: string) => (uid = v),
+    uid: (v: string | undefined) => (uid = v),
   };
 }
 const key = (letter: string, code: string, extra: KeyboardEventInit = {}) =>
@@ -687,4 +687,165 @@ it("requires actual editor text focus for default Review and Find, leaving toolb
   h.rt.key(find);
   expect(find.defaultPrevented).toBe(false);
   expect(h.find).not.toHaveBeenCalled();
+});
+
+// Navigation owns the Workspace and captured placement, not the source Manifest.
+it.each(["resource.open", "resource.openType"] as const)(
+  "%s stays usable while the source Resource hydrates or its surface remounts",
+  (command) => {
+    const h = harness();
+    Object.assign(h.owner.value, { types: new Map([["pods", {}]]) });
+    h.uid(undefined);
+    const origin = h.rt.capture();
+    h.rt.openPalette("resources", origin);
+    h.uid("hydrated");
+    h.rt.refreshAvailability();
+    expect(h.rt.getSnapshot().palette?.mode).toBe("resources");
+    expect(h.rt.invoke("manifest.review", {}, origin)).toBe(false);
+    h.unregister();
+    h.rt.registerSurface({
+      element: h.root,
+      read: () => ({ kind: "editor", uid: "hydrated", review: h.review }),
+    });
+    h.rt.refreshAvailability();
+    expect(h.rt.getSnapshot().palette?.mode).toBe("resources");
+    const args =
+      command === "resource.openType"
+        ? { type: "pods" }
+        : { uri: formatResourceUri({ cluster: "c", type: "pods", namespace: "ns", name: "next" }) };
+    expect(h.rt.invoke(command, args, origin, "pointer")).toBe(true);
+    expect(
+      command === "resource.openType" ? h.owner.value.openList : h.owner.value.openResource,
+    ).toHaveBeenCalledOnce();
+  },
+);
+it.each(["panel", "pane", "params", "workspace", "hidden", "route"])(
+  "Workspace navigation still refuses a changed captured %s, including explicit placement",
+  (boundary) => {
+    const h = harness();
+    const origin = h.rt.capture();
+    h.rt.openPalette("resources", origin);
+    switch (boundary) {
+      case "panel":
+        h.replace();
+        break;
+      case "pane":
+        Object.assign(h.panel(), { group: {} });
+        break;
+      case "params":
+        Object.assign(h.panel(), { params: {} });
+        break;
+      case "workspace":
+        h.rt.registerWorkspace("c", { ...h.owner, token: {} });
+        break;
+      case "hidden":
+        h.owner.value.active = false;
+        break;
+      case "route":
+        h.rt.configure({ ...h.config, route: "/" });
+        break;
+    }
+    h.rt.refreshAvailability();
+    expect(h.rt.getSnapshot().palette).toBeUndefined();
+    for (const placement of [{}, { beside: true }]) {
+      expect(
+        h.rt.dispatch(
+          "resource.open",
+          {
+            uri: formatResourceUri({ cluster: "c", type: "pods", namespace: "ns", name: "next" }),
+            ...placement,
+          },
+          origin,
+        ),
+      ).toBe(false);
+    }
+    origin.openPane = "p";
+    expect(h.rt.dispatch("resource.openType", { type: "pods" }, origin)).toBe(false);
+    expect(h.owner.value.openList).not.toHaveBeenCalled();
+    expect(h.owner.value.openResource).not.toHaveBeenCalled();
+  },
+);
+it.each(["resource.open", "resource.openType"] as const)(
+  "%s retains captured placement when another Tab becomes active",
+  (command) => {
+    const h = harness();
+    Object.assign(h.owner.value, { types: new Map([["pods", {}]]) });
+    const origin = h.rt.capture();
+    Object.defineProperty(h.owner.api, "activePanel", { get: () => ({ id: "other", group: {} }) });
+    const args =
+      command === "resource.openType"
+        ? { type: "pods", beside: true }
+        : {
+            uri: formatResourceUri({ cluster: "c", type: "pods", namespace: "ns", name: "next" }),
+            beside: true,
+          };
+    expect(h.rt.invoke(command, args, origin, "pointer")).toBe(true);
+    const open =
+      command === "resource.openType" ? h.owner.value.openList : h.owner.value.openResource;
+    expect(open).toHaveBeenLastCalledWith(expect.anything(), {
+      preview: false,
+      beside: "p",
+      pane: undefined,
+    });
+    origin.openPane = "p";
+    expect(h.rt.invoke(command, { ...args, beside: false }, origin, "pointer")).toBe(true);
+    expect(open).toHaveBeenLastCalledWith(expect.anything(), {
+      preview: false,
+      beside: undefined,
+      pane: "p",
+    });
+  },
+);
+
+it("keeps Resource UID validation for edit and Tab actions when the editor itself survives", () => {
+  const h = harness();
+  const resource = document.createElement("section");
+  resource.dataset["commandPanel"] = "p";
+  h.root.before(resource);
+  resource.append(h.root);
+  let uid = "old";
+  h.rt.registerSurface({ element: resource, read: () => ({ kind: "resource", uid }) });
+  const origin = h.rt.capture();
+  expect(origin.resource?.element).toBe(resource);
+  expect(origin.surface?.element).toBe(h.root);
+  uid = "replacement";
+  for (const command of ["manifest.review", "editor.find", "tab.close", "tab.pin"] as const)
+    expect(h.rt.invoke(command, {}, origin)).toBe(false);
+  expect(h.review).not.toHaveBeenCalled();
+  expect(h.find).not.toHaveBeenCalled();
+  expect(h.panel().api.close).not.toHaveBeenCalled();
+});
+it("refuses an explicit Pane that was absent at capture instead of using the active Pane", () => {
+  const h = harness();
+  const origin = h.rt.capture("c", "missing");
+  origin.openPane = "missing";
+  expect(
+    h.rt.dispatch(
+      "resource.open",
+      {
+        uri: formatResourceUri({ cluster: "c", type: "pods", namespace: "ns", name: "next" }),
+      },
+      origin,
+    ),
+  ).toBe(false);
+  expect(h.owner.value.openResource).not.toHaveBeenCalled();
+});
+it("uses Workspace validation through prompted Resource arguments after source hydration", () => {
+  const h = harness();
+  const origin = h.rt.capture();
+  h.rt.openPalette("commands", origin);
+  h.uid("hydrated");
+  expect(h.rt.invoke("resource.open", {}, origin, "keyboard")).toBe(true);
+  expect(h.rt.getSnapshot().palette?.prompt?.id).toBe("resource.open");
+  expect(
+    h.rt.invoke(
+      "resource.open",
+      {
+        uri: formatResourceUri({ cluster: "c", type: "pods", namespace: "ns", name: "next" }),
+      },
+      origin,
+      "pointer",
+    ),
+  ).toBe(true);
+  expect(h.owner.value.openResource).toHaveBeenCalledOnce();
 });

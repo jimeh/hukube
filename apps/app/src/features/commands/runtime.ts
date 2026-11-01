@@ -27,7 +27,6 @@ export interface Surface {
     dirty?: boolean;
     uid?: string;
     focus?: () => void;
-    setReturnFocus?: (focus: () => void) => void;
   };
 }
 interface WorkspaceOwner {
@@ -139,7 +138,8 @@ export class CommandRuntime {
     if (this.chords.pending && !this.valid(this.chords.pending.origin)) this.chords.cancel();
     if (
       this.config?.connection === "outdated" ||
-      (this.view.palette?.mode === "resources" && !this.valid(this.view.palette.origin))
+      (this.view.palette?.mode === "resources" &&
+        !this.valid(this.view.palette.origin, "workspace"))
     ) {
       this.closePalette();
       return;
@@ -214,7 +214,7 @@ export class CommandRuntime {
       session,
     };
   }
-  valid(origin: Origin): boolean {
+  valid(origin: Origin, target: "captured" | "workspace" = "captured"): boolean {
     if (origin.route !== this.config?.route) return false;
     const w = origin.workspace;
     if (w && (!w.value.active || this.workspaces.get(w.value.cluster)?.token !== w.token))
@@ -226,6 +226,10 @@ export class CommandRuntime {
         origin.params !== JSON.stringify(origin.panel.params))
     )
       return false;
+    if (origin.openPane !== undefined && origin.openPane !== origin.panel?.id) return false;
+    // Workspace navigation retains exact placement, but does not operate on the
+    // source Resource, editor or session. Hydration/remounting is incidental.
+    if (target === "workspace") return true;
     if (
       origin.resource &&
       (this.surfaces.get(origin.resource.element) !== origin.resource ||
@@ -291,9 +295,10 @@ export class CommandRuntime {
   }
   reason(id: CommandId, origin: Origin, source = "palette"): string | undefined {
     if (this.config?.connection === "outdated") return "The app is out of date.";
-    if (!this.valid(origin)) return "The captured target changed or is no longer available.";
-    const def = definition(id),
-      surface = origin.surface?.read();
+    const def = definition(id);
+    if (!this.valid(origin, def.target === "workspace" ? "workspace" : "captured"))
+      return "The captured target changed or is no longer available.";
+    const surface = origin.surface?.read();
     if (def.target === "workspace" && !origin.workspace) return "Open a Cluster Workspace first.";
     if (def.target === "tab" && !origin.panel) return "No captured Tab.";
     if (id === "tab.pin" && !(origin.panel?.params as { preview?: boolean })?.preview)
@@ -410,11 +415,7 @@ export class CommandRuntime {
         return;
       case "manifest.review":
         this.closePalette(false);
-        origin.resource?.read().setReturnFocus?.(() => {
-          if (origin.element?.isConnected && origin.element.getClientRects().length)
-            origin.element.focus();
-          else surface?.focus?.();
-        });
+        // Overview and YAML prepare their own field/editor return policy.
         surface?.focus?.();
         surface!.review!();
         return;

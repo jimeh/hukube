@@ -94,7 +94,6 @@ export function ResourcePanel({
     uid: manifest.data?.deleted
       ? undefined
       : (metadata(manifest.data?.object ?? lastObject ?? {})["uid"] as string | undefined),
-    setReturnFocus: edit.setFocus,
     focus: edit.returnFocus,
   }));
   const discovered = types.get(address?.type ?? "");
