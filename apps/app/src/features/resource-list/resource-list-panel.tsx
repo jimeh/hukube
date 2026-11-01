@@ -170,8 +170,15 @@ export function ResourceListPanel({
     [data, cluster, selection],
   );
   // Remember where the Resource was, for when the window no longer holds it.
-  if (selection && selected !== undefined && selected !== selection.index)
-    setSelection({ ...selection, index: selected });
+  if (selection && selected !== undefined && selected !== selection.index) {
+    // Missing Table cells can temporarily sort a Resource last before its
+    // metadata disappears. Keep its last complete position for that deletion.
+    const awaitingCells =
+      effectiveSort.field === "column" &&
+      data?.columns?.some((column) => column.name === effectiveSort.column) &&
+      rowAt(data, selected)?.cells === undefined;
+    if (!awaitingCells) setSelection({ ...selection, index: selected });
+  }
   // A row selected before it loaded becomes its Resource once it has.
   if (selection && selection.key === undefined && rowAt(data, selection.index))
     setSelection(selectionAt(data, cluster, selection.index));
