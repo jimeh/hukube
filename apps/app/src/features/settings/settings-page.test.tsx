@@ -56,6 +56,88 @@ function fieldHarness() {
   };
 }
 
+it.each(
+  (["maxLines", "maxCharacters", "maxDecorations"] as const).flatMap((field) =>
+    (["forward", "reverse", "external"] as const).map((departure) => ({ field, departure })),
+  ),
+)(
+  "commits $field once after $departure departure from its whole editing group",
+  async ({ field, departure }) => {
+    const h = fieldHarness();
+    const view = render(
+      <EngineProvider client={h.engine}>
+        <button type="button">Previous control</button>
+        <PreferenceField field={field} />
+        <button type="button">Next control</button>
+      </EngineProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+      const input = view.container.querySelector("input")!;
+      act(() => input.focus());
+      fireEvent.change(input, { target: { value: "500" } });
+      if (departure !== "external")
+        act(() => screen.getByRole("button", { name: "Retry save" }).focus());
+      expect(h.put).not.toHaveBeenCalled();
+      if (departure !== "external")
+        act(() => screen.getByRole("button", { name: "Use Engine value" }).focus());
+      expect(h.put).not.toHaveBeenCalled();
+      if (departure === "reverse") {
+        act(() => screen.getByRole("button", { name: "Retry save" }).focus());
+        act(() => input.focus());
+      }
+      expect(h.put).not.toHaveBeenCalled();
+      if (departure === "reverse") {
+        await act(async () => screen.getByRole("button", { name: "Previous control" }).focus());
+      } else if (departure === "forward") {
+        await act(async () => screen.getByRole("button", { name: "Next control" }).focus());
+      } else await act(async () => input.blur());
+      expect(h.put).toHaveBeenCalledTimes(1);
+      expect(h.put.mock.calls[0]![1].value.logStreams?.[field]).toBe(500);
+      await vi.waitFor(() => expect(h.store.getSnapshot().values[field]).toBe(500));
+      expect(h.put).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      h.store.dispose();
+    }
+  },
+);
+
+it.each(["incomplete", "conflicted"])(
+  "does not commit an %s draft on complete group departure",
+  async (kind) => {
+    const h = fieldHarness();
+    const view = render(
+      <EngineProvider client={h.engine}>
+        <PreferenceField field="maxLines" />
+        <button type="button">Next control</button>
+      </EngineProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+      const input = screen.getByLabelText("Maximum retained lines") as HTMLInputElement;
+      act(() => input.focus());
+      fireEvent.change(input, { target: { value: kind === "incomplete" ? "-" : "12" } });
+      if (kind === "conflicted") act(() => h.remote({ version: 1, logStreams: { maxLines: 14 } }));
+      act(() =>
+        screen
+          .getByRole("button", { name: kind === "incomplete" ? "Retry save" : "Keep my value" })
+          .focus(),
+      );
+      act(() => screen.getByRole("button", { name: "Use Engine value" }).focus());
+      expect(h.put).not.toHaveBeenCalled();
+      await act(async () => screen.getByRole("button", { name: "Next control" }).focus());
+      expect(h.put).not.toHaveBeenCalled();
+      expect(input.value).toBe(kind === "incomplete" ? "-" : "12");
+      expect(h.store.getSnapshot().drafts.maxLines?.status).toBe("Not saved");
+      expect(h.store.getSnapshot().values.maxLines).toBe(kind === "incomplete" ? 80 : 14);
+    } finally {
+      view.unmount();
+      h.store.dispose();
+    }
+  },
+);
+
 it.each<NumericField>(["maxLines", "maxCharacters", "maxDecorations"])(
   "discards %s through its recovery actions without a blur write, then preserves ordinary blur and Enter commits",
   async (field) => {

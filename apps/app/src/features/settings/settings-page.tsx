@@ -264,7 +264,6 @@ const labels: Record<Field, string> = {
 };
 export function PreferenceField({ field }: { field: Field }) {
   const { store, snapshot } = usePreferences();
-  const status = useRef<HTMLDivElement>(null);
   const draft = snapshot.drafts[field];
   const value = draft && draft.status !== "Saved" ? draft.value : snapshot.values[field];
   const disabled = !snapshot.loaded || !!snapshot.error;
@@ -279,7 +278,12 @@ export function PreferenceField({ field }: { field: Field }) {
           ? "Oldest whole lines are removed when any retention limit is reached."
           : "";
   return (
-    <div className="flex min-w-0 flex-col gap-2 text-sm">
+    <div
+      className="flex min-w-0 flex-col gap-2 text-sm"
+      onBlur={(event) => {
+        if (numeric && !event.currentTarget.contains(event.relatedTarget)) store.commit([field]);
+      }}
+    >
       {numeric ? (
         <>
           <label htmlFor={id}>{labels[field]}</label>
@@ -294,9 +298,6 @@ export function PreferenceField({ field }: { field: Field }) {
             aria-invalid={!!draft?.error}
             aria-describedby={`${help ? `${id}-help ` : ""}${id}-status`}
             onChange={(event) => store.edit(field, event.target.value)}
-            onBlur={(event) => {
-              if (!status.current?.contains(event.relatedTarget)) store.commit([field]);
-            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
@@ -336,7 +337,7 @@ export function PreferenceField({ field }: { field: Field }) {
           {help} Range: 1 to {maximums[field as NumericField]?.toLocaleString()}.
         </p>
       )}
-      <div ref={status} id={`${id}-status`} aria-live="polite" className="break-words text-xs">
+      <div id={`${id}-status`} aria-live="polite" className="break-words text-xs">
         {draft ? (
           <>
             <p>
