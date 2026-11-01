@@ -313,3 +313,110 @@ it("forks bounded candidates and atomically replaces rows, status, formatting, a
   });
   unsubscribe();
 });
+
+it("selectively reconciles changed epochs without restoring unchanged rows or erasing their loss", () => {
+  const first = { ...source, id: 0, instance: "a-1", container: "main" };
+  const second = {
+    ...source,
+    id: 1,
+    pod: "web-b",
+    podUid: "uid-b",
+    instance: "b-1",
+    container: "sidecar",
+  };
+  const committedStatus = {
+    ...status,
+    sources: [first, second],
+    pods: 2,
+    followed: 2,
+    loaded: 2,
+  };
+  const doc = new LogDocument("deployments.apps", {
+    lines: 10,
+    characters: 10_000,
+    decorations: 1_000,
+  });
+  doc.status(committedStatus);
+  doc.append([
+    { source: 0, time: 1, text: "a-evicted" },
+    { source: 0, time: 2, text: "a-retained" },
+    { source: 1, time: 3, text: "b-old" },
+  ]);
+  doc.lossMarker([
+    { source: 0, instance: "a-1", records: 2 },
+    { source: 1, instance: "b-1", records: 3 },
+  ]);
+  doc.updateBudgets({ lines: 3, characters: 10_000, decorations: 1_000 });
+  expect(doc.rows.map(({ text }) => text).join("|")).not.toContain("a-evicted");
+  doc.updateBudgets({ lines: 20, characters: 10_000, decorations: 1_000 });
+
+  const changed = { ...second, instance: "b-2" };
+  const added = {
+    ...source,
+    id: 2,
+    pod: "web-c",
+    podUid: "uid-c",
+    instance: "c-1",
+    container: "worker",
+  };
+  const nextStatus = {
+    ...status,
+    sources: [first, changed, added],
+    pods: 3,
+    followed: 3,
+    loaded: 3,
+  };
+  const staged = doc.emptyFork();
+  staged.status(nextStatus);
+  staged.append([
+    { source: 1, time: 4, text: "b-new" },
+    { source: 2, time: 5, text: "c-new" },
+  ]);
+  staged.lossMarker([
+    { source: 1, instance: "b-2", records: 4 },
+    { source: 2, instance: "c-1", records: 1 },
+  ]);
+
+  const beforeRevision = doc.revision;
+  const beforeRewrites = doc.rewrites;
+  doc.reconcile(staged, new Set([1]), nextStatus);
+
+  expect(doc.revision).toBe(beforeRevision + 1);
+  expect(doc.rewrites).toBe(beforeRewrites + 1);
+  expect(doc.rows.map(({ text }) => text)).toEqual([
+    expect.stringContaining("a-retained"),
+    "··· 2 lines dropped: they arrived faster than they could be shown ···",
+    expect.stringContaining("b-new"),
+    expect.stringContaining("c-new"),
+    "··· 5 lines dropped: they arrived faster than they could be shown ···",
+  ]);
+  expect(doc.rows.map(({ sequence }) => sequence)).toEqual([1, 3, 4, 5, 6]);
+  expect(doc.rows.map(({ text }) => text).join("|")).not.toMatch(/a-evicted|b-old/);
+  expect(doc.retentionLoss).toBe(true);
+});
+
+it("drops a superseded staged epoch and carries staged retention loss into reconciliation", () => {
+  const doc = new LogDocument("pods", { lines: 10, characters: 1_000, decorations: 100 });
+  const first = { ...source, id: 0, instance: "i1", previous: true };
+  doc.status({ ...status, sources: [first] });
+  doc.append([{ source: 0, time: 1, text: "i1" }]);
+
+  const staged = doc.emptyFork();
+  const second = { ...first, instance: "i2" };
+  staged.status({ ...status, ready: false, sources: [second] });
+  staged.append([
+    { source: 0, time: 2, text: "i2-old" },
+    { source: 0, time: 3, text: "i2-last" },
+  ]);
+  staged.updateBudgets({ lines: 1, characters: 1_000, decorations: 100 });
+  expect(staged.retentionLoss).toBe(true);
+  staged.discardSources(new Set([0]));
+  const third = { ...first, instance: "i3" };
+  const nextStatus = { ...status, sources: [third] };
+  staged.status(nextStatus);
+  staged.append([{ source: 0, time: 4, text: "i3" }]);
+
+  doc.reconcile(staged, new Set([0]), nextStatus);
+  expect(doc.rows.map(({ text }) => text)).toEqual(["i3"]);
+  expect(doc.retentionLoss).toBe(true);
+});

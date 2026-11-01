@@ -14,6 +14,12 @@ interface Entry {
   sequence: number;
   line?: LogLine;
   marker?: string;
+  loss?: readonly LogEpochLoss[];
+}
+export interface LogEpochLoss {
+  source: number;
+  instance: string;
+  records: number;
 }
 export interface LogBudgets {
   lines: number;
@@ -145,21 +151,19 @@ export class LogDocument {
   }
   #fork(empty: boolean): LogDocument {
     const fork = new LogDocument(this.type, this.budgets);
-    for (const [id, source] of this.sources) fork.sources.set(id, source);
-    for (const id of this.#currentSources) fork.#currentSources.add(id);
-    for (const [key, color] of this.#originColors) fork.#originColors.set(key, color);
-    fork.#nextOriginColor = this.#nextOriginColor;
-    fork.#multipleSources = this.#multipleSources;
-    fork.#multipleContainers = this.#multipleContainers;
-    fork.#podPrefix = this.#podPrefix;
-    fork.#podPrefixInitialized = this.#podPrefixInitialized;
     fork.#timestamps = this.#timestamps;
-    fork.displayedStatus = this.displayedStatus;
     fork.revision = this.revision;
     fork.rewrites = this.rewrites;
-    if (empty) {
-      fork.#pruneSources();
-    } else {
+    if (!empty) {
+      for (const [id, source] of this.sources) fork.sources.set(id, source);
+      for (const id of this.#currentSources) fork.#currentSources.add(id);
+      for (const [key, color] of this.#originColors) fork.#originColors.set(key, color);
+      fork.#nextOriginColor = this.#nextOriginColor;
+      fork.#multipleSources = this.#multipleSources;
+      fork.#multipleContainers = this.#multipleContainers;
+      fork.#podPrefix = this.#podPrefix;
+      fork.#podPrefixInitialized = this.#podPrefixInitialized;
+      fork.displayedStatus = this.displayedStatus;
       fork.#entries = [...this.#entries];
       fork.rows = [...this.rows];
       for (const [id, count] of this.#sourceReferences) fork.#sourceReferences.set(id, count);
@@ -292,6 +296,77 @@ export class LogDocument {
     this.#trim();
     this.#changed();
   }
+  lossMarker(loss: readonly LogEpochLoss[]): void {
+    if (
+      !loss.length ||
+      loss.some(
+        ({ source, instance, records }) =>
+          !Number.isSafeInteger(source) ||
+          source < 0 ||
+          !instance ||
+          !Number.isSafeInteger(records) ||
+          records <= 0,
+      )
+    )
+      throw new Error("Invalid Log Stream loss marker ownership");
+    this.#add({
+      sequence: this.#sequence++,
+      loss: loss.map((entry) => ({ ...entry })),
+    });
+    this.#trim();
+    this.#changed();
+  }
+  /** Removes one owner's superseded source rows and its share of loss markers. */
+  discardSources(sources: ReadonlySet<number>): void {
+    if (!sources.size) return;
+    const entries = this.#entries.flatMap((entry) => {
+      if (entry.line && sources.has(entry.line.source)) return [];
+      if (!entry.loss) return [entry];
+      const loss = entry.loss.filter(({ source }) => !sources.has(source));
+      return loss.length ? [{ ...entry, loss }] : [];
+    });
+    if (
+      entries.length === this.#entries.length &&
+      entries.every((entry, index) => entry === this.#entries[index])
+    )
+      return;
+    this.#replaceEntries(entries);
+  }
+  /**
+   * Publishes a changed Previous-run source set once: unchanged committed
+   * entries retain their sequence, while staged new epochs are appended.
+   */
+  reconcile(
+    staged: LogDocument,
+    removedOrChangedSources: ReadonlySet<number>,
+    status: LogStreamStatus,
+  ): void {
+    if (staged === this || staged.type !== this.type)
+      throw new Error("Cannot reconcile a LogDocument from this candidate");
+    const next = this.emptyFork();
+    next.status(status);
+    next.retentionLoss = this.retentionLoss || staged.retentionLoss;
+    next.#sequence = this.#sequence;
+
+    for (const entry of this.#entries) {
+      if (entry.line && removedOrChangedSources.has(entry.line.source)) continue;
+      if (entry.loss) {
+        const loss = entry.loss.filter(({ source }) => !removedOrChangedSources.has(source));
+        if (!loss.length) continue;
+        next.#add({ ...entry, loss: loss.map((item) => ({ ...item })) });
+      } else next.#add(entry);
+    }
+    for (const entry of staged.#entries) {
+      next.#add({
+        ...entry,
+        sequence: next.#sequence++,
+        ...(entry.loss ? { loss: entry.loss.map((item) => ({ ...item })) } : {}),
+      });
+    }
+    if (next.#trim()) next.retentionLoss = true;
+    this.replaceFrom(next);
+    staged.release();
+  }
   #add(entry: Entry): void {
     const row = this.#format(entry);
     this.#entries.push(entry);
@@ -328,6 +403,18 @@ export class LogDocument {
     const count = (this.#sourceReferences.get(entry.line.source) ?? 0) - 1;
     if (count > 0) this.#sourceReferences.set(entry.line.source, count);
     else this.#sourceReferences.delete(entry.line.source);
+  }
+  #replaceEntries(entries: Entry[]): void {
+    this.#entries = entries;
+    this.#sourceReferences.clear();
+    for (const entry of entries)
+      if (entry.line)
+        this.#sourceReferences.set(
+          entry.line.source,
+          (this.#sourceReferences.get(entry.line.source) ?? 0) + 1,
+        );
+    this.#pruneSources();
+    this.#rebuild();
   }
   #pruneSources(): void {
     for (const id of this.sources.keys())
@@ -373,6 +460,12 @@ export class LogDocument {
       spans: [{ start: 0, end: text.length, className: "log-muted" }],
     });
     if (entry.marker !== undefined) return muted(entry.marker);
+    if (entry.loss !== undefined) {
+      const records = entry.loss.reduce((total, item) => total + item.records, 0);
+      return muted(
+        `··· ${records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
+      );
+    }
     const line = entry.line!;
     const source = this.sources.get(line.source);
     const origin =

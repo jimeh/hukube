@@ -34,10 +34,8 @@ export class LogCodec {
   readonly #exited = new Map<number, string>();
   #nextId = 0;
 
-  beginSocket(params?: Pick<LogStreamParams, "previous">): void {
+  beginSocket(_params?: Pick<LogStreamParams, "previous">): void {
     this.#sources.clear();
-    // A previous run is sent again from its start, exited record included.
-    if (params?.previous) this.#exited.clear();
   }
 
   event(status: LogStreamStatus): LogStreamStatus {
@@ -119,10 +117,10 @@ export class LogCodec {
       if (offset + length > view.byteLength) throw new Error("Incomplete log record content");
       const content = decoder.decode(new Uint8Array(buffer, offset, length));
       offset += length;
+      const instance = source.instance ?? "";
+      if (this.#exited.get(source.id) === instance) continue;
       if (flags & LogRecordFlagExited) {
-        if (this.#exited.has(source.id) && this.#exited.get(source.id) === (source.instance ?? ""))
-          continue;
-        this.#exited.set(source.id, source.instance ?? "");
+        this.#exited.set(source.id, instance);
       } else if (!(flags & LogRecordFlagGap) && time !== 0n && source.instance) {
         const cursor = this.#cursors.get(source.id);
         if (!cursor || cursor.instance !== source.instance || time > BigInt(cursor.time))

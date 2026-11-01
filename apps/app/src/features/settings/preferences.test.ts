@@ -184,6 +184,241 @@ it("decodes defaults and recovers invalid known fields without discarding valid 
   h.stop();
 });
 
+it("blocks every ordinary operation for present non-object known sections", async () => {
+  for (const malformed of ["dark", 7, false, null, ["future"]]) {
+    const server = new SettingsServer({
+      version: 1,
+      appearance: malformed,
+      logStreams: malformed,
+    });
+    const h = storeFor(server);
+    await ready(h.store);
+    expect(h.store.getSnapshot().sectionErrors).toMatchObject({
+      appearance: expect.stringMatching(/expected an object/),
+      logStreams: expect.stringMatching(/expected an object/),
+    });
+
+    await h.store.save("appearance", [{ path: "appearance.theme", value: "dark" }]);
+    await h.store.save("display", [{ path: "logStreams.wrap", value: false }]);
+    await h.store.save("retention", [{ path: "logStreams.maxLines", value: undefined }]);
+    await h.store.retry("appearance", true);
+    await h.store.retry("display", true);
+    await h.store.retry("retention", true);
+
+    expect(server.puts).toHaveLength(0);
+    expect(h.store.getSnapshot().display).toEqual({
+      appearance: { theme: "dark" },
+      logStreams: logPreferenceDefaults,
+    });
+    for (const scope of ["appearance", "display", "retention"] as const) {
+      expect(h.store.getSnapshot().saves[scope].phase).toBe("error");
+      expect(h.store.getSnapshot().saves[scope].message).toMatch(/Repair .* section/);
+    }
+    h.stop();
+  }
+});
+
+it("repairs one malformed section after confirmation while preserving all unrelated fields", async () => {
+  const server = new SettingsServer({
+    version: 1,
+    appearance: "broken",
+    logStreams: { wrap: false, futureBudget: 7 },
+    future: { enabled: true },
+  });
+  const h = storeFor(server);
+  await ready(h.store);
+  await h.store.save("display", [{ path: "logStreams.timestamps", value: true }]);
+  expect(server.value).toEqual({
+    version: 1,
+    appearance: "broken",
+    logStreams: { wrap: false, timestamps: true, futureBudget: 7 },
+    future: { enabled: true },
+  });
+  await h.store.repairSection("appearance");
+  expect(server.value).toEqual({
+    version: 1,
+    logStreams: { wrap: false, timestamps: true, futureBudget: 7 },
+    future: { enabled: true },
+  });
+  expect(h.store.getSnapshot().repairs.appearance).toMatchObject({
+    phase: "saved",
+    message: "Appearance section repaired",
+  });
+  expect(h.store.getSnapshot().sectionErrors.appearance).toBeUndefined();
+  h.stop();
+});
+
+it("rebases an equal malformed repair and conflicts when the section changed or became valid", async () => {
+  const rebasedServer = new SettingsServer({ version: 1, appearance: "broken", first: true });
+  const rebased = storeFor(rebasedServer);
+  await ready(rebased.store);
+  rebasedServer.behaviors.push(async (params) => {
+    rebasedServer.compare(params);
+    rebasedServer.commit({ version: 1, appearance: "broken", first: true, remote: 2 });
+    throw new EngineRequestError({ code: "conflict", message: "changed" });
+  });
+  await rebased.store.repairSection("appearance");
+  expect(rebasedServer.value).toEqual({ version: 1, first: true, remote: 2 });
+  expect(rebasedServer.puts).toHaveLength(2);
+  expect(rebased.store.getSnapshot().repairs.appearance.phase).toBe("saved");
+  rebased.stop();
+
+  for (const replacement of ["different", { theme: "light" }]) {
+    const server = new SettingsServer({ version: 1, appearance: "broken", future: true });
+    const h = storeFor(server);
+    await ready(h.store);
+    server.behaviors.push(async (params) => {
+      server.compare(params);
+      server.commit({ version: 1, appearance: replacement, future: true });
+      throw new EngineRequestError({ code: "conflict", message: "changed" });
+    });
+    await h.store.repairSection("appearance");
+    expect(server.puts).toHaveLength(1);
+    expect(h.store.getSnapshot().repairs.appearance).toMatchObject({
+      phase: "conflict",
+      message: "Not repaired: section changed in another window",
+    });
+    expect((server.value as Record<string, unknown>)["appearance"]).toEqual(replacement);
+    h.stop();
+  }
+});
+
+it("confirms an unknown repair outcome and hands a malformed envelope to whole-document recovery", async () => {
+  const disconnected = new SettingsServer({ version: 1, logStreams: [] });
+  const first = storeFor(disconnected);
+  await ready(first.store);
+  disconnected.behaviors.push(async (params) => {
+    disconnected.compare(params);
+    disconnected.commit(params.value);
+    throw new EngineRequestError({ code: "disconnected", message: "lost response" });
+  });
+  await first.store.repairSection("logStreams");
+  expect(first.store.getSnapshot().repairs.logStreams.phase).toBe("saved");
+  expect(disconnected.value).toEqual({ version: 1 });
+  first.stop();
+
+  const malformed = new SettingsServer({ version: 1, logStreams: [] });
+  const second = storeFor(malformed);
+  await ready(second.store);
+  malformed.behaviors.push(async (params) => {
+    malformed.compare(params);
+    malformed.commit({ version: 2, logStreams: [] });
+    throw new EngineRequestError({ code: "conflict", message: "changed" });
+  });
+  await second.store.repairSection("logStreams");
+  expect(second.store.getSnapshot()).toMatchObject({
+    status: "malformed",
+    repairs: {
+      logStreams: {
+        phase: "error",
+        message: expect.stringMatching(/whole stored document/),
+      },
+    },
+  });
+  expect(malformed.puts).toHaveLength(1);
+  second.stop();
+});
+
+it("retires a blocked in-flight save after section repair without replaying it", async () => {
+  const server = new SettingsServer({ version: 1 });
+  const h = storeFor(server);
+  await ready(h.store);
+  const gate = deferred();
+  server.behaviors.push(async () => {
+    await gate.promise;
+    throw new EngineRequestError({ code: "conflict", message: "changed" });
+  });
+  const first = h.store.save("appearance", [{ path: "appearance.theme", value: "light" }]);
+  await until(() => expect(server.puts).toHaveLength(1));
+  const queued = h.store.save("display", [{ path: "logStreams.wrap", value: false }]);
+  server.commit({ version: 1, logStreams: "broken", remote: true });
+  server.broadcast();
+  expect(h.store.getSnapshot().display.logStreams.wrap).toBe(true);
+
+  const repair = h.store.repairSection("logStreams");
+  server.commit({ version: 1, remote: true });
+  server.broadcast();
+  expect(h.store.getSnapshot().repairs.logStreams.phase).toBe("saved");
+  expect(h.store.getSnapshot().saves.display.phase).toBe("idle");
+  expect(h.store.getSnapshot().display.logStreams.wrap).toBe(true);
+
+  gate.resolve();
+  await Promise.all([first, queued, repair]);
+  expect(server.puts).toHaveLength(2);
+  expect(server.value).toEqual({
+    version: 1,
+    appearance: { theme: "light" },
+    remote: true,
+  });
+  expect(h.store.getSnapshot().saves.appearance.phase).toBe("saved");
+  expect(h.store.getSnapshot().saves.display.phase).toBe("idle");
+  expect(h.store.getSnapshot().display.logStreams.wrap).toBe(true);
+
+  await h.store.save("display", [{ path: "logStreams.wrap", value: false }]);
+  expect(server.puts).toHaveLength(3);
+  expect(server.value).toEqual({
+    version: 1,
+    appearance: { theme: "light" },
+    logStreams: { wrap: false },
+    remote: true,
+  });
+  expect(h.store.getSnapshot().saves.display.phase).toBe("saved");
+  expect(h.store.getSnapshot().display.logStreams.wrap).toBe(false);
+  h.stop();
+});
+
+it("shows confirmed data when another window repairs a section with blocked intent", async () => {
+  const server = new SettingsServer({ version: 1, logStreams: "broken" });
+  server.broadcastOnCommit = true;
+  const first = storeFor(server);
+  const second = storeFor(server);
+  await Promise.all([ready(first.store), ready(second.store)]);
+
+  await first.store.save("display", [{ path: "logStreams.wrap", value: false }]);
+  expect(first.store.getSnapshot().saves.display.phase).toBe("error");
+  expect(first.store.getSnapshot().display.logStreams.wrap).toBe(true);
+
+  await second.store.repairSection("logStreams");
+  expect(server.puts).toHaveLength(1);
+  expect(server.value).toEqual({ version: 1 });
+  expect(first.store.getSnapshot().sectionErrors.logStreams).toBeUndefined();
+  expect(first.store.getSnapshot().saves.display).toMatchObject({
+    phase: "conflict",
+    message: "Not saved: changed in another window",
+  });
+  expect(first.store.getSnapshot().display.logStreams.wrap).toBe(true);
+
+  first.stop();
+  second.stop();
+});
+
+it("reconciles blocked intent against different or equal readable remote data", async () => {
+  for (const replacement of [true, false]) {
+    const server = new SettingsServer({ version: 1, logStreams: "broken" });
+    const h = storeFor(server);
+    await ready(h.store);
+    await h.store.save("display", [{ path: "logStreams.wrap", value: false }]);
+
+    server.commit({ version: 1, logStreams: { wrap: replacement }, remote: true });
+    server.broadcast();
+
+    expect(server.puts).toHaveLength(0);
+    expect(h.store.getSnapshot().sectionErrors.logStreams).toBeUndefined();
+    expect(h.store.getSnapshot().saves.display).toMatchObject(
+      replacement
+        ? { phase: "conflict", message: "Not saved: changed in another window" }
+        : { phase: "saved", message: "Saved" },
+    );
+    expect(h.store.getSnapshot().display.logStreams.wrap).toBe(replacement);
+    expect(server.value).toEqual({
+      version: 1,
+      logStreams: { wrap: replacement },
+      remote: true,
+    });
+    h.stop();
+  }
+});
+
 it("rejects malformed envelopes until an explicit CAS replacement", async () => {
   const server = new SettingsServer({ version: 2, appearance: { theme: "light" } });
   const h = storeFor(server);
@@ -506,6 +741,38 @@ it("migrates a valid legacy theme only for a wholly absent document and Engine s
     value: { version: 1, appearance: { theme: "dark" } },
   });
   expect(engineDark.effective.appearance.theme).toBe("dark");
+});
+
+it("retires a blocked legacy migration when Appearance is repaired after document creation", async () => {
+  const server = new SettingsServer();
+  const gate = deferred();
+  server.behaviors.push(async () => {
+    await gate.promise;
+    throw new EngineRequestError({ code: "conflict", message: "changed" });
+  });
+  const h = storeFor(server, "light");
+  await until(() => expect(server.puts).toHaveLength(1));
+
+  server.commit({ version: 1, appearance: "broken", remote: true });
+  server.broadcast();
+  expect(h.store.getSnapshot().saves.appearance).toMatchObject({
+    phase: "error",
+    message: expect.stringMatching(/Repair Appearance section/),
+  });
+
+  const repair = h.store.repairSection("appearance");
+  server.commit({ version: 1, remote: true });
+  server.broadcast();
+  gate.resolve();
+  await repair;
+
+  expect(server.puts).toHaveLength(1);
+  expect(server.value).toEqual({ version: 1, remote: true });
+  expect(h.store.getSnapshot().repairs.appearance.phase).toBe("saved");
+  expect(h.store.getSnapshot().saves.appearance.phase).toBe("idle");
+  expect(h.store.getSnapshot().display.appearance.theme).toBe("dark");
+  expect(h.cache()).toBe("dark");
+  h.stop();
 });
 
 it("keeps the legacy theme cache intact through connection changes before the first valid snapshot", async () => {

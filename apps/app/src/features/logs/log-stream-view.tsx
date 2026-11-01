@@ -29,15 +29,22 @@ interface ReplayFingerprint {
   sources: Map<number, { previous: boolean; instance: string }>;
 }
 
-interface PreviousReplay {
-  unchanged?: LogDocument;
-  replacement?: LogDocument;
-  remaining: Map<string, number>;
-  crossed: Map<string, number>;
-  epochs: Map<number, string>;
-  classified?: ReplayFingerprint;
-  mode?: "unchanged" | "replacement";
-  committed: boolean;
+interface PreviousEpoch {
+  source: number;
+  instance: string;
+  owner: "committed" | "staged";
+  complete: boolean;
+  unresolved: boolean;
+  untimed: boolean;
+}
+
+interface PreviousHandle {
+  staged: LogDocument;
+  fingerprint?: ReplayFingerprint;
+  socketEpochs: Map<number, string>;
+  epochs: Map<string, PreviousEpoch>;
+  stagedBySource: Map<number, string>;
+  pendingChange: boolean;
 }
 
 const sourceEpoch = (id: number, instance: string): string => JSON.stringify([id, instance]);
@@ -56,15 +63,6 @@ function replayFingerprint(status: LogStreamStatus | undefined): ReplayFingerpri
       return [source.id, source.previous ?? false, instance] as const;
     });
   return { value: JSON.stringify(canonical), epochs, sources };
-}
-
-function provenReplayChange(status: LogStreamStatus, fingerprint: ReplayFingerprint): boolean {
-  return status.sources.some((source) => {
-    const expected = fingerprint.sources.get(source.id);
-    if (!expected) return false;
-    if ((source.previous ?? false) !== expected.previous) return true;
-    return !!source.previous && !!source.instance && source.instance !== expected.instance;
-  });
 }
 
 function integrityEnd(
@@ -176,119 +174,102 @@ function LogRun({
   const { timestamps, wrap, budgets } = useLogSettings();
   const { cluster, type, namespace, name } = target;
   const [document] = useState(() => new LogDocument(type, budgets));
-  const replayCandidate = useRef<PreviousReplay | undefined>(undefined);
+  const replayCandidate = useRef<PreviousHandle | undefined>(undefined);
   useSyncExternalStore(document.subscribe, document.snapshot);
   const current = useEffectEvent(() => visible);
   const remember = useEffectEvent(setKnown);
-  const restartRun = useEffectEvent(restart);
   useEffect(() => {
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
     let handle: EngineStream | undefined;
     let pods: Map<string, string> | undefined;
-    let replay: PreviousReplay | undefined;
-    let baselineFingerprint = replayFingerprint(document.displayedStatus)?.value;
-    let baselineCounts = new Map<string, number>();
+    let replay: PreviousHandle | undefined = previous
+      ? {
+          staged: document.emptyFork(),
+          socketEpochs: new Map(),
+          epochs: new Map(),
+          stagedBySource: new Map(),
+          pendingChange: false,
+        }
+      : undefined;
+    replayCandidate.current = replay;
     const releaseReplay = () => {
-      replay?.unchanged?.release();
-      replay?.replacement?.release();
-      replay?.remaining.clear();
-      replay?.crossed.clear();
+      replay?.staged.release();
+      replay?.socketEpochs.clear();
       replay?.epochs.clear();
+      replay?.stagedBySource.clear();
       if (replayCandidate.current === replay) replayCandidate.current = undefined;
       replay = undefined;
-    };
-    const beginReplay = () => {
-      releaseReplay();
-      if (!previous) return;
-      replay = {
-        unchanged: document.fork(),
-        replacement: document.emptyFork(),
-        remaining: new Map(baselineCounts),
-        crossed: new Map(),
-        epochs: new Map(),
-        committed: false,
-      };
-      replayCandidate.current = replay;
-    };
-    const restartChangedReplay = () => {
-      if (!active) return;
-      releaseReplay();
-      active = false;
-      handle?.close();
-      restartRun();
     };
     const failIntegrity = (reason: "ProtocolViolation" | "ReplayIncomplete", message: string) => {
       if (!active) return;
       releaseReplay();
       active = false;
       handle?.close();
+      if (stream.current === handle) stream.current = undefined;
       setState("ended");
       setEnd(integrityEnd(reason, message));
-    };
-    const addCount = (counts: Map<string, number>, key: string, count: number): boolean => {
-      const next = (counts.get(key) ?? 0) + count;
-      if (!Number.isSafeInteger(next)) {
-        failIntegrity(
-          "ProtocolViolation",
-          "The previous-run replay count exceeded its safe range.",
-        );
-        return false;
-      }
-      counts.set(key, next);
-      return true;
     };
     const droppedMarker = (targetDocument: LogDocument, records: number) => {
       targetDocument.marker(
         `··· ${records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
       );
     };
-    const commitCandidate = (
-      candidate: PreviousReplay,
-      mode: "unchanged" | "replacement",
-      fingerprint: ReplayFingerprint,
-    ) => {
-      const next = mode === "unchanged" ? candidate.unchanged : candidate.replacement;
-      if (!next) {
-        failIntegrity("ProtocolViolation", "The previous-run replay candidate was unavailable.");
+    const replayUnsafe = () =>
+      !!replay &&
+      [...replay.epochs.values()].some(
+        (epoch) => !epoch.complete && (epoch.unresolved || epoch.untimed),
+      );
+    const classifySource = (source: LogStreamStatus["sources"][number]) => {
+      const candidate = replay!;
+      const superseded = candidate.stagedBySource.get(source.id);
+      if (!source.previous || !source.instance) {
+        if (superseded) {
+          candidate.staged.discardSources(new Set([source.id]));
+          candidate.epochs.delete(superseded);
+          candidate.stagedBySource.delete(source.id);
+        }
         return;
       }
-      baselineFingerprint = fingerprint.value;
-      baselineCounts = new Map(candidate.crossed);
-      candidate.classified = fingerprint;
-      candidate.mode = mode;
-      candidate.committed = true;
-      if (mode === "unchanged") {
-        candidate.replacement?.release();
-        candidate.replacement = undefined;
-        candidate.unchanged = undefined;
-      } else {
-        candidate.unchanged?.release();
-        candidate.unchanged = undefined;
-        candidate.replacement = undefined;
+      const key = sourceEpoch(source.id, source.instance);
+      const owner = candidate.fingerprint?.epochs.has(key) ? "committed" : "staged";
+      if (superseded && superseded !== key) {
+        candidate.staged.discardSources(new Set([source.id]));
+        candidate.epochs.delete(superseded);
+        candidate.stagedBySource.delete(source.id);
       }
-      document.replaceFrom(next);
+      if (owner === "staged") {
+        candidate.stagedBySource.set(source.id, key);
+      } else candidate.stagedBySource.delete(source.id);
+      const prior = candidate.epochs.get(key);
+      candidate.epochs.set(
+        key,
+        prior ?? {
+          source: source.id,
+          instance: source.instance,
+          owner,
+          complete: false,
+          unresolved: false,
+          untimed: false,
+        },
+      );
+      candidate.socketEpochs.set(source.id, key);
     };
-    const commitUnchangedIfComplete = (candidate: PreviousReplay) => {
-      if (
-        !candidate.committed &&
-        candidate.mode === "unchanged" &&
-        candidate.classified &&
-        candidate.remaining.size === 0
-      )
-        commitCandidate(candidate, "unchanged", candidate.classified);
-    };
-    beginReplay();
     handle = engine.openStream(
       "resource.logs",
       { cluster, type, namespace, name, uid: incarnation, container, previous },
       {
         state: (value) => {
           if (!active) return;
+          if ((value === "reconnecting" || value === "paused") && replayUnsafe()) {
+            failIntegrity(
+              "ReplayIncomplete",
+              "The previous-run replay could not resume safely after an incomplete source boundary.",
+            );
+            return;
+          }
           setState(value);
-          if (value === "reconnecting" || (value === "connecting" && !replay)) beginReplay();
-          else if (value === "paused") releaseReplay();
         },
         event: (value) => {
           if (!active) return;
@@ -318,43 +299,55 @@ function LogRun({
           if (!candidate) {
             failIntegrity(
               "ProtocolViolation",
-              "The previous-run socket sent status outside a replay.",
+              "The previous-run handle sent status without an owner.",
             );
             return;
           }
-          candidate.epochs.clear();
-          for (const source of value.sources)
-            if (source.instance) candidate.epochs.set(source.id, source.instance);
+          candidate.socketEpochs.clear();
+          candidate.staged.status(value);
+          for (const source of value.sources) {
+            const committed = candidate.fingerprint?.sources.get(source.id);
+            if (
+              candidate.fingerprint &&
+              (!committed ||
+                committed.previous !== (source.previous ?? false) ||
+                (committed.previous && committed.instance !== source.instance))
+            )
+              candidate.pendingChange = true;
+            classifySource(source);
+          }
           const fingerprint = replayFingerprint(value);
-          if (
-            candidate.classified &&
-            (provenReplayChange(value, candidate.classified) ||
-              (fingerprint && fingerprint.value !== candidate.classified.value))
-          ) {
-            restartChangedReplay();
-            return;
-          }
-          if (candidate.committed) {
-            document.status(value);
-            return;
-          }
-          candidate.unchanged?.status(value);
-          candidate.replacement?.status(value);
           if (!fingerprint) return;
-          for (const epoch of candidate.crossed.keys())
+          for (const [source, epoch] of candidate.stagedBySource)
             if (!fingerprint.epochs.has(epoch)) {
-              restartChangedReplay();
-              return;
+              candidate.staged.discardSources(new Set([source]));
+              candidate.stagedBySource.delete(source);
+              candidate.epochs.delete(epoch);
             }
-          candidate.classified = fingerprint;
-          if (fingerprint.value !== baselineFingerprint) {
-            commitCandidate(candidate, "replacement", fingerprint);
+          if (candidate.fingerprint?.value === fingerprint.value) {
+            document.status(value);
+            candidate.pendingChange = false;
             return;
           }
-          candidate.mode = "unchanged";
-          candidate.replacement?.release();
-          candidate.replacement = undefined;
-          commitUnchangedIfComplete(candidate);
+          const changed = new Set<number>();
+          for (const [source, oldEpoch] of candidate.fingerprint?.sources ?? []) {
+            const nextEpoch = fingerprint.sources.get(source);
+            if (
+              !nextEpoch ||
+              oldEpoch.previous !== nextEpoch.previous ||
+              oldEpoch.instance !== nextEpoch.instance
+            )
+              changed.add(source);
+          }
+          document.reconcile(candidate.staged, changed, value);
+          candidate.staged = document.emptyFork();
+          candidate.stagedBySource.clear();
+          candidate.pendingChange = false;
+          for (const [key, epoch] of candidate.epochs) {
+            if (fingerprint.epochs.has(key)) epoch.owner = "committed";
+            else candidate.epochs.delete(key);
+          }
+          candidate.fingerprint = fingerprint;
         },
         data: (lines) => {
           if (!active) return;
@@ -366,45 +359,33 @@ function LogRun({
           if (!candidate) {
             failIntegrity(
               "ProtocolViolation",
-              "The previous-run socket sent data outside a replay.",
+              "The previous-run handle sent data without an owner.",
             );
             return;
           }
-          const epochs: string[] = [];
           for (const line of lines) {
-            const instance = candidate.epochs.get(line.source);
-            if (!instance) {
+            const key = candidate.socketEpochs.get(line.source);
+            const epoch = key ? candidate.epochs.get(key) : undefined;
+            if (!epoch) {
               failIntegrity(
                 "ProtocolViolation",
                 "The previous-run socket sent a line before its source instance.",
               );
               return;
             }
-            const epoch = sourceEpoch(line.source, instance);
-            if (candidate.classified && !candidate.classified.epochs.has(epoch)) {
-              restartChangedReplay();
-              return;
-            }
-            epochs.push(epoch);
+            if (epoch.complete) continue;
+            (epoch.owner === "committed" ? document : candidate.staged).append([line]);
+            if (line.exited) {
+              epoch.complete = true;
+              epoch.unresolved = false;
+              epoch.untimed = false;
+            } else if (line.gap) {
+              epoch.unresolved = true;
+            } else if (line.time) {
+              epoch.unresolved = false;
+              epoch.untimed = false;
+            } else epoch.untimed = true;
           }
-          if (candidate.committed) {
-            for (const epoch of epochs) if (!addCount(baselineCounts, epoch, 1)) return;
-            if (lines.length) document.append(lines);
-            return;
-          }
-          if (lines.length) candidate.replacement?.append(lines);
-          const suffix = [] as typeof lines;
-          for (let index = 0; index < lines.length; index++) {
-            const epoch = epochs[index]!;
-            if (!addCount(candidate.crossed, epoch, 1)) return;
-            const remaining = candidate.remaining.get(epoch) ?? 0;
-            if (remaining > 0) {
-              if (remaining === 1) candidate.remaining.delete(epoch);
-              else candidate.remaining.set(epoch, remaining - 1);
-            } else suffix.push(lines[index]!);
-          }
-          if (suffix.length) candidate.unchanged?.append(suffix);
-          commitUnchangedIfComplete(candidate);
         },
         gap: (gap) => {
           if (!active) return;
@@ -420,63 +401,55 @@ function LogRun({
             );
             return;
           }
-          const totals: { epoch: string; records: number }[] = [];
+          const committedLoss = [] as {
+            source: number;
+            instance: string;
+            records: number;
+          }[];
+          const stagedLoss = [] as typeof committedLoss;
           for (const source of gap.sources) {
-            const instance = candidate.epochs.get(source.id);
-            if (!instance) {
+            const key = candidate.socketEpochs.get(source.id);
+            const epoch = key ? candidate.epochs.get(key) : undefined;
+            if (!epoch) {
               failIntegrity(
                 "ProtocolViolation",
                 "The previous-run socket sent a gap before its source instance.",
               );
               return;
             }
-            const epoch = sourceEpoch(source.id, instance);
-            if (candidate.classified && !candidate.classified.epochs.has(epoch)) {
-              restartChangedReplay();
-              return;
-            }
-            totals.push({ epoch, records: source.records });
+            if (!epoch.complete) epoch.unresolved = true;
+            (epoch.owner === "committed" ? committedLoss : stagedLoss).push({
+              source: epoch.source,
+              instance: epoch.instance,
+              records: source.records,
+            });
           }
-          if (candidate.committed) {
-            for (const total of totals)
-              if (!addCount(baselineCounts, total.epoch, total.records)) return;
-            droppedMarker(document, gap.records);
-            return;
-          }
-          if (candidate.replacement) droppedMarker(candidate.replacement, gap.records);
-          let visibleRecords = 0;
-          for (const total of totals) {
-            if (!addCount(candidate.crossed, total.epoch, total.records)) return;
-            const remaining = candidate.remaining.get(total.epoch) ?? 0;
-            const skipped = Math.min(remaining, total.records);
-            const nextRemaining = remaining - skipped;
-            if (nextRemaining) candidate.remaining.set(total.epoch, nextRemaining);
-            else candidate.remaining.delete(total.epoch);
-            visibleRecords += total.records - skipped;
-          }
-          if (visibleRecords && candidate.unchanged)
-            droppedMarker(candidate.unchanged, visibleRecords);
-          commitUnchangedIfComplete(candidate);
+          if (committedLoss.length) document.lossMarker(committedLoss);
+          if (stagedLoss.length) candidate.staged.lossMarker(stagedLoss);
         },
         end: (value) => {
           if (!active) return;
-          if (!previous || value.reason === "error" || replay?.committed) {
+          if (!previous || value.reason === "error") {
             releaseReplay();
             setEnd(value);
             return;
           }
-          const classified = replay?.classified;
+          const classified = replay?.fingerprint;
+          const staged = replay?.staged.diagnostics().entries ?? 0;
+          const pendingChange = replay?.pendingChange || !!replay?.stagedBySource.size;
           releaseReplay();
           setEnd(
-            classified
-              ? integrityEnd(
-                  "ReplayIncomplete",
-                  "The previous-run replay ended before every retained source boundary was reached.",
-                )
-              : integrityEnd(
-                  "ProtocolViolation",
-                  "The previous-run replay ended before its source instances were complete.",
-                ),
+            classified && staged === 0 && !pendingChange
+              ? value
+              : classified
+                ? integrityEnd(
+                    "ReplayIncomplete",
+                    "The previous-run replay ended before its changed source set was definitive.",
+                  )
+                : integrityEnd(
+                    "ProtocolViolation",
+                    "The previous-run replay ended before its source instances were complete.",
+                  ),
           );
         },
       },
@@ -499,13 +472,11 @@ function LogRun({
   }, [visible]);
   useEffect(() => {
     document.updateBudgets(budgets);
-    replayCandidate.current?.unchanged?.updateBudgets(budgets);
-    replayCandidate.current?.replacement?.updateBudgets(budgets);
+    replayCandidate.current?.staged.updateBudgets(budgets);
   }, [document, budgets]);
   useEffect(() => {
     document.timestamps(timestamps);
-    replayCandidate.current?.unchanged?.timestamps(timestamps);
-    replayCandidate.current?.replacement?.timestamps(timestamps);
+    replayCandidate.current?.staged.timestamps(timestamps);
   }, [document, timestamps]);
 
   const status = document.displayedStatus;
@@ -567,6 +538,12 @@ function LogRun({
     loading = false;
     if (end.error?.code === "forbidden")
       empty = { title: "Not permitted", description: end.error.message, action: action() };
+    else if (end.error?.reason === "ReplayIncomplete" || end.error?.reason === "ProtocolViolation")
+      notices.push({
+        text: `${end.error.reason}: ${end.error.message}`,
+        destructive: true,
+        action: action(),
+      });
     else
       notices.push({
         text: `The Log Stream stopped: ${end.error?.message ?? "Unknown error"}.`,

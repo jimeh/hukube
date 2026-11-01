@@ -53,7 +53,8 @@ it("keeps source numbers and newest nanosecond cursors across sockets and suppre
   expect(codec.decode(frame(99, 4))).toHaveLength(1);
   codec.beginSocket({ previous: true });
   codec.event({ ...status, sources: [{ ...source, id: 99, instance: "run2" }] });
-  expect(codec.decode(frame(99, 4))).toHaveLength(1);
+  expect(codec.decode(frame(99, 4))).toEqual([]);
+  expect(codec.decode(frame(99, 0, 1234567892n, "after exit"))).toEqual([]);
 });
 
 it("maps exact sorted gap totals from socket-local to stable source IDs", () => {

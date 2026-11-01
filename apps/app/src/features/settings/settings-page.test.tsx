@@ -186,6 +186,67 @@ it("works without a Cluster and saves and resets the Engine-shared theme after r
   expect(screen.getByRole("radio", { name: "Dark" }).hasAttribute("checked")).toBe(true);
 });
 
+it("confirms section-local Appearance repair and preserves unrelated stored data", async () => {
+  const h = await mountPage("appearance", {
+    version: 1,
+    appearance: "broken",
+    logStreams: { wrap: false },
+    future: { enabled: true },
+  });
+  expect(screen.getByRole("radio", { name: "Light" }).matches(":disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Reset section" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("alert").textContent).toContain(
+    "Ordinary changes are blocked so they cannot overwrite this section",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Repair Appearance section" }));
+  let dialog = screen.getByRole("alertdialog", { name: "Repair Appearance section?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(h.puts).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole("button", { name: "Repair Appearance section" }));
+  dialog = screen.getByRole("alertdialog", { name: "Repair Appearance section?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Repair Appearance section" }));
+  await screen.findByText("Appearance section repaired");
+  expect(h.value()).toEqual({
+    version: 1,
+    logStreams: { wrap: false },
+    future: { enabled: true },
+  });
+  expect(screen.getByRole("radio", { name: "Light" }).hasAttribute("disabled")).toBe(false);
+});
+
+it("blocks all Log Stream settings until its malformed section is explicitly repaired", async () => {
+  const h = await mountPage("logs", {
+    version: 1,
+    appearance: { theme: "light" },
+    logStreams: null,
+    future: "kept",
+  });
+  expect(screen.getByRole("textbox", { name: /Retained lines/ }).hasAttribute("disabled")).toBe(
+    true,
+  );
+  expect(
+    screen.getByRole("checkbox", { name: "Wrap long lines" }).getAttribute("aria-disabled"),
+  ).toBe("true");
+  for (const reset of screen.getAllByRole("button", { name: "Reset section" }))
+    expect(reset.hasAttribute("disabled")).toBe(true);
+  expect(h.puts).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole("button", { name: "Repair Log Streams section" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Repair Log Streams section?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Repair Log Streams section" }));
+  await screen.findByText("Log Streams section repaired");
+  expect(h.value()).toEqual({
+    version: 1,
+    appearance: { theme: "light" },
+    future: "kept",
+  });
+  expect(screen.getByRole("textbox", { name: /Retained lines/ }).hasAttribute("disabled")).toBe(
+    false,
+  );
+});
+
 it("explains an unavailable Engine while keeping last-known preferences visible", async () => {
   await mountPage(
     "appearance",

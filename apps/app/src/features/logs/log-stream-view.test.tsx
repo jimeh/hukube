@@ -8,8 +8,14 @@ import type {
   StreamListener,
   SubscriptionListener,
 } from "@hukube/engine-client";
-import { EngineRequestError } from "@hukube/engine-client";
+import { EngineConnection, EngineRequestError, type SocketLike } from "@hukube/engine-client";
 import { EngineProvider } from "@hukube/engine-client/react";
+import { frame as wireFrame } from "../../../../../packages/engine-client/src/log-test-fixtures.ts";
+import {
+  Hash,
+  LogRecordFlagGap,
+  type StreamClientMessage,
+} from "../../../../../packages/engine-client/src/protocol.gen.ts";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useImperativeHandle } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -61,6 +67,32 @@ let preferenceWatches: {
 }[];
 let preferencePuts: SettingPut[];
 let failPreferencePut: EngineRequestError | undefined;
+
+class StreamSocket implements SocketLike {
+  sent: StreamClientMessage[] = [];
+  binaryType = "";
+  onopen: SocketLike["onopen"] = null;
+  onclose: SocketLike["onclose"] = null;
+  onmessage: SocketLike["onmessage"] = null;
+
+  send(value: string | Uint8Array<ArrayBuffer>) {
+    if (typeof value === "string") this.sent.push(JSON.parse(value) as StreamClientMessage);
+  }
+  close() {
+    this.onclose?.(new CloseEvent("close"));
+  }
+  receive(data: unknown) {
+    this.onmessage?.(
+      new MessageEvent("message", {
+        data: data instanceof ArrayBuffer ? data : JSON.stringify(data),
+      }),
+    );
+  }
+  hello() {
+    this.onopen?.(new Event("open"));
+    this.receive({ type: "hello", hello: { protocol: Hash } });
+  }
+}
 
 function publishPreference(value: unknown) {
   preference = value;
@@ -124,6 +156,25 @@ function makeEngine(): EngineClient {
     onStateChange: () => () => {},
     close: () => {},
   } as unknown as EngineClient;
+}
+
+function makeWireEngine() {
+  const sockets: StreamSocket[] = [];
+  const connection = new EngineConnection({
+    url: "http://localhost",
+    token: "test",
+    retryDelaysMs: [1],
+    createSocket: () => {
+      const socket = new StreamSocket();
+      sockets.push(socket);
+      return socket;
+    },
+  });
+  const client: EngineClient = {
+    ...makeEngine(),
+    openStream: connection.openStream.bind(connection),
+  };
+  return { client, connection, sockets };
 }
 const props: LogStreamViewProps = {
   target: { cluster: "c", type: "pods", namespace: "ns", name: "web" },
@@ -423,20 +474,45 @@ it("shares display toggles, enables previous only after a restart, searches, and
   // Timestamps are still on from the toggle above.
   expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   expect(screen.getByText("The previous run of constructor.")).toBeDefined();
-  // A second socket sends the run again. Its already-delivered prefix is
-  // ignored without clearing the retained document.
+  // A second socket resumes after the committed cursor without clearing the
+  // retained document.
   act(() => latest().listener.state?.("reconnecting"));
   event({ ...ready, ready: false, sources: [] });
   expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   event({ ...restarted, ready: false });
-  line("old");
+  line("new");
   event(restarted);
-  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
+  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old01:02:03.004 new");
   act(() => latest().listener.end({ reason: "complete" }));
   act(() => {
     vi.advanceTimersByTime(60_000);
   });
   expect(opened).toHaveLength(3);
+});
+
+it("rejects toolbar display changes when the stored Log Streams section is non-object", async () => {
+  preference = { version: 1, logStreams: "broken" };
+  mount();
+  await act(async () => {});
+  event();
+  const wrap = screen.getByRole("button", { name: "Wrap" });
+  const timestamps = screen.getByRole("button", { name: "Timestamps" });
+  expect(wrap.getAttribute("aria-pressed")).toBe("true");
+  expect(timestamps.getAttribute("aria-pressed")).toBe("false");
+
+  fireEvent.click(wrap);
+  fireEvent.click(timestamps);
+  await act(async () => {});
+  expect(preferencePuts).toHaveLength(0);
+  expect(wrap.getAttribute("aria-pressed")).toBe("true");
+  expect(timestamps.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByText(/Repair Log Streams section first/)).toBeDefined();
+  expect(screen.queryByText(/Saved/)).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await act(async () => {});
+  expect(preferencePuts).toHaveLength(0);
+  expect(wrap.getAttribute("aria-pressed")).toBe("true");
 });
 
 it("does not restore an evicted previous-run prefix after limits increase and the socket reconnects", async () => {
@@ -450,9 +526,9 @@ it("does not restore an evicted previous-run prefix after limits increase and th
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
-        { source: 0, time: 0, text: "three" },
+        { source: 0, time: 1, text: "one" },
+        { source: 0, time: 2, text: "two" },
+        { source: 0, time: 3, text: "three" },
       ]),
   );
   event(previousReady);
@@ -462,20 +538,13 @@ it("does not restore an evicted previous-run prefix after limits increase and th
   act(() => publishPreference({ version: 1, logStreams: { maxLines: 3 } }));
   act(() => latest().listener.state?.("reconnecting"));
   event({ ...previousReady, ready: false });
-  act(
-    () =>
-      void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
-        { source: 0, time: 0, text: "three" },
-      ]),
-  );
+  act(() => void latest().listener.data([{ source: 0, time: 4, text: "four" }]));
   event(previousReady);
 
-  expect(screen.getByRole("textbox").textContent).toBe("three");
+  expect(screen.getByRole("textbox").textContent).toBe("threefour");
 });
 
-it("keeps a partial previous-run replay and appends only the new tail from a full replay", () => {
+it("keeps a partial previous-run handle and appends its resumed suffix", () => {
   mount();
   event({ ...ready, sources: [{ ...source, previous: true }] });
   fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
@@ -484,26 +553,19 @@ it("keeps a partial previous-run replay and appends only the new tail from a ful
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 1, text: "one" },
+        { source: 0, time: 2, text: "two" },
       ]),
   );
   act(() => latest().listener.state?.("reconnecting"));
   event({ ...previousReady, ready: false });
-  act(
-    () =>
-      void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
-        { source: 0, time: 0, text: "three" },
-      ]),
-  );
+  act(() => void latest().listener.data([{ source: 0, time: 3, text: "three" }]));
   event(previousReady);
 
   expect(screen.getByRole("textbox").textContent).toBe("onetwothree");
 });
 
-it("counts an initial previous-run gap in the prefix skipped by a full replay", () => {
+it("keeps a resolved previous-run gap and appends the resumed suffix", () => {
   mount();
   event({ ...ready, sources: [{ ...source, previous: true }] });
   fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
@@ -516,16 +578,7 @@ it("counts an initial previous-run gap in the prefix skipped by a full replay", 
 
   act(() => latest().listener.state?.("reconnecting"));
   event({ ...previousReady, ready: false });
-  act(
-    () =>
-      void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
-        { source: 0, time: 0, text: "three" },
-        { source: 0, time: 0, text: "four" },
-        { source: 0, time: 0, text: "five" },
-      ]),
-  );
+  line("five");
   event(previousReady);
 
   expect(screen.getByRole("textbox").textContent).toBe(
@@ -533,7 +586,7 @@ it("counts an initial previous-run gap in the prefix skipped by a full replay", 
   );
 });
 
-it("counts only the unseen part of a replay gap that spans the old prefix", () => {
+it("closes an unresolved previous-run gap at reconnect and ignores later messages", () => {
   mount();
   event({ ...ready, sources: [{ ...source, previous: true }] });
   fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
@@ -542,36 +595,25 @@ it("counts only the unseen part of a replay gap that spans the old prefix", () =
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 1, text: "one" },
+        { source: 0, time: 2, text: "two" },
       ]),
   );
   event(previousReady);
 
-  act(() => latest().listener.state?.("reconnecting"));
-  event({ ...previousReady, ready: false });
-  line("one");
   act(() => latest().listener.gap({ bytes: 30, records: 3, sources: [{ id: 0, records: 3 }] }));
-  event(previousReady);
-  line("five");
-
   act(() => latest().listener.state?.("reconnecting"));
-  event({ ...previousReady, ready: false });
-  act(
-    () =>
-      void latest().listener.data([
-        { source: 0, time: 0, text: "one" },
-        { source: 0, time: 0, text: "two" },
-        { source: 0, time: 0, text: "three" },
-        { source: 0, time: 0, text: "four" },
-        { source: 0, time: 0, text: "five" },
-      ]),
-  );
-  event(previousReady);
+  const abandoned = latest();
+  expect(abandoned.close).toHaveBeenCalledOnce();
+  expect(screen.getByRole("textbox").textContent).toContain("onetwo");
+  expect(screen.getByRole("textbox").textContent).toContain("3 lines dropped");
+  expect(screen.getByText(/ReplayIncomplete: .*could not resume safely/)).toBeDefined();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
 
-  expect(screen.getByRole("textbox").textContent).toBe(
-    "onetwo··· 2 lines dropped: they arrived faster than they could be shown ···five",
-  );
+  event({ ...previousReady, ready: false });
+  act(() => void abandoned.listener.data([{ source: 0, time: 5, text: "late" }]));
+  event(previousReady);
+  expect(screen.getByRole("textbox").textContent).not.toContain("late");
 });
 
 it("stages a ready replay until every previous source publishes an instance", () => {
@@ -655,7 +697,7 @@ it("classifies a previous-false source without an instance and ignores its later
   expect(screen.getByRole("textbox").textContent).toContain("old");
 });
 
-it("waits for every per-source boundary when a two-source replay is reordered", () => {
+it("appends reordered per-source suffixes directly for unchanged epochs", () => {
   const first = { ...source, previous: true };
   const second = {
     ...source,
@@ -680,9 +722,9 @@ it("waits for every per-source boundary when a two-source replay is reordered", 
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "a1" },
-        { source: 0, time: 0, text: "a2" },
-        { source: 1, time: 0, text: "b1" },
+        { source: 0, time: 1, text: "a1" },
+        { source: 0, time: 2, text: "a2" },
+        { source: 1, time: 3, text: "b1" },
       ]),
   );
   event(replayStatus);
@@ -693,23 +735,14 @@ it("waits for every per-source boundary when a two-source replay is reordered", 
   act(
     () =>
       void latest().listener.data([
-        { source: 1, time: 0, text: "b1" },
-        { source: 1, time: 0, text: "b2" },
-        { source: 0, time: 0, text: "a1" },
-      ]),
-  );
-  expect(screen.getByRole("textbox").textContent).toBe(baseline);
-  act(
-    () =>
-      void latest().listener.data([
-        { source: 0, time: 0, text: "a2" },
-        { source: 0, time: 0, text: "a3" },
+        { source: 1, time: 4, text: "b2" },
+        { source: 0, time: 5, text: "a3" },
       ]),
   );
   expect(screen.getByRole("textbox").textContent).toBe(`${baseline}sidecar b2constructor a3`);
 });
 
-it("keeps a coalesced multi-source gap hidden until every source boundary crosses", () => {
+it("reconciles only changed epochs and preserves the unchanged source's loss", () => {
   const first = { ...source, previous: true };
   const second = {
     ...source,
@@ -734,16 +767,16 @@ it("keeps a coalesced multi-source gap hidden until every source boundary crosse
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "a1" },
-        { source: 0, time: 0, text: "a2" },
-        { source: 1, time: 0, text: "b1" },
-        { source: 1, time: 0, text: "b2" },
+        { source: 0, time: 1, text: "a1" },
+        { source: 0, time: 2, text: "a2" },
+        { source: 1, time: 3, text: "b1" },
+        { source: 1, time: 4, text: "b2" },
       ]),
   );
   event(replayStatus);
-  const baseline = screen.getByRole("textbox").textContent;
   act(() => latest().listener.state?.("reconnecting"));
-  event(replayStatus);
+  const changedSecond = { ...second, instance: "sidecar-run-2" };
+  event({ ...replayStatus, ready: false, sources: [first, changedSecond] });
   act(() =>
     latest().listener.gap({
       bytes: 50,
@@ -754,11 +787,19 @@ it("keeps a coalesced multi-source gap hidden until every source boundary crosse
       ],
     }),
   );
-  expect(screen.getByRole("textbox").textContent).toBe(baseline);
-  act(() => void latest().listener.data([{ source: 1, time: 0, text: "b2" }]));
-  expect(screen.getByRole("textbox").textContent).toBe(
-    `${baseline}··· 1 lines dropped: they arrived faster than they could be shown ···`,
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 5, text: "a3" },
+        { source: 1, time: 6, text: "b-new" },
+      ]),
   );
+  event({ ...replayStatus, sources: [first, changedSecond] });
+  expect(screen.getByRole("textbox").textContent).toBe(
+    "constructor a1constructor a2··· 3 lines dropped: they arrived faster than they could be shown ···constructor a3··· 1 lines dropped: they arrived faster than they could be shown ···sidecar b-new",
+  );
+  expect(screen.getByRole("textbox").textContent).not.toContain("b1");
+  expect(screen.getByRole("textbox").textContent).not.toContain("b2");
 });
 
 it("commits a changed instance with its document and displayed source status", () => {
@@ -798,7 +839,7 @@ it("commits a changed instance with its document and displayed source status", (
   expect(screen.getByText(/could not be read: new error/)).toBeDefined();
 });
 
-it("restarts without mixing when staging crossed an epoch absent from the definitive set", () => {
+it("removes a superseded staged epoch before a third epoch becomes definitive", () => {
   const first = { ...source, previous: true };
   mount();
   event({ ...ready, sources: [first] });
@@ -811,24 +852,20 @@ it("restarts without mixing when staging crossed an epoch absent from the defini
   act(() => latest().listener.state?.("reconnecting"));
   const stale = { ...first, instance: "stale-run" };
   event({ ...ready, ready: false, sources: [stale] });
-  act(() => void latest().listener.data([{ source: 0, time: 0, text: "stale" }]));
+  act(() => void latest().listener.data([{ source: 0, time: 2, text: "stale" }]));
   const replacement = {
     ...first,
-    id: 1,
-    podUid: "uid-b",
-    pod: "web-b",
     instance: "fresh-run",
   };
-  event({ ...ready, sources: [replacement] });
-  expect(opened).toHaveLength(before + 1);
-  expect(screen.queryByRole("textbox")).toBeNull();
   event({ ...ready, ready: false, sources: [replacement] });
-  act(() => void latest().listener.data([{ source: 1, time: 0, text: "fresh" }]));
+  act(() => void latest().listener.data([{ source: 0, time: 3, text: "fresh" }]));
   event({ ...ready, sources: [replacement] });
+  expect(opened).toHaveLength(before);
   expect(screen.getByRole("textbox").textContent).toBe("fresh");
+  expect(screen.getByRole("textbox").textContent).not.toContain("stale");
 });
 
-it("restarts before later-epoch data reaches a committed previous-run document", () => {
+it("keeps a changed epoch staged until its definitive source set arrives", () => {
   const first = { ...source, previous: true };
   mount();
   event({ ...ready, sources: [first] });
@@ -838,16 +875,45 @@ it("restarts before later-epoch data reaches a committed previous-run document",
   event({ ...ready, sources: [first] });
   const before = opened.length;
 
-  event({ ...ready, sources: [{ ...first, instance: "run-2" }] });
-  expect(opened).toHaveLength(before + 1);
-  expect(screen.queryByRole("textbox")).toBeNull();
   event({ ...ready, ready: false, sources: [{ ...first, instance: "run-2" }] });
   line("new");
+  expect(screen.getByRole("textbox").textContent).toBe("old");
   event({ ...ready, sources: [{ ...first, instance: "run-2" }] });
+  expect(opened).toHaveLength(before);
   expect(screen.getByRole("textbox").textContent).toBe("new");
 });
 
-it("retains the complete baseline and status when a same-run replay ends one source short", () => {
+it("completes an exit-only epoch and ignores every later record for it", () => {
+  const previousSource = { ...source, previous: true };
+  const replayStatus = { ...ready, sources: [previousSource] };
+  mount();
+  event(replayStatus);
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  event({ ...replayStatus, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "Completed, exit code 0", exited: true },
+      ]),
+  );
+  event(replayStatus);
+  const baseline = screen.getByRole("textbox").textContent;
+
+  act(() => latest().listener.state?.("reconnecting"));
+  event({ ...replayStatus, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "duplicate", exited: true },
+        { source: 0, time: 2, text: "late" },
+      ]),
+  );
+  event(replayStatus);
+  expect(screen.getByRole("textbox").textContent).toBe(baseline);
+  expect(baseline).toContain("exited: Completed, exit code 0");
+});
+
+it("retains the complete baseline and status when a changed replay ends before definitive status", () => {
   const first = { ...source, previous: true };
   const second = {
     ...source,
@@ -873,8 +939,8 @@ it("retains the complete baseline and status when a same-run replay ends one sou
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "a" },
-        { source: 1, time: 0, text: "b" },
+        { source: 0, time: 1, text: "a" },
+        { source: 1, time: 2, text: "b" },
       ]),
   );
   event(replayStatus);
@@ -882,16 +948,17 @@ it("retains the complete baseline and status when a same-run replay ends one sou
   expect(screen.getByText(/could not be read/)).toBeDefined();
 
   act(() => latest().listener.state?.("reconnecting"));
-  event(replayStatus);
-  act(() => void latest().listener.data([{ source: 0, time: 0, text: "a" }]));
+  const changedSecond = { ...second, instance: "sidecar-run-2", error: "new error" };
+  event({ ...replayStatus, ready: false, sources: [first, changedSecond] });
   act(() => latest().listener.end({ reason: "complete" }));
   expect(screen.getByRole("textbox").textContent).toBe(baseline);
-  expect(screen.getByText(/could not be read/)).toBeDefined();
-  expect(screen.getByText(/ended before every retained source boundary/)).toBeDefined();
+  expect(screen.getByText(/previous runs of 1 containers could not be read/)).toBeDefined();
+  expect(screen.getByTitle("baseline error")).toBeDefined();
+  expect(screen.getByText(/ended before its changed source set was definitive/)).toBeDefined();
   expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
 });
 
-it("discards hidden and lost candidates and applies retention changes to every staged document", async () => {
+it("retains a safe hidden previous handle and applies retention to its resumed suffix", async () => {
   preference = { version: 1, logStreams: { maxLines: 3 } };
   const stopPreferences = getPreferenceStore(engine).subscribe(() => {});
   await act(async () => {});
@@ -919,9 +986,9 @@ it("discards hidden and lost candidates and applies retention changes to every s
   act(
     () =>
       void latest().listener.data([
-        { source: 0, time: 0, text: "a1" },
-        { source: 1, time: 0, text: "b1" },
-        { source: 0, time: 0, text: "a2" },
+        { source: 0, time: 1, text: "a1" },
+        { source: 1, time: 2, text: "b1" },
+        { source: 0, time: 3, text: "a2" },
       ]),
   );
   event(replayStatus);
@@ -942,28 +1009,234 @@ it("discards hidden and lost candidates and applies retention changes to every s
   expect(latest().resume).toHaveBeenCalled();
   act(() => latest().listener.state?.("connecting"));
   event(replayStatus);
-  act(
-    () =>
-      void latest().listener.data([
-        { source: 0, time: 0, text: "a1" },
-        { source: 0, time: 0, text: "a2" },
-        { source: 0, time: 0, text: "a3" },
-      ]),
-  );
+  act(() => void latest().listener.data([{ source: 0, time: 4, text: "a3" }]));
   act(() => publishPreference({ version: 1, logStreams: { maxLines: 1 } }));
-  expect(screen.getByRole("textbox").textContent).toContain("a2");
+  expect(screen.getByRole("textbox").textContent).toContain("a3");
   act(() => publishPreference({ version: 1, logStreams: { maxLines: 3 } }));
-  act(() => void latest().listener.data([{ source: 1, time: 0, text: "b1" }]));
-  expect(screen.getByRole("textbox").textContent).toBe("constructor a3");
-
-  act(() => latest().listener.state?.("reconnecting"));
-  event({ ...replayStatus, ready: false });
-  act(() => void latest().listener.data([{ source: 0, time: 0, text: "discarded" }]));
-  act(() => latest().listener.state?.("reconnecting"));
   expect(screen.getByRole("textbox").textContent).toBe("constructor a3");
   view.unmount();
   expect(latest().close).toHaveBeenCalled();
   stopPreferences();
+});
+
+it("abandons a hidden previous handle when an in-flight gap reaches the paused boundary", async () => {
+  const previousSource = { ...source, previous: true };
+  const replayStatus = { ...ready, sources: [previousSource] };
+  const view = mount();
+  event(replayStatus);
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  event({ ...replayStatus, ready: false });
+  act(() => void latest().listener.data([{ source: 0, time: 1, text: "kept" }]));
+  event(replayStatus);
+
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  const abandoned = latest();
+  expect(abandoned.pause).toHaveBeenCalledOnce();
+  act(() => abandoned.listener.gap({ bytes: 20, records: 2, sources: [{ id: 0, records: 2 }] }));
+  act(() => abandoned.listener.state?.("paused"));
+  expect(abandoned.close).toHaveBeenCalledOnce();
+  expect(screen.getByRole("textbox").textContent).toContain("kept");
+  expect(screen.getByRole("textbox").textContent).toContain("2 lines dropped");
+  expect(screen.getByText(/ReplayIncomplete: .*could not resume safely/)).toBeDefined();
+
+  abandoned.resume.mockClear();
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} />
+    </EngineProvider>,
+  );
+  expect(abandoned.resume).not.toHaveBeenCalled();
+  act(() => void abandoned.listener.data([{ source: 0, time: 2, text: "late" }]));
+  expect(screen.getByRole("textbox").textContent).not.toContain("late");
+});
+
+it("resumes a previous LogRun through SocketStream and LogCodec from the committed cursor", async () => {
+  const wire = makeWireEngine();
+  engine = wire.client;
+  const wireSource = { ...source, id: 7, instance: "run-1", previous: true };
+  const wireStatus = { ...ready, sources: [wireSource] };
+  const serve = (
+    socket: StreamSocket,
+    id: number,
+    history: readonly { time: bigint; text: string }[],
+  ) => {
+    const cursor = BigInt(
+      ((socket.sent[0]?.params as LogStreamParams | undefined)?.resume?.[0]?.time as string) ?? "0",
+    );
+    socket.receive({
+      type: "event",
+      event: { ...wireStatus, ready: false, sources: [{ ...wireSource, id }] },
+    });
+    for (const record of history)
+      if (record.time > cursor) socket.receive(wireFrame(id, 0, record.time, record.text));
+    socket.receive({
+      type: "event",
+      event: { ...wireStatus, sources: [{ ...wireSource, id }] },
+    });
+  };
+  const view = mount();
+  await act(async () => {});
+  const current = wire.sockets[1]!;
+  act(() => {
+    current.hello();
+    current.receive({ type: "event", event: wireStatus });
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  await act(async () => {});
+
+  const first = wire.sockets.at(-1)!;
+  act(() => {
+    first.hello();
+    serve(first, 7, [
+      { time: 1_000_000_000n, text: "one" },
+      { time: 2_000_000_000n, text: "two" },
+    ]);
+  });
+  expect(screen.getByRole("textbox").textContent).toBe("onetwo");
+
+  act(() => first.close());
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  const resumed = wire.sockets[3]!;
+  act(() => resumed.hello());
+  expect(resumed.sent[0]?.params).toMatchObject({
+    previous: true,
+    resume: [
+      {
+        podUid: "uid",
+        container: "constructor",
+        instance: "run-1",
+        time: "2000000000",
+      },
+    ],
+  });
+  // The available tail grew backwards, but the fake Engine honors the cursor
+  // and sends only the suffix.
+  act(() =>
+    serve(resumed, 9, [
+      { time: 500_000_000n, text: "zero" },
+      { time: 1_000_000_000n, text: "one" },
+      { time: 2_000_000_000n, text: "two" },
+      { time: 3_000_000_000n, text: "three" },
+    ]),
+  );
+  expect(screen.getByRole("textbox").textContent).toBe("onetwothree");
+
+  act(() => resumed.close());
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  const resumedAgain = wire.sockets.at(-1)!;
+  act(() => resumedAgain.hello());
+  expect(resumedAgain.sent[0]?.params).toMatchObject({
+    resume: [{ instance: "run-1", time: "3000000000" }],
+  });
+  // The available tail also moves forwards without changing what this handle
+  // already owns.
+  act(() =>
+    serve(resumedAgain, 11, [
+      { time: 2_000_000_000n, text: "two" },
+      { time: 3_000_000_000n, text: "three" },
+      { time: 4_000_000_000n, text: "four" },
+    ]),
+  );
+  expect(screen.getByRole("textbox").textContent).toBe("onetwothreefour");
+
+  view.unmount();
+  wire.connection.close();
+});
+
+it("ends a real previous LogRun with an untimed tail when its hidden socket pauses", async () => {
+  const wire = makeWireEngine();
+  engine = wire.client;
+  const wireSource = { ...source, id: 7, instance: "run-1", previous: true };
+  const wireStatus = { ...ready, sources: [wireSource] };
+  const view = mount();
+  await act(async () => {});
+  act(() => {
+    wire.sockets[1]!.hello();
+    wire.sockets[1]!.receive({ type: "event", event: wireStatus });
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  await act(async () => {});
+  const previous = wire.sockets.at(-1)!;
+  act(() => {
+    previous.hello();
+    previous.receive({ type: "event", event: { ...wireStatus, ready: false } });
+    previous.receive(wireFrame(7, 0, 1_000_000_000n, "timed"));
+    previous.receive(wireFrame(7, 0, 0n, "untimed"));
+    previous.receive({ type: "event", event: wireStatus });
+  });
+  expect(screen.getByRole("textbox").textContent).toBe("timeduntimed");
+
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  expect(screen.getByText(/ReplayIncomplete: .*could not resume safely/)).toBeDefined();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+  expect(screen.getByRole("textbox").textContent).toBe("timeduntimed");
+  const count = wire.sockets.length;
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} />
+    </EngineProvider>,
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(10));
+  expect(wire.sockets).toHaveLength(count);
+
+  view.unmount();
+  wire.connection.close();
+});
+
+it("ends a real previous LogRun when a source gap reaches its hidden paused boundary", async () => {
+  const wire = makeWireEngine();
+  engine = wire.client;
+  const wireSource = { ...source, id: 7, instance: "run-1", previous: true };
+  const wireStatus = { ...ready, sources: [wireSource] };
+  const view = mount();
+  await act(async () => {});
+  act(() => {
+    wire.sockets[1]!.hello();
+    wire.sockets[1]!.receive({ type: "event", event: wireStatus });
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  await act(async () => {});
+  const previous = wire.sockets.at(-1)!;
+  act(() => {
+    previous.hello();
+    previous.receive({ type: "event", event: { ...wireStatus, ready: false } });
+    previous.receive(wireFrame(7, 0, 1_000_000_000n, "timed"));
+    previous.receive(wireFrame(7, LogRecordFlagGap, 0n, ""));
+    previous.receive({ type: "event", event: wireStatus });
+  });
+  const baseline = screen.getByRole("textbox").textContent;
+  expect(baseline).toContain("timed");
+  expect(baseline.match(/some lines may be missing/g)).toHaveLength(1);
+
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  expect(screen.getByText(/ReplayIncomplete: .*could not resume safely/)).toBeDefined();
+  expect(screen.getByRole("textbox").textContent).toBe(baseline);
+  const count = wire.sockets.length;
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} />
+    </EngineProvider>,
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(10));
+  expect(wire.sockets).toHaveLength(count);
+
+  view.unmount();
+  wire.connection.close();
 });
 
 it("renders ordered drop, join, leave and record markers with merged origins", () => {

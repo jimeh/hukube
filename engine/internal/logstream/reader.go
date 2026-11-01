@@ -254,11 +254,19 @@ func (r *containerReader) wait(snapshot containerSnapshot, retry bool) {
 func (r *containerReader) run() {
 	if r.s.p.Previous {
 		snapshot := r.get()
-		r.instance(previous(snapshot.status))
+		instance := previous(snapshot.status)
+		r.instance(instance)
 		options := &corev1.PodLogOptions{Container: r.name, Timestamps: true, Previous: true, TailLines: &r.s.tail}
-		_, err := r.read(options, "", 0)
-		if err == nil && previous(snapshot.status) != "" {
-			r.exited(previous(snapshot.status))
+		cursor := int64(0)
+		if instance != "" && r.cursorInstance == instance {
+			stamp := metav1.NewTime(time.Unix(0, r.cursorTime).Truncate(time.Second))
+			options.TailLines = nil
+			options.SinceTime = &stamp
+			cursor = r.cursorTime
+		}
+		_, err := r.read(options, instance, cursor)
+		if err == nil && instance != "" {
+			r.exited(instance)
 		}
 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			r.s.fail(r.forbidden())
@@ -404,21 +412,13 @@ func (r *containerReader) read(options *corev1.PodLogOptions, instance string, c
 		}
 	}
 	resuming := options.SinceTime != nil
+	bufferUntimed := options.Previous && resuming
 	firstTimed := true
 	sent := false
-	err = readLines(body, traffic, func(line record) {
-		if line.time != 0 && resuming {
-			if firstTimed {
-				firstTimed = false
-				if line.time > cursor {
-					r.gap()
-				}
-			}
-			if line.time <= cursor {
-				return
-			}
-			resuming = false
-		}
+	untimed := []record{}
+	untimedBytes := 0
+	untimedOverflow := false
+	emit := func(line record) {
 		if instance != "" && r.cursorInstance != instance {
 			r.cursorInstance = instance
 			r.cursorTime = 0
@@ -429,6 +429,49 @@ func (r *containerReader) read(options *corev1.PodLogOptions, instance string, c
 		r.s.add(r.id, line)
 		sent = true
 		r.delay = r.s.t.RetryMin
+	}
+	clearUntimed := func() {
+		untimed = nil
+		untimedBytes = 0
+		untimedOverflow = false
+	}
+	flushUntimed := func() {
+		for _, line := range untimed {
+			emit(line)
+		}
+		clearUntimed()
+	}
+	err = readLines(body, traffic, func(line record) {
+		if bufferUntimed && resuming && line.time == 0 {
+			size := protocol.LogRecordHeaderSize + len(line.content)
+			if untimedOverflow || untimedBytes+size > r.s.t.BatchBytes {
+				if !untimedOverflow {
+					r.gap()
+					untimed = nil
+					untimedBytes = 0
+					untimedOverflow = true
+				}
+				return
+			}
+			untimed = append(untimed, line)
+			untimedBytes += size
+			return
+		}
+		if line.time != 0 && resuming {
+			if firstTimed {
+				firstTimed = false
+				if line.time > cursor && !untimedOverflow {
+					r.gap()
+				}
+			}
+			if line.time <= cursor {
+				clearUntimed()
+				return
+			}
+			resuming = false
+			flushUntimed()
+		}
+		emit(line)
 	})
 	select {
 	case <-stuckCh:
@@ -437,7 +480,12 @@ func (r *containerReader) read(options *corev1.PodLogOptions, instance string, c
 	}
 	// A resumed response repeats the cursor's own line. One that ends without
 	// a timed line no longer holds it, so what followed it may be gone too.
-	if err == nil && resuming && firstTimed {
+	if err == nil && bufferUntimed && resuming {
+		if firstTimed && !untimedOverflow {
+			r.gap()
+		}
+		flushUntimed()
+	} else if err == nil && resuming && firstTimed {
 		r.gap()
 	}
 	var text *responseText

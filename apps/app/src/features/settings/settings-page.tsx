@@ -27,6 +27,7 @@ import {
   type PreferenceChange,
   type PreferencePath,
   type PreferenceSaveState,
+  type PreferenceSection,
   type PreferenceScope,
 } from "./preferences.ts";
 import { useSettingsFocusReturn } from "./focus-return.ts";
@@ -255,15 +256,65 @@ function SettingsSection({
   );
 }
 
+function SectionRepair({ section, label }: { section: PreferenceSection; label: string }) {
+  const { snapshot, store } = usePreferences();
+  const [open, setOpen] = useState(false);
+  const error = snapshot.sectionErrors[section];
+  const save = snapshot.repairs[section];
+  if (!error && save.phase === "idle") return null;
+  return (
+    <>
+      {error && (
+        <Alert variant="destructive">
+          <AlertTitle>Stored {label} section cannot be read</AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>{error}</span>
+            <span>
+              Ordinary changes are blocked so they cannot overwrite this section. Repair removes
+              only this malformed section and preserves the rest of the stored document.
+            </span>
+            <Button size="sm" variant="destructive" onClick={() => setOpen(true)}>
+              Repair {label} section
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <SaveStatus scope={`${section}Repair`} save={save} />
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogTitle>Repair {label} section?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes only the malformed {label} section. Other known settings and unknown data
+            in the stored document are preserved.
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setOpen(false);
+                void store.repairSection(section);
+              }}
+            >
+              Repair {label} section
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 function AppearanceSettings() {
   const { snapshot, store } = usePreferences();
-  const disabled = snapshot.status !== "ready";
+  const disabled = snapshot.status !== "ready" || !!snapshot.sectionErrors.appearance;
   return (
     <SettingsSection
       id="settings-appearance"
       title="Appearance"
       description="Choose the color theme used by this Engine's app windows."
     >
+      <SectionRepair section="appearance" label="Appearance" />
       <fieldset className="flex flex-col gap-2" disabled={disabled}>
         <legend className="text-sm font-medium">Theme</legend>
         {(["light", "dark"] as const).map((theme) => (
@@ -282,7 +333,7 @@ function AppearanceSettings() {
           </label>
         ))}
       </fieldset>
-      {snapshot.fieldErrors["appearance.theme"] && (
+      {snapshot.fieldErrors["appearance.theme"] && !snapshot.sectionErrors.appearance && (
         <p role="alert" className="text-xs text-destructive">
           {snapshot.fieldErrors["appearance.theme"]}
         </p>
@@ -435,7 +486,7 @@ function LogStreamSettings() {
     )
       saveChanges(changes);
   };
-  const disabled = snapshot.status !== "ready";
+  const disabled = snapshot.status !== "ready" || !!snapshot.sectionErrors.logStreams;
   const invalid = budgetFields.some(({ name }) => !!validations[name].error);
   const anyDirty = budgetFields.some(({ name }) => Object.hasOwn(drafts, name));
   const retryIsReset = snapshot.saves.retention.changes?.every(({ value }) => value === undefined);
@@ -461,6 +512,7 @@ function LogStreamSettings() {
       title="Log Streams"
       description="Defaults are shared by every mounted Log Stream in every window connected to this Engine."
     >
+      <SectionRepair section="logStreams" label="Log Streams" />
       <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={submit}>
         <div>
           <h3 className="text-sm font-medium">Retention</h3>
@@ -476,7 +528,9 @@ function LogStreamSettings() {
             const id = `${prefix}-${name}`;
             const errorId = `${id}-error`;
             const helpId = `${id}-help`;
-            const error = validations[name].error ?? snapshot.fieldErrors[path];
+            const error =
+              validations[name].error ??
+              (!snapshot.sectionErrors.logStreams ? snapshot.fieldErrors[path] : undefined);
             const range = logPreferenceRanges[name];
             return (
               <label key={name} htmlFor={id} className="flex min-w-0 flex-col gap-1 text-xs">
@@ -595,16 +649,17 @@ function LogStreamSettings() {
           />
           Show timestamps
         </label>
-        {(snapshot.fieldErrors["logStreams.wrap"] ||
-          snapshot.fieldErrors["logStreams.timestamps"]) && (
-          <Alert variant="destructive">
-            <AlertTitle>Stored display preferences are invalid</AlertTitle>
-            <AlertDescription>
-              {snapshot.fieldErrors["logStreams.wrap"] ??
-                snapshot.fieldErrors["logStreams.timestamps"]}
-            </AlertDescription>
-          </Alert>
-        )}
+        {!snapshot.sectionErrors.logStreams &&
+          (snapshot.fieldErrors["logStreams.wrap"] ||
+            snapshot.fieldErrors["logStreams.timestamps"]) && (
+            <Alert variant="destructive">
+              <AlertTitle>Stored display preferences are invalid</AlertTitle>
+              <AlertDescription>
+                {snapshot.fieldErrors["logStreams.wrap"] ??
+                  snapshot.fieldErrors["logStreams.timestamps"]}
+              </AlertDescription>
+            </Alert>
+          )}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
@@ -686,7 +741,7 @@ export function SaveStatus({
   retryLabel,
   onUseCurrent,
 }: {
-  scope: PreferenceScope;
+  scope: PreferenceScope | `${PreferenceSection}Repair`;
   save: PreferenceSaveState;
   onRetry?: (overwriteCurrent: boolean) => void;
   retryLabel?: string;

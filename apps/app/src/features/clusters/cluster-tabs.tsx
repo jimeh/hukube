@@ -14,6 +14,7 @@ import { Link, useNavigate, useParams, useRouterState } from "@tanstack/react-ro
 import type { DragEvent } from "react";
 
 import { guardWorkspace } from "../edit/unsaved-edits.ts";
+import { settingsCategories, type SettingsCategory } from "../settings/settings-page.tsx";
 
 import { useHost } from "@/lib/host.tsx";
 
@@ -26,9 +27,27 @@ export function ClusterTabs() {
   const active = useParams({ strict: false }).cluster;
   const close = useCloseCluster();
   const host = useHost();
-  const settingsActive = useRouterState({
-    select: (state) => state.location.pathname === "/settings",
+  const settingsLocation = useRouterState({
+    select: (state) =>
+      state.location.pathname === "/settings"
+        ? (state.location.search as Record<string, unknown>)
+        : undefined,
   });
+  const settingsActive = !!settingsLocation;
+  const currentCategory = settingsLocation?.["category"];
+  const currentFromCluster = settingsLocation?.["fromCluster"];
+  const settingsSearch = settingsActive
+    ? {
+        category:
+          typeof currentCategory === "string" &&
+          settingsCategories.includes(currentCategory as SettingsCategory)
+            ? (currentCategory as SettingsCategory)
+            : "appearance",
+        ...(typeof currentFromCluster === "string" && currentFromCluster
+          ? { fromCluster: currentFromCluster }
+          : {}),
+      }
+    : { category: "appearance" as const, ...(active ? { fromCluster: active } : {}) };
 
   const moveToNewWindow = (id: string) => {
     guardWorkspace(id, () => {
@@ -122,7 +141,8 @@ export function ClusterTabs() {
             render={
               <Link
                 to="/settings"
-                search={{ category: "appearance", ...(active ? { fromCluster: active } : {}) }}
+                search={settingsSearch}
+                replace={settingsActive}
                 aria-label="Settings"
                 aria-current={settingsActive ? "page" : undefined}
                 data-slot="button"

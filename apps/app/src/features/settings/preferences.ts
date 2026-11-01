@@ -60,6 +60,7 @@ export type PreferencePath =
   | "logStreams.timestamps";
 export type PreferenceValue = Theme | number | boolean;
 export type PreferenceScope = "appearance" | "retention" | "display" | "recovery";
+export type PreferenceSection = "appearance" | "logStreams";
 export type PreferenceChange = { path: PreferencePath; value: PreferenceValue | undefined };
 
 export interface PreferenceSaveState {
@@ -73,6 +74,7 @@ interface SaveStateInternal extends PreferenceSaveState {
   id?: number;
   observed?: ReadonlyMap<PreferencePath, unknown>;
   migration?: boolean;
+  blockedSection?: PreferenceSection;
 }
 
 export interface PreferenceSnapshot {
@@ -82,15 +84,18 @@ export interface PreferenceSnapshot {
   /** Immediate local theme/wrap/timestamp choices layered over confirmed Engine values. */
   display: EffectivePreferences;
   fieldErrors: Readonly<Partial<Record<PreferencePath, string>>>;
+  sectionErrors: Readonly<Partial<Record<PreferenceSection, string>>>;
   revision?: string;
   error?: string;
   saves: Readonly<Record<PreferenceScope, PreferenceSaveState>>;
+  repairs: Readonly<Record<PreferenceSection, PreferenceSaveState>>;
 }
 
 interface DecodedPreferences {
   raw: AppPreferencesV1 | null;
   effective: EffectivePreferences;
   fieldErrors: Partial<Record<PreferencePath, string>>;
+  sectionErrors: Partial<Record<PreferenceSection, string>>;
 }
 
 interface ThemeAdapter {
@@ -139,6 +144,12 @@ const emptySaves = (): Record<PreferenceScope, SaveStateInternal> => ({
   display: emptySave(),
   recovery: emptySave(),
 });
+const emptyRepairs = (): Record<PreferenceSection, SaveStateInternal> => ({
+  appearance: emptySave(),
+  logStreams: emptySave(),
+});
+
+const invalidSection = Symbol("invalid preference section");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -165,7 +176,7 @@ export function decodePreferences(
   setting: Pick<Setting, "value" | "revision">,
 ): DecodedPreferences {
   if (setting.revision === "" && setting.value === null)
-    return { raw: null, effective: defaultEffective(), fieldErrors: {} };
+    return { raw: null, effective: defaultEffective(), fieldErrors: {}, sectionErrors: {} };
   const envelope = envelopeSchema.safeParse(setting.value);
   if (!envelope.success)
     throw new Error(
@@ -174,10 +185,11 @@ export function decodePreferences(
   const raw = envelope.data as AppPreferencesV1;
   const effective = defaultEffective();
   const fieldErrors: Partial<Record<PreferencePath, string>> = {};
+  const sectionErrors: Partial<Record<PreferenceSection, string>> = {};
 
   if (raw.appearance !== undefined) {
     if (!isRecord(raw.appearance)) {
-      fieldErrors["appearance.theme"] =
+      sectionErrors.appearance = fieldErrors["appearance.theme"] =
         "Stored Appearance preferences are invalid: expected an object.";
     } else if (raw.appearance["theme"] !== undefined) {
       const theme = decodeField(
@@ -193,6 +205,7 @@ export function decodePreferences(
 
   if (raw.logStreams !== undefined) {
     if (!isRecord(raw.logStreams)) {
+      sectionErrors.logStreams = "Stored Log Stream preferences are invalid: expected an object.";
       for (const path of [
         "logStreams.maxLines",
         "logStreams.maxCharacters",
@@ -200,7 +213,7 @@ export function decodePreferences(
         "logStreams.wrap",
         "logStreams.timestamps",
       ] as const)
-        fieldErrors[path] = "Stored Log Stream preferences are invalid: expected an object.";
+        fieldErrors[path] = sectionErrors.logStreams;
     } else {
       const log = raw.logStreams;
       for (const name of ["maxLines", "maxCharacters", "maxStyledRanges"] as const) {
@@ -231,7 +244,7 @@ export function decodePreferences(
       }
     }
   }
-  return { raw, effective, fieldErrors };
+  return { raw, effective, fieldErrors, sectionErrors };
 }
 
 export function parseDecimalDraft(
@@ -253,7 +266,34 @@ function rawPath(raw: AppPreferencesV1 | null, path: PreferencePath): unknown {
   if (!raw) return undefined;
   const [section, field] = path.split(".") as ["appearance" | "logStreams", string];
   const value = raw[section];
-  return isRecord(value) ? value[field] : value;
+  return isRecord(value) ? value[field] : value === undefined ? undefined : invalidSection;
+}
+
+function sectionFor(path: PreferencePath): PreferenceSection {
+  return path.startsWith("appearance.") ? "appearance" : "logStreams";
+}
+
+function sectionValue(raw: AppPreferencesV1 | null, section: PreferenceSection) {
+  if (!raw || !Object.hasOwn(raw, section)) return { present: false as const, value: undefined };
+  return { present: true as const, value: (raw as Record<string, unknown>)[section] };
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b))
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => deepEqual(value, b[index]))
+    );
+  if (!isRecord(a) || !isRecord(b)) return false;
+  const aKeys = Object.keys(a).toSorted();
+  const bKeys = Object.keys(b).toSorted();
+  return (
+    aKeys.length === bKeys.length &&
+    aKeys.every((key, index) => key === bKeys[index] && deepEqual(a[key], b[key]))
+  );
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
@@ -315,6 +355,7 @@ export function createPreferenceStore(
   let raw: AppPreferencesV1 | null = null;
   let effective = defaultEffective();
   let fieldErrors: Partial<Record<PreferencePath, string>> = {};
+  let sectionErrors: Partial<Record<PreferenceSection, string>> = {};
   let loadStatus: PreferenceSnapshot["status"] = "loading";
   let revision: string | undefined;
   let loadError: string | undefined;
@@ -329,9 +370,12 @@ export function createPreferenceStore(
   let watch: { close(): void } | undefined;
   let stopState: (() => void) | undefined;
   let queue = Promise.resolve();
+  const pendingOperations = new Map<number, Operation>();
+  const retiredOperations = new Set<number>();
   const listeners = new Set<() => void>();
   const waiters: { resolve(): void; reject(error: unknown): void }[] = [];
   const saves = emptySaves();
+  const repairs = emptyRepairs();
 
   let current: PreferenceSnapshot = {
     status: "loading",
@@ -339,12 +383,17 @@ export function createPreferenceStore(
     effective,
     display: effective,
     fieldErrors,
+    sectionErrors,
     saves,
+    repairs,
   };
 
   const activeValue = (path: PreferencePath): unknown => {
+    if (sectionErrors[sectionFor(path)]) return rawPath(raw, path);
     const active = Object.values(saves)
-      .filter((save) => ["saving", "error", "conflict"].includes(save.phase))
+      .filter(
+        (save) => ["saving", "error", "conflict"].includes(save.phase) && !save.blockedSection,
+      )
       .toSorted((a, b) => (b.id ?? 0) - (a.id ?? 0))
       .find((save) => save.changes?.some((change) => change.path === path));
     const change = active?.changes?.find((candidate) => candidate.path === path);
@@ -371,9 +420,11 @@ export function createPreferenceStore(
       effective,
       display,
       fieldErrors,
+      sectionErrors,
       ...(revision !== undefined ? { revision } : {}),
       ...(loadError ? { error: loadError } : {}),
       saves: { ...saves },
+      repairs: { ...repairs },
     };
     if (hasValidSnapshot) theme.setTheme(display.appearance.theme);
     for (const listener of listeners) listener();
@@ -387,9 +438,30 @@ export function createPreferenceStore(
   };
 
   const queueOperation = (operation: Operation): Promise<void> => {
-    const result = queue.then(() => execute(operation));
+    pendingOperations.set(operation.id, operation);
+    const result = queue
+      .then(() => execute(operation))
+      .finally(() => {
+        pendingOperations.delete(operation.id);
+        retiredOperations.delete(operation.id);
+      });
     queue = result.catch(() => {});
     return result;
+  };
+
+  const retirePendingOperations = (section: PreferenceSection) => {
+    for (const operation of pendingOperations.values())
+      if (operation.changes.some((change) => sectionFor(change.path) === section))
+        retiredOperations.add(operation.id);
+  };
+
+  const retireBlockedSaves = (section: PreferenceSection) => {
+    retirePendingOperations(section);
+    for (const scope of ["appearance", "retention", "display"] as const) {
+      const save = saves[scope];
+      if (save.blockedSection !== section) continue;
+      saves[scope] = emptySave();
+    }
   };
 
   const makeOperation = (
@@ -428,13 +500,51 @@ export function createPreferenceStore(
       raw = decoded.raw;
       effective = decoded.effective;
       fieldErrors = decoded.fieldErrors;
+      sectionErrors = decoded.sectionErrors;
       loadStatus = "ready";
       hasValidSnapshot = true;
       malformedValue = undefined;
 
+      for (const section of ["appearance", "logStreams"] as const) {
+        const repair = repairs[section];
+        if (repair.phase === "saving" && !sectionValue(raw, section).present) {
+          repairs[section] = {
+            ...repair,
+            phase: "saved",
+            message: `${section === "appearance" ? "Appearance" : "Log Streams"} section repaired`,
+          };
+          retireBlockedSaves(section);
+        } else if (repair.phase === "saved" && sectionErrors[section])
+          repairs[section] = emptySave();
+      }
+
       for (const scope of ["appearance", "retention", "display"] as const) {
         const save = saves[scope];
-        if (save.changes && pathsMatch(raw, intended(save.changes)))
+        const blocked = save.changes?.find((change) => sectionErrors[sectionFor(change.path)]);
+        if (blocked)
+          saves[scope] = {
+            ...save,
+            phase: "error",
+            message: `Not saved: Repair ${sectionFor(blocked.path) === "appearance" ? "Appearance" : "Log Streams"} section first`,
+            blockedSection: sectionFor(blocked.path),
+          };
+        else if (save.blockedSection) {
+          retirePendingOperations(save.blockedSection);
+          if (save.migration) saves[scope] = emptySave();
+          else if (save.changes && pathsMatch(raw, intended(save.changes)))
+            saves[scope] = {
+              ...save,
+              phase: "saved",
+              message: "Saved",
+              blockedSection: undefined,
+            };
+          else
+            saves[scope] = {
+              ...save,
+              phase: "conflict",
+              message: "Not saved: changed in another window",
+            };
+        } else if (save.changes && pathsMatch(raw, intended(save.changes)))
           saves[scope] = { ...save, phase: "saved", message: "Saved" };
         else if (save.phase === "saved" && save.changes && !pathsMatch(raw, intended(save.changes)))
           saves[scope] = emptySave();
@@ -457,6 +567,7 @@ export function createPreferenceStore(
       loadError = messageOf(error);
       malformedValue = setting.value;
       fieldErrors = {};
+      sectionErrors = {};
     }
     publish();
     settleWaiters();
@@ -541,6 +652,11 @@ export function createPreferenceStore(
     message: string,
   ) => {
     if (saves[operation.scope].id !== operation.id) return;
+    const blocked = operation.changes.find((change) => sectionErrors[sectionFor(change.path)]);
+    if (phase === "saved" && blocked) {
+      phase = "error";
+      message = `Not saved: Repair ${sectionFor(blocked.path) === "appearance" ? "Appearance" : "Log Streams"} section first`;
+    }
     saves[operation.scope] = {
       phase,
       message,
@@ -551,6 +667,7 @@ export function createPreferenceStore(
             changes: operation.changes,
             observed: operation.observed,
             migration: operation.migration,
+            ...(blocked ? { blockedSection: sectionFor(blocked.path) } : {}),
           }
         : {}),
     };
@@ -566,11 +683,25 @@ export function createPreferenceStore(
     updateSave(operation, "conflict", "Not saved: changed in another window");
   };
 
+  const blockOperation = (operation: Operation): boolean => {
+    const blocked = operation.changes.find((change) => sectionErrors[sectionFor(change.path)]);
+    if (!blocked) return false;
+    updateSave(
+      operation,
+      "error",
+      `Not saved: Repair ${sectionFor(blocked.path) === "appearance" ? "Appearance" : "Log Streams"} section first`,
+    );
+    return true;
+  };
+
   async function execute(operation: Operation): Promise<void> {
     let writes = 0;
     try {
       while (writes < 4) {
+        if (retiredOperations.has(operation.id)) return;
         await ensureFresh();
+        if (retiredOperations.has(operation.id)) return;
+        if (blockOperation(operation)) return;
         if (pathsMatch(raw, intended(operation.changes))) {
           updateSave(operation, "saved", "Saved");
           return;
@@ -587,6 +718,7 @@ export function createPreferenceStore(
         try {
           await client.request("settings.put", { key: preferenceKey, value, ifRevision });
         } catch (error) {
+          if (retiredOperations.has(operation.id)) return;
           const code = errorCode(error);
           if (code === "not_connected") {
             if (saves[operation.scope].id === operation.id) {
@@ -602,8 +734,10 @@ export function createPreferenceStore(
           } else {
             throw error;
           }
+          if (retiredOperations.has(operation.id)) return;
           if (loadStatus !== "ready")
             throw new Error(loadError ?? "Could not reload preferences.", { cause: error });
+          if (blockOperation(operation)) return;
           if (pathsMatch(raw, intended(operation.changes))) {
             updateSave(operation, "saved", "Saved");
             return;
@@ -615,9 +749,12 @@ export function createPreferenceStore(
           continue;
         }
 
+        if (retiredOperations.has(operation.id)) return;
         if (serial === before) await refresh();
+        if (retiredOperations.has(operation.id)) return;
         if (loadStatus !== "ready")
           throw new Error(loadError ?? "Could not read back preferences.");
+        if (blockOperation(operation)) return;
         if (pathsMatch(raw, intended(operation.changes))) {
           updateSave(operation, "saved", "Saved");
           return;
@@ -627,6 +764,8 @@ export function createPreferenceStore(
       }
       throw new Error("Preferences kept changing in other windows. Try again.");
     } catch (error) {
+      if (retiredOperations.has(operation.id)) return;
+      if (blockOperation(operation)) return;
       if (loadStatus === "ready" && pathsMatch(raw, intended(operation.changes)))
         updateSave(operation, "saved", "Saved");
       else updateSave(operation, "error", `Not saved: ${messageOf(error)}`);
@@ -662,6 +801,7 @@ export function createPreferenceStore(
       );
     }
     const operation = makeOperation(scope, nextChanges, observed);
+    if (blockOperation(operation)) return Promise.resolve();
     publish();
     return queueOperation(operation);
   };
@@ -673,6 +813,7 @@ export function createPreferenceStore(
       ? new Map(previous.changes.map(({ path }) => [path, rawPath(raw, path)] as const))
       : previous.observed;
     const operation = makeOperation(scope, previous.changes, observed, previous.migration);
+    if (blockOperation(operation)) return Promise.resolve();
     publish();
     return queueOperation(operation);
   };
@@ -680,6 +821,102 @@ export function createPreferenceStore(
   const acceptCurrent = (scope: Exclude<PreferenceScope, "recovery">) => {
     saves[scope] = emptySave();
     publish();
+  };
+
+  const repairSection = (section: PreferenceSection): Promise<void> => {
+    start();
+    const label = section === "appearance" ? "Appearance" : "Log Streams";
+    const initial = sectionValue(raw, section);
+    const id = ++operationId;
+    repairs[section] = { phase: "saving", message: `Repairing ${label} section`, id };
+    const update = (phase: "saving" | "saved" | "error" | "conflict", message: string) => {
+      if (repairs[section].id !== id) return;
+      repairs[section] = { phase, message, id };
+      publish();
+    };
+    if (loadStatus !== "ready" || !initial.present || isRecord(initial.value)) {
+      update("error", `Not repaired: ${label} section is not a present malformed value`);
+      return Promise.resolve();
+    }
+    const observed = initial.value;
+    publish();
+
+    const evaluate = (): "absent" | "same" | "changed" | "malformed" => {
+      if (loadStatus === "malformed") return "malformed";
+      if (loadStatus !== "ready") return "changed";
+      const currentSection = sectionValue(raw, section);
+      if (!currentSection.present) return "absent";
+      return !isRecord(currentSection.value) && deepEqual(currentSection.value, observed)
+        ? "same"
+        : "changed";
+    };
+    const run = async () => {
+      try {
+        for (let writes = 0; writes < 4; writes++) {
+          await ensureFresh();
+          const beforeWrite = evaluate();
+          if (beforeWrite === "absent") {
+            update("saved", `${label} section repaired`);
+            return;
+          }
+          if (beforeWrite === "malformed")
+            throw new Error("Repair the whole stored document before repairing a section.");
+          if (beforeWrite === "changed") {
+            update("conflict", "Not repaired: section changed in another window");
+            return;
+          }
+
+          const value: AppPreferencesV1 = { ...raw!, version: 1 };
+          delete (value as Record<string, unknown>)[section];
+          const ifRevision = revision!;
+          const before = serial;
+          try {
+            await client.request("settings.put", { key: preferenceKey, value, ifRevision });
+          } catch (error) {
+            const code = errorCode(error);
+            if (!["not_connected", "conflict", "disconnected"].includes(code ?? "")) throw error;
+            if (code === "not_connected")
+              update("saving", `Repairing ${label} section when the Engine reconnects`);
+            await refreshAfterReconnect();
+            const afterFailure = evaluate();
+            if (afterFailure === "absent") {
+              update("saved", `${label} section repaired`);
+              return;
+            }
+            if (afterFailure === "malformed")
+              throw new Error("Repair the whole stored document before repairing a section.", {
+                cause: error,
+              });
+            if (afterFailure === "changed") {
+              update("conflict", "Not repaired: section changed in another window");
+              return;
+            }
+            continue;
+          }
+
+          if (serial === before) await refresh();
+          const afterWrite = evaluate();
+          if (afterWrite === "absent") {
+            update("saved", `${label} section repaired`);
+            return;
+          }
+          if (afterWrite === "malformed")
+            throw new Error("Repair the whole stored document before repairing a section.");
+          if (afterWrite === "changed") {
+            update("conflict", "Not repaired: section changed in another window");
+            return;
+          }
+          throw new Error(`${label} section repair was not confirmed by the Engine.`);
+        }
+        throw new Error(`${label} section kept changing. Try again.`);
+      } catch (error) {
+        if (evaluate() === "absent") update("saved", `${label} section repaired`);
+        else update("error", `Not repaired: ${messageOf(error)}`);
+      }
+    };
+    const result = queue.then(run);
+    queue = result.catch(() => {});
+    return result;
   };
 
   const preferencesReplaced = () =>
@@ -772,6 +1009,7 @@ export function createPreferenceStore(
     retry,
     acceptCurrent,
     retryLoad: openWatch,
+    repairSection,
     replaceStoredPreferences,
   };
 }
