@@ -2,6 +2,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState, useSyncExternalStore } from "react";
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import type { DockviewPanelApi } from "dockview-react";
 import type { ResourceData } from "@hukube/engine-client";
 import { formatResourceUri, type Facet } from "@hukube/k8s";
@@ -83,6 +91,7 @@ const deployment = {
   spec: { replicas: 1, template: { spec: { containers: [{ name: "app", image: "old" }] } } },
 };
 beforeEach(() => {
+  window.scrollTo = () => {};
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -133,6 +142,35 @@ function Harness({ type = "deployments.apps", facet }: { type?: string; facet?: 
     </WorkspaceContext>
   );
 }
+it("links a Resource definition error to the Overview settings for its Cluster", async () => {
+  state.snapshot = {
+    ...state.snapshot,
+    errors: new Map([["deployments.apps", "Stored definition is invalid."]]),
+  };
+  const root = createRootRoute({ component: Outlet });
+  const resource = createRoute({
+    getParentRoute: () => root,
+    path: "/c/$cluster",
+    component: Harness,
+  });
+  const settings = createRoute({
+    getParentRoute: () => root,
+    path: "/settings",
+    component: () => <div>Overview settings destination</div>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([resource, settings]),
+    history: createMemoryHistory({ initialEntries: ["/c/c"] }),
+  });
+  await router.load();
+  render(<RouterProvider router={router} />);
+
+  expect(screen.getByText("Stored definition is invalid.")).toBeDefined();
+  const manage = screen.getByRole("button", { name: "Manage Overview definitions" });
+  expect(manage.getAttribute("href")).toBe("/settings?category=overview&fromCluster=c");
+  fireEvent.click(manage);
+  expect(await screen.findByText("Overview settings destination")).toBeDefined();
+});
 it("shares typed edits, invalid pending input, YAML changes and unsaved state across every Facet", async () => {
   render(<Harness />);
   expect(screen.getByRole("tab", { name: /^Overview/ }).getAttribute("aria-selected")).toBe("true");
@@ -487,7 +525,23 @@ it("keeps the actual ResourcePanel YAML mounted during registry reload and refre
       return { close: () => {}, update: () => {} };
     },
   } as unknown as EngineClient);
-  render(<Harness type="custom.sample" />);
+  const root = createRootRoute({ component: Outlet });
+  const resource = createRoute({
+    getParentRoute: () => root,
+    path: "/c/$cluster",
+    component: () => <Harness type="custom.sample" />,
+  });
+  const settings = createRoute({
+    getParentRoute: () => root,
+    path: "/settings",
+    component: () => null,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([resource, settings]),
+    history: createMemoryHistory({ initialEntries: ["/c/c"] }),
+  });
+  await router.load();
+  render(<RouterProvider router={router} />);
   expect(screen.getByText("Loading Overview")).toBeDefined();
   act(() => watches.at(-1)!.data({ key: "overview/definitions", value: null, revision: "" }));
   const yaml = await screen.findByRole("textbox", { name: "YAML draft" });

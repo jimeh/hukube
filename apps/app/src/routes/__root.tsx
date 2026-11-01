@@ -8,6 +8,7 @@ import { ClusterTabs } from "@/features/clusters/cluster-tabs.tsx";
 import { useOpenClusters } from "@/features/clusters/open-clusters.ts";
 import { OutOfDateNotice } from "@/features/connection/out-of-date-notice.tsx";
 import { Workspace } from "@/features/workspace/workspace.tsx";
+import { PreferencesController } from "@/features/settings/preferences.ts";
 
 export const Route = createRootRoute({ component: RootLayout });
 
@@ -15,7 +16,7 @@ export const Route = createRootRoute({ component: RootLayout });
  * The window: Cluster tabs on top, and one Workspace per open Cluster. Hidden
  * Workspaces stay mounted so switching tabs keeps their state.
  */
-function RootLayout() {
+export function RootLayout() {
   const ids = useOpenClusters((s) => s.ids);
   const active = useParams({ strict: false }).cluster;
   const outdated = useConnectionState() === "outdated";
@@ -23,6 +24,7 @@ function RootLayout() {
     <div className="flex h-full flex-col">
       <OutOfDateNotice />
       <UnsavedGuard />
+      <PreferencesController />
       {/* Freeze the content when out of date because the connection cannot recover. */}
       <div
         inert={outdated}

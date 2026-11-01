@@ -39,6 +39,8 @@ export class LogCodec {
   }
 
   event(status: LogStreamStatus): LogStreamStatus {
+    const engineIds = new Set(status.sources.map((source) => source.id));
+    for (const id of this.#sources.keys()) if (!engineIds.has(id)) this.#sources.delete(id);
     const sources = status.sources.map((source) => {
       const key = JSON.stringify([source.podUid, source.container]);
       let id = this.#identities.get(key);
@@ -56,6 +58,11 @@ export class LogCodec {
     if (status.ready && status.loaded >= status.followed) {
       const current = new Set(sources.map((source) => source.id));
       for (const id of this.#cursors.keys()) if (!current.has(id)) this.#cursors.delete(id);
+      for (const [key, id] of this.#identities)
+        if (!current.has(id) && !this.#cursors.has(id)) {
+          this.#identities.delete(key);
+          this.#exited.delete(id);
+        }
     }
     return { ...status, sources };
   }
@@ -106,5 +113,22 @@ export class LogCodec {
       });
     }
     return lines;
+  }
+
+  /** Narrow diagnostics for source/cursor liveness tests; not sent to the main thread. */
+  diagnostics(): {
+    identities: number;
+    socketSources: number;
+    cursors: number;
+    exited: number;
+    nextStableId: number;
+  } {
+    return {
+      identities: this.#identities.size,
+      socketSources: this.#sources.size,
+      cursors: this.#cursors.size,
+      exited: this.#exited.size,
+      nextStableId: this.#nextId,
+    };
   }
 }

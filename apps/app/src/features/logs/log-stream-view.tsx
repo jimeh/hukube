@@ -10,7 +10,7 @@ import { useEngine } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
 import { Button } from "@hukube/ui/components/button";
 import { cn } from "@hukube/ui/lib/utils";
-import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react";
 import { Notice } from "../resource/notice.tsx";
 import { LogDocument } from "./log-document.ts";
 import LogEditor, { type LogEditorHandle } from "./log-editor.tsx";
@@ -55,7 +55,15 @@ export default function LogStreamView({ target, uid, exists, kind, visible }: Lo
   };
   return (
     <LogRun
-      key={JSON.stringify([container, previous, run])}
+      key={JSON.stringify([
+        target.cluster,
+        target.type,
+        target.namespace,
+        target.name,
+        container,
+        previous,
+        run,
+      ])}
       focus={focus}
       known={known}
       setKnown={setKnown}
@@ -115,9 +123,9 @@ function LogRun({
   const stream = useRef<EngineStream | undefined>(undefined);
   const hiddenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const editor = useRef<LogEditorHandle>(null);
-  const { timestamps, wrap } = useLogSettings();
+  const { timestamps, wrap, budgets } = useLogSettings();
   const { cluster, type, namespace, name } = target;
-  const document = useMemo(() => new LogDocument(type), [type]);
+  const [document] = useState(() => new LogDocument(type, budgets));
   useSyncExternalStore(document.subscribe, document.snapshot);
   const current = useEffectEvent(() => visible);
   const remember = useEffectEvent(setKnown);
@@ -201,7 +209,12 @@ function LogRun({
     else hiddenTimer.current = setTimeout(() => stream.current?.pause(), 10_000);
     return () => clearTimeout(hiddenTimer.current);
   }, [visible]);
-  useEffect(() => document.timestamps(timestamps), [document, timestamps]);
+  useEffect(() => {
+    document.updateBudgets(budgets);
+  }, [document, budgets]);
+  useEffect(() => {
+    document.timestamps(timestamps);
+  }, [document, timestamps]);
 
   const sources = status?.sources ?? [];
   const count = sources.length;
@@ -362,6 +375,17 @@ function LogRun({
         setPrevious={setPrevious}
         search={() => editor.current?.search()}
       />
+      {document.retentionLoss && (
+        <output className="flex shrink-0 flex-wrap items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <span className="min-w-0 flex-1 break-words">
+            Older retained log entries were discarded after retention limits changed. This cannot be
+            undone.
+          </span>
+          <Button size="sm" variant="ghost" onClick={() => document.dismissRetentionLoss()}>
+            Dismiss
+          </Button>
+        </output>
+      )}
       {notices.map((notice, index) => (
         <output
           key={index}

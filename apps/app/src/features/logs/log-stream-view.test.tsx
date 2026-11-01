@@ -3,8 +3,12 @@ import type {
   EngineClient,
   LogStreamParams,
   LogStreamStatus,
+  Setting,
+  SettingPut,
   StreamListener,
+  SubscriptionListener,
 } from "@hukube/engine-client";
+import { EngineRequestError } from "@hukube/engine-client";
 import { EngineProvider } from "@hukube/engine-client/react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useImperativeHandle } from "react";
@@ -12,7 +16,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { LogDocument } from "./log-document.ts";
 import type { LogEditorHandle } from "./log-editor.tsx";
 import LogStreamView, { type LogStreamViewProps } from "./log-stream-view.tsx";
-import { useLogSettings } from "./log-settings.ts";
+import { getPreferenceStore } from "../settings/preferences.ts";
 
 const search = vi.hoisted(() => vi.fn<() => void>());
 function StandInEditor({
@@ -44,23 +48,83 @@ let opened: {
   resume: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 }[];
-const engine = {
-  openStream: (
-    _method: string,
-    params: LogStreamParams,
-    listener: StreamListener<"resource.logs">,
-  ) => {
-    const handle = {
-      params,
-      listener,
-      pause: vi.fn<() => void>(),
-      resume: vi.fn<() => void>(),
-      close: vi.fn<() => void>(),
-    };
-    opened.push(handle);
-    return handle;
-  },
-} as unknown as EngineClient;
+let engine: EngineClient;
+let preference: unknown;
+let preferenceRevision: string;
+let preferenceRevisionNumber: number;
+let preferenceWatches: {
+  closed: boolean;
+  listener: {
+    data(setting: Setting): void;
+    error?(error: { code: string; message: string }): void;
+  };
+}[];
+let preferencePuts: SettingPut[];
+let failPreferencePut: EngineRequestError | undefined;
+
+function publishPreference(value: unknown) {
+  preference = value;
+  preferenceRevision = `r${++preferenceRevisionNumber}`;
+  const setting = { key: "app/preferences", value, revision: preferenceRevision };
+  for (const watch of preferenceWatches) if (!watch.closed) watch.listener.data(setting);
+}
+
+function makeEngine(): EngineClient {
+  return {
+    openStream: (
+      _method: string,
+      params: LogStreamParams,
+      listener: StreamListener<"resource.logs">,
+    ) => {
+      const handle = {
+        params,
+        listener,
+        pause: vi.fn<() => void>(),
+        resume: vi.fn<() => void>(),
+        close: vi.fn<() => void>(),
+      };
+      opened.push(handle);
+      return handle;
+    },
+    subscribe: (_method: string, _params: unknown, listener: SubscriptionListener<Setting>) => {
+      const watch = {
+        closed: false,
+        listener: listener as (typeof preferenceWatches)[number]["listener"],
+      };
+      preferenceWatches.push(watch);
+      queueMicrotask(() => {
+        if (!watch.closed)
+          watch.listener.data({
+            key: "app/preferences",
+            value: preference,
+            revision: preferenceRevision,
+          });
+      });
+      return {
+        update: () => {},
+        close: () => {
+          watch.closed = true;
+        },
+      };
+    },
+    request: async (_method: string, params: unknown) => {
+      const put = params as SettingPut;
+      preferencePuts.push(put);
+      if (failPreferencePut) {
+        const error = failPreferencePut;
+        failPreferencePut = undefined;
+        throw error;
+      }
+      if (put.ifRevision !== preferenceRevision)
+        throw new EngineRequestError({ code: "conflict", message: "changed" });
+      publishPreference(put.value);
+      return undefined;
+    },
+    getState: () => "open",
+    onStateChange: () => () => {},
+    close: () => {},
+  } as unknown as EngineClient;
+}
 const props: LogStreamViewProps = {
   target: { cluster: "c", type: "pods", namespace: "ns", name: "web" },
   kind: "Pod",
@@ -101,11 +165,17 @@ const line = (text = "hello") =>
   );
 beforeEach(() => {
   opened = [];
+  preference = { version: 1 };
+  preferenceRevision = "r1";
+  preferenceRevisionNumber = 1;
+  preferenceWatches = [];
+  preferencePuts = [];
+  failPreferencePut = undefined;
+  engine = makeEngine();
   vi.useFakeTimers();
   // The fixture's lines are from this day. A line from another day shows its date.
   vi.setSystemTime(new Date(2026, 9, 13, 12));
   search.mockClear();
-  useLogSettings.setState({ timestamps: false, wrap: true });
 });
 afterEach(() => {
   cleanup();
@@ -318,6 +388,9 @@ it("shares display toggles, enables previous only after a restart, searches, and
   expect(screen.getByRole("textbox").textContent).toContain("01:02:03.004");
   fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
   expect(screen.getByRole("textbox").getAttribute("data-wrap")).toBe("false");
+  expect(opened).toHaveLength(1);
+  await act(async () => {});
+  expect(screen.getByText(/Saved$/)).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Search" }));
   expect(search).toHaveBeenCalledOnce();
   event({
@@ -455,6 +528,59 @@ it("does not call a Pod gone because a status came before its containers were kn
   expect(screen.getByRole("textbox").textContent).not.toMatch(/is gone|following Pod/);
   event({ ...ready, sources: [source], pods: 1, followed: 1, loaded: 1 });
   expect(screen.getByRole("textbox").textContent).toContain("··· Pod web-b is gone ···");
+});
+
+it("trims a hidden mounted document on confirmed budget updates without reopening its stream", async () => {
+  preference = { version: 1, logStreams: { maxLines: 3 } };
+  const stopPreferences = getPreferenceStore(engine).subscribe(() => {});
+  await act(async () => {});
+  const view = mount();
+  event();
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 0, text: "three" },
+        { source: 0, time: 0, text: "four" },
+      ]),
+  );
+  expect(screen.getByRole("textbox").textContent).toBe("twothreefour");
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  act(() => publishPreference({ version: 1, logStreams: { maxLines: 1 } }));
+  expect(opened).toHaveLength(1);
+  expect(latest().pause).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox").textContent).toBe("four");
+  expect(
+    screen.getByText(
+      "Older retained log entries were discarded after retention limits changed. This cannot be undone.",
+    ),
+  ).toBeDefined();
+
+  act(() => publishPreference({ version: 1, logStreams: { maxLines: 10 } }));
+  expect(opened).toHaveLength(1);
+  expect(screen.getByRole("textbox").textContent).toBe("four");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(screen.queryByText(/Older retained log entries/)).toBeNull();
+  stopPreferences();
+});
+
+it("keeps an unsaved toolbar choice visible and offers retry or the confirmed value", async () => {
+  mount();
+  event();
+  failPreferencePut = new EngineRequestError({ code: "unavailable", message: "disk full" });
+  fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
+  await act(async () => {});
+  expect(screen.getByRole("alert").textContent).toContain("Not saved: disk full");
+  expect(screen.getByRole("button", { name: "Wrap" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Use current value" }));
+  expect(screen.getByRole("button", { name: "Wrap" }).getAttribute("aria-pressed")).toBe("true");
+  expect(opened).toHaveLength(1);
 });
 
 it("marks Pods that come and go in a stream narrowed to a container another Pod lacks", () => {

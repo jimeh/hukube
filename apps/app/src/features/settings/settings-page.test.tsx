@@ -1,0 +1,249 @@
+// @vitest-environment jsdom
+
+import type { ConnectionState, EngineClient, Setting, SettingPut } from "@hukube/engine-client";
+import { EngineRequestError } from "@hukube/engine-client";
+import { EngineProvider } from "@hukube/engine-client/react";
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it } from "vitest";
+
+import { useOpenClusters } from "@/features/clusters/open-clusters.ts";
+
+import { SettingsPage, type SettingsCategory } from "./settings-page.tsx";
+
+interface PreferenceHarness {
+  client: EngineClient;
+  puts: SettingPut[];
+  value(): unknown;
+}
+
+function preferenceHarness(
+  initial: unknown = { version: 1 },
+  connection: ConnectionState = "open",
+): PreferenceHarness {
+  let value = initial;
+  let revisionNumber = 1;
+  let revision = "r1";
+  const puts: SettingPut[] = [];
+  const watches: {
+    closed: boolean;
+    key: string;
+    listener: { data(setting: Setting): void };
+  }[] = [];
+  const publish = (key: string, next: unknown) => {
+    if (key === "app/preferences") {
+      value = next;
+      revision = `r${++revisionNumber}`;
+    }
+    for (const watch of watches)
+      if (!watch.closed && watch.key === key)
+        watch.listener.data({
+          key,
+          value: key === "app/preferences" ? value : null,
+          revision: key === "app/preferences" ? revision : "",
+        });
+  };
+  const client = {
+    subscribe: (
+      _method: string,
+      params: { key: string },
+      listener: { data(setting: Setting): void },
+    ) => {
+      const watch = { closed: false, key: params.key, listener };
+      watches.push(watch);
+      queueMicrotask(() => {
+        if (!watch.closed)
+          listener.data({
+            key: params.key,
+            value: params.key === "app/preferences" ? value : null,
+            revision: params.key === "app/preferences" ? revision : "",
+          });
+      });
+      return {
+        update: () => {},
+        close: () => {
+          watch.closed = true;
+        },
+      };
+    },
+    request: async (_method: string, params: SettingPut) => {
+      puts.push(params);
+      if (params.ifRevision !== revision)
+        throw new EngineRequestError({ code: "conflict", message: "changed" });
+      publish(params.key, params.value);
+      return undefined;
+    },
+    getState: () => connection,
+    onStateChange: () => () => {},
+    openStream: () => {
+      throw new Error("unexpected stream");
+    },
+    close: () => {},
+  } as unknown as EngineClient;
+  return { client, puts, value: () => value };
+}
+
+async function mountPage(
+  category: SettingsCategory,
+  initial: unknown = { version: 1 },
+  fromCluster?: string,
+  connection: ConnectionState = "open",
+) {
+  const harness = preferenceHarness(initial, connection);
+  const root = createRootRoute({ component: Outlet });
+  const index = createRoute({ getParentRoute: () => root, path: "/", component: () => null });
+  const settings = createRoute({
+    getParentRoute: () => root,
+    path: "/settings",
+    component: () => <SettingsPage category={category} fromCluster={fromCluster} />,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([index, settings]),
+    history: createMemoryHistory({ initialEntries: ["/settings"] }),
+  });
+  await router.load();
+  render(
+    <EngineProvider client={harness.client}>
+      <RouterProvider router={router} />
+    </EngineProvider>,
+  );
+  await act(async () => {});
+  return harness;
+}
+
+beforeEach(() => {
+  window.scrollTo = () => {};
+  localStorage.clear();
+  sessionStorage.clear();
+  useOpenClusters.setState({ ids: [] });
+});
+
+afterEach(() => cleanup());
+
+it("works without a Cluster and saves and resets the Engine-shared theme after read-back", async () => {
+  const h = await mountPage("appearance");
+  expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeDefined();
+  expect(screen.getByRole("heading", { level: 2, name: "Appearance" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Back to clusters" })).toBeDefined();
+  expect(screen.getByRole("link", { name: "Appearance" }).getAttribute("aria-current")).toBe(
+    "page",
+  );
+  expect(screen.getByLabelText("Category")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("radio", { name: "Light" }));
+  await act(async () => {});
+  expect(h.value()).toEqual({ version: 1, appearance: { theme: "light" } });
+  expect(screen.getByText("Theme: Saved")).toBeDefined();
+  expect(document.documentElement.classList.contains("dark")).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Reset section" }));
+  await act(async () => {});
+  expect(h.value()).toEqual({ version: 1 });
+  expect(screen.getByRole("radio", { name: "Dark" }).hasAttribute("checked")).toBe(true);
+});
+
+it("explains an unavailable Engine while keeping last-known preferences visible", async () => {
+  await mountPage(
+    "appearance",
+    { version: 1, appearance: { theme: "light" } },
+    undefined,
+    "reconnecting",
+  );
+  expect(screen.getByRole("alert").textContent).toContain("Connection to the Engine lost");
+  expect(screen.getByRole("alert").textContent).toContain("Last-known preferences remain active");
+  expect(screen.getByRole("radio", { name: "Light" }).matches(":checked")).toBe(true);
+});
+
+it("preserves invalid numeric drafts, sends no request, confirms reductions, and restores on Escape", async () => {
+  const h = await mountPage("logs");
+  const lines = screen.getByRole("textbox", { name: /Retained lines/ });
+  const apply = screen.getByRole("button", { name: /^Apply$/ });
+  fireEvent.change(lines, { target: { value: "" } });
+  expect(lines.getAttribute("value")).toBe("");
+  expect(screen.getByText(/base-10 whole number/)).toBeDefined();
+  expect(apply.hasAttribute("disabled")).toBe(true);
+  expect(h.puts).toHaveLength(0);
+
+  fireEvent.change(lines, { target: { value: "10" } });
+  expect(apply.hasAttribute("disabled")).toBe(false);
+  apply.focus();
+  fireEvent.click(apply);
+  let dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
+  expect(within(dialog).getByText(/cannot be restored/)).toBeDefined();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(document.activeElement).toBe(apply);
+  fireEvent.click(apply);
+  dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  await act(async () => {});
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 10 } });
+  expect(screen.getByText("Retained lines: Saved")).toBeDefined();
+
+  fireEvent.change(lines, { target: { value: "20" } });
+  fireEvent.keyDown(lines, { key: "Escape" });
+  expect(lines.getAttribute("value")).toBe("10");
+});
+
+it("uses labelled display controls and persists their shared defaults", async () => {
+  const h = await mountPage("logs");
+  const wrap = screen.getByRole("checkbox", { name: "Wrap long lines" });
+  const timestamps = screen.getByRole("checkbox", { name: "Show timestamps" });
+  expect(wrap.getAttribute("data-checked")).not.toBeNull();
+  expect(timestamps.getAttribute("data-checked")).toBeNull();
+  fireEvent.click(wrap);
+  fireEvent.click(timestamps);
+  await act(async () => {});
+  expect(h.value()).toEqual({
+    version: 1,
+    logStreams: { wrap: false, timestamps: true },
+  });
+  expect(screen.getByText("Wrap, Timestamps: Saved")).toBeDefined();
+});
+
+it("confirms a Reset that lowers an effective retention budget", async () => {
+  const h = await mountPage("logs", {
+    version: 1,
+    logStreams: { maxLines: 80_000, maxCharacters: 1_000_000 },
+  });
+  const lines = screen.getByRole("textbox", { name: /Retained lines/ });
+  fireEvent.change(lines, { target: { value: "70000" } });
+  fireEvent.click(screen.getAllByRole("button", { name: "Reset section" })[0]!);
+  const dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
+  expect(h.puts).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  await act(async () => {});
+  expect(h.value()).toEqual({ version: 1 });
+  expect(lines.getAttribute("value")).toBe("50000");
+  expect(
+    screen.getByText(/Retained lines, Retained characters, Styled ranges: Saved/),
+  ).toBeDefined();
+});
+
+it("requires explicit confirmation before replacing a malformed preference document", async () => {
+  const h = await mountPage("appearance", { version: 2, future: "keep" });
+  expect(screen.getByRole("alert").textContent).toContain("cannot be read");
+  expect(screen.getByRole("radio", { name: "Light" }).matches(":disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Replace stored preferences" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Replace stored app preferences?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Replace stored preferences" }));
+  await act(async () => {});
+  expect(h.value()).toEqual({ version: 1 });
+  expect(screen.getByText("Stored preferences replaced")).toBeDefined();
+});
+
+it("returns to the originating Workspace only while its Cluster tab remains open", async () => {
+  useOpenClusters.setState({ ids: ["dev"] });
+  await mountPage("appearance", { version: 1 }, "dev");
+  expect(screen.getByRole("button", { name: "Back to dev" })).toBeDefined();
+  cleanup();
+  useOpenClusters.setState({ ids: [] });
+  await mountPage("appearance", { version: 1 }, "dev");
+  expect(screen.getByRole("button", { name: "Back to clusters" })).toBeDefined();
+});

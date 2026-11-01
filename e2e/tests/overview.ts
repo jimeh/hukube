@@ -13,8 +13,11 @@ async function openResource(page: Page, namespace: string, type: string, name: s
 }
 async function manager(page: Page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Overview definitions" }).click();
-  return page.getByRole("dialog", { name: "Overview definitions", exact: true });
+  await page.getByRole("link", { name: "Overview definitions", exact: true }).click();
+  return page.getByRole("region", { name: "Overview definitions", exact: true });
+}
+async function leaveManager(page: Page) {
+  await page.getByRole("button", { name: /^Back to / }).click();
 }
 export function overviewTests(namespace: string) {
   test("Overview shares form and YAML edits, Undo, gutter, all-Facet review, and Engine apply", async ({
@@ -200,7 +203,7 @@ export function overviewTests(namespace: string) {
         definitions.getByText("widgets.sample.hukube.dev saved.", { exact: true }),
       ).toBeVisible();
       installed = true;
-      await definitions.getByRole("button", { name: "Close", exact: true }).first().click();
+      await leaveManager(page);
       await panel.getByRole("tab", { name: /^Overview/ }).click();
       await panel.getByRole("button", { name: "Edit Size", exact: true }).click();
       await panel.getByRole("textbox", { name: "Size", exact: true }).fill("4");
@@ -233,7 +236,7 @@ export function overviewTests(namespace: string) {
         definitions.getByText("widgets.sample.hukube.dev removed.", { exact: true }),
       ).toBeVisible();
       installed = false;
-      await definitions.getByRole("button", { name: "Close", exact: true }).first().click();
+      await leaveManager(page);
       await expect(restored.getByRole("tab", { name: /^Overview/ })).toHaveCount(0);
       await expect(restored.getByRole("tab", { name: /^YAML/ })).toHaveAttribute(
         "aria-selected",
@@ -242,11 +245,11 @@ export function overviewTests(namespace: string) {
     } finally {
       try {
         if (installed && !page.isClosed()) {
-          const openDialog = page.getByRole("dialog", {
+          const openManager = page.getByRole("region", {
             name: "Overview definitions",
             exact: true,
           });
-          const definitions = (await openDialog.isVisible()) ? openDialog : await manager(page);
+          const definitions = (await openManager.isVisible()) ? openManager : await manager(page);
           await definitions
             .getByRole("button", { name: "Remove widgets.sample.hukube.dev", exact: true })
             .click();

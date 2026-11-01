@@ -87,3 +87,83 @@ it("forgets a Pod that left a stream narrowed to a container another Pod lacks",
   codec.decode(frame(8));
   expect(codec.params(params).resume).toEqual([expect.objectContaining({ podUid: "uid3" })]);
 });
+
+it("prunes per-socket Engine IDs on every ordered status while retaining stable state through partial status", () => {
+  const codec = new LogCodec();
+  const other = { ...source, id: 8, pod: "web-b", podUid: "uid2", container: "sidecar" };
+  const complete = { ...status, sources: [source, other], pods: 2, followed: 2, loaded: 2 };
+  codec.event(complete);
+  codec.decode(frame(7));
+  codec.decode(frame(8, 4));
+  expect(codec.diagnostics()).toEqual({
+    identities: 2,
+    socketSources: 2,
+    cursors: 1,
+    exited: 1,
+    nextStableId: 2,
+  });
+
+  codec.event({ ...complete, ready: false, sources: [source], loaded: 0 });
+  expect(codec.diagnostics()).toMatchObject({
+    identities: 2,
+    socketSources: 1,
+    cursors: 1,
+    exited: 1,
+  });
+  expect(() => codec.decode(frame(8))).toThrow("Unknown log source");
+  codec.beginSocket();
+  codec.event({ ...complete, ready: false, sources: [], loaded: 0 });
+  expect(codec.diagnostics()).toMatchObject({
+    identities: 2,
+    socketSources: 0,
+    cursors: 1,
+    exited: 1,
+  });
+});
+
+it("prunes identities, cursors, and exited deduplication only after definitive absence and never reuses IDs", () => {
+  const codec = new LogCodec();
+  const params = { cluster: "c", type: "pods", name: "web", uid: "uid" };
+  expect(codec.event(status).sources[0]!.id).toBe(0);
+  codec.decode(frame());
+  codec.decode(frame(7, 4));
+  codec.beginSocket();
+  codec.event({ ...status, ready: false, sources: [], loaded: 0 });
+  expect(codec.params(params).resume).toHaveLength(1);
+  expect(codec.diagnostics()).toMatchObject({ identities: 1, cursors: 1, exited: 1 });
+
+  codec.event({ ...status, sources: [], pods: 0, followed: 0, loaded: 0 });
+  expect(codec.params(params).resume).toEqual([]);
+  expect(codec.diagnostics()).toMatchObject({
+    identities: 0,
+    socketSources: 0,
+    cursors: 0,
+    exited: 0,
+    nextStableId: 1,
+  });
+  expect(codec.event({ ...status, sources: [{ ...source, id: 99 }] }).sources[0]!.id).toBe(1);
+  expect(codec.diagnostics().nextStableId).toBe(2);
+});
+
+it("keeps diagnostics bounded across repeated definitive source churn", () => {
+  const codec = new LogCodec();
+  for (let generation = 0; generation < 20; generation++) {
+    const next = {
+      ...source,
+      id: generation + 10,
+      pod: `web-${generation}`,
+      podUid: `uid-${generation}`,
+      instance: `run-${generation}`,
+    };
+    codec.beginSocket();
+    codec.event({ ...status, sources: [next] });
+    codec.decode(frame(next.id));
+    expect(codec.diagnostics()).toMatchObject({
+      identities: 1,
+      socketSources: 1,
+      cursors: 1,
+      exited: 0,
+    });
+  }
+  expect(codec.diagnostics().nextStableId).toBe(20);
+});

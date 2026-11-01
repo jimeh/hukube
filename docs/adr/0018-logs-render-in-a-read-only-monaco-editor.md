@@ -81,8 +81,17 @@ it is interpreted as markup. The filter and the parse run in the Worker.
 
 ## Consequences
 
-- The viewer keeps the newest lines within three budgets: 50,000 lines,
-  32 million characters, and 200,000 decorations.
+- The viewer keeps the newest rows within three app-level, Engine-shared
+  budgets. Their defaults are 50,000 rows, 32 million UTF-16 characters
+  including one newline per row, and 200,000 styled ranges (Monaco
+  decorations). Users can change them in Settings within the product's hard
+  ranges. All three limits apply together, and a row that exceeds either of
+  its own character or styled-range limits is not retained.
+- These are logical content caps, not JavaScript heap-byte limits. Monaco
+  models, strings, arrays, objects, and renderer state add memory overhead.
+  Lowering a budget synchronously removes the oldest retained rows from every
+  mounted Log Stream without reopening its Kubernetes stream. Raising it
+  affects future retention and does not restore discarded rows.
 - Timestamps and origins are part of the text, so copying and searching
   include them, and they wrap with the line in a narrow Pane.
 - A screen reader meets an editor, not a log: Monaco exposes a text box and

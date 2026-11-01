@@ -8,17 +8,14 @@ import {
 import { Button } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { cn } from "@hukube/ui/lib/utils";
-import { Add01Icon, Cancel01Icon, Moon02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Cancel01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import type { DragEvent } from "react";
-
-import { OverviewSettings } from "../overview/definition-manager.tsx";
 
 import { guardWorkspace } from "../edit/unsaved-edits.ts";
 
 import { useHost } from "@/lib/host.tsx";
-import { setTheme, useTheme } from "@/lib/theme.ts";
 
 import { clusterScope } from "./cluster-color.ts";
 import { useOpenClusters } from "./open-clusters.ts";
@@ -29,6 +26,9 @@ export function ClusterTabs() {
   const active = useParams({ strict: false }).cluster;
   const close = useCloseCluster();
   const host = useHost();
+  const settingsActive = useRouterState({
+    select: (state) => state.location.pathname === "/settings",
+  });
 
   const moveToNewWindow = (id: string) => {
     guardWorkspace(id, () => {
@@ -117,32 +117,31 @@ export function ClusterTabs() {
         <TooltipContent>Open a cluster</TooltipContent>
       </Tooltip>
       <div className="ml-auto flex items-center pr-1">
-        <OverviewSettings />
-        <ThemeToggle />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                nativeButton={false}
+                render={
+                  <Link
+                    to="/settings"
+                    search={{ category: "appearance", ...(active ? { fromCluster: active } : {}) }}
+                  />
+                }
+                aria-label="Settings"
+                aria-current={settingsActive ? "page" : undefined}
+                className="aria-[current=page]:bg-accent aria-[current=page]:text-foreground"
+              />
+            }
+          >
+            <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
+          </TooltipTrigger>
+          <TooltipContent>Settings</TooltipContent>
+        </Tooltip>
       </div>
     </nav>
-  );
-}
-
-function ThemeToggle() {
-  const theme = useTheme();
-  const next = theme === "dark" ? "light" : "dark";
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Switch to ${next} mode`}
-            onClick={() => setTheme(next)}
-          />
-        }
-      >
-        <HugeiconsIcon icon={theme === "dark" ? Sun03Icon : Moon02Icon} strokeWidth={2} />
-      </TooltipTrigger>
-      <TooltipContent>Switch to {next} mode</TooltipContent>
-    </Tooltip>
   );
 }
 
