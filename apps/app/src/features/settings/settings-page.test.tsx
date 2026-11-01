@@ -56,9 +56,14 @@ function fieldHarness() {
   };
 }
 
-it.each<NumericField>(["maxLines", "maxCharacters", "maxDecorations"])(
-  "leaves composing Enter uncancelled and unsent for %s, then commits ordinary Enter once",
-  async (field) => {
+it.each(
+  (["maxLines", "maxCharacters", "maxDecorations"] satisfies NumericField[]).flatMap((field) => [
+    { field, mode: "modern", isComposing: true, keyCode: 0 },
+    { field, mode: "legacy", isComposing: false, keyCode: 229 },
+  ]),
+)(
+  "leaves $mode IME Enter uncancelled and unsent for $field, then commits ordinary Enter once",
+  async ({ field, isComposing, keyCode }) => {
     const h = fieldHarness();
     const view = render(
       <EngineProvider client={h.engine}>
@@ -70,17 +75,22 @@ it.each<NumericField>(["maxLines", "maxCharacters", "maxDecorations"])(
       const input = view.container.querySelector("input")!;
       fireEvent.compositionStart(input);
       fireEvent.change(input, { target: { value: "1" } });
+      if (!isComposing) fireEvent.compositionEnd(input);
+      expect(h.put).not.toHaveBeenCalled();
       const composing = new KeyboardEvent("keydown", {
         key: "Enter",
-        isComposing: true,
+        isComposing,
+        keyCode,
         bubbles: true,
         cancelable: true,
       });
+      expect(composing.isComposing).toBe(isComposing);
+      expect(composing.keyCode).toBe(keyCode);
       fireEvent(input, composing);
       expect(h.put).not.toHaveBeenCalled();
       expect(composing.defaultPrevented).toBe(false);
       expect(h.store.getSnapshot().drafts[field]?.status).toBe("Not saved");
-      fireEvent.compositionEnd(input);
+      if (isComposing) fireEvent.compositionEnd(input);
       expect(h.put).not.toHaveBeenCalled();
       const enter = new KeyboardEvent("keydown", {
         key: "Enter",
