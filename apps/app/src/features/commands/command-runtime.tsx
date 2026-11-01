@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useConnectionState } from "@hukube/engine-client/react";
 import { useModalCount } from "@hukube/ui/hooks/use-modal-inert";
@@ -93,6 +100,23 @@ export function CommandRuntime() {
     setSearch("");
   }
   const palette = view.palette;
+  const inputView = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (!element || !palette || !commands.ownsPaletteInput(palette)) return;
+      // A view's ref attaches inside the portal, including when it opens before
+      // the previous exit finishes. Ordinary updates retain this callback identity.
+      element
+        .querySelector<HTMLElement>("[data-slot=command-input],form input,form select")
+        ?.focus();
+      return () => {
+        // Release a disappearing control while it is still connected. Otherwise
+        // the dialog schedules a popup restore that can outlive a rapid reopen.
+        if (element.contains(document.activeElement))
+          element.closest<HTMLElement>("[role=dialog]")?.focus({ preventScroll: true });
+      };
+    },
+    [palette],
+  );
   return (
     <>
       {view.hint && (
@@ -119,11 +143,12 @@ export function CommandRuntime() {
         title={palette?.mode === "resources" ? "Go to Resource" : "Command palette"}
         description="Actions use the target captured when this palette opened"
         finalFocus={false}
-        initialFocus={() => document.querySelector<HTMLElement>("[data-slot=command-input]")}
+        initialFocus={false}
         className="top-[8vh]! max-h-[84vh] overflow-y-auto sm:max-w-2xl!"
       >
         {palette && (
           <div
+            ref={inputView}
             onKeyDownCapture={(e) => {
               if (e.key === "Escape" && palette.prompt) {
                 e.preventDefault();
@@ -250,9 +275,6 @@ function Prompt({
   const [args, setArgs] = useState(prompt.args);
   const [issues, setIssues] = useState<ArgumentIssue[]>([]);
   const form = useRef<HTMLFormElement>(null);
-  useLayoutEffect(() => {
-    form.current?.querySelector<HTMLElement>("input,select")?.focus();
-  }, []);
   return (
     <form
       ref={form}

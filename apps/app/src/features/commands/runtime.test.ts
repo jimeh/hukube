@@ -982,3 +982,96 @@ it.each([
   h.rt.key(key("h", "KeyH"));
   expect(h.settings).not.toHaveBeenCalled();
 });
+
+it("supersedes palette input ownership only on intentional view transitions", () => {
+  const h = harness();
+  h.rt.openPalette("commands");
+  const search = h.rt.getSnapshot().palette!;
+  expect(h.rt.ownsPaletteInput(search)).toBe(true);
+  h.rt.refreshAvailability();
+  h.rt.configure(h.config);
+  expect(h.rt.getSnapshot().palette).toBe(search);
+  expect(h.rt.ownsPaletteInput(search)).toBe(true);
+  h.rt.editArguments("resource.open", search.origin);
+  const prompt = h.rt.getSnapshot().palette!;
+  expect(h.rt.ownsPaletteInput(search)).toBe(false);
+  expect(h.rt.ownsPaletteInput(prompt)).toBe(true);
+  h.rt.backToSearch();
+  expect(h.rt.ownsPaletteInput(prompt)).toBe(false);
+  const back = h.rt.getSnapshot().palette!;
+  expect(h.rt.ownsPaletteInput(back)).toBe(true);
+  h.rt.closePalette();
+  expect(h.rt.ownsPaletteInput(back)).toBe(false);
+});
+
+it.each([
+  "blur",
+  "recording",
+  "route",
+  "modal",
+  "outdated",
+  "hidden",
+  "workspace",
+  "panel",
+  "pane",
+  "params",
+  "uid",
+])("invalidates active input ownership on %s even if the boundary reverses", (boundary) => {
+  const h = harness();
+  h.rt.openPalette("commands");
+  const palette = h.rt.getSnapshot().palette!;
+  switch (boundary) {
+    case "blur":
+      h.rt.blur();
+      break;
+    case "recording":
+      h.rt.setRecording(true);
+      h.rt.setRecording(false);
+      break;
+    case "route":
+      h.rt.configure({ ...h.config, route: "/" });
+      h.rt.configure(h.config);
+      break;
+    case "modal":
+      h.rt.configure({ ...h.config, modalCount: 2 });
+      h.rt.configure(h.config);
+      break;
+    case "outdated":
+      h.rt.configure({ ...h.config, connection: "outdated" });
+      h.rt.configure(h.config);
+      break;
+    case "hidden":
+      h.owner.value.active = false;
+      h.rt.refreshAvailability();
+      h.owner.value.active = true;
+      break;
+    case "workspace":
+      h.rt.registerWorkspace("c", { ...h.owner, token: {} });
+      h.rt.registerWorkspace("c", h.owner);
+      break;
+    case "panel":
+      h.replace();
+      h.rt.refreshAvailability();
+      break;
+    case "pane": {
+      const group = h.panel().group;
+      Object.assign(h.panel(), { group: {} });
+      h.rt.refreshAvailability();
+      Object.assign(h.panel(), { group });
+      break;
+    }
+    case "params": {
+      const params = h.panel().params;
+      Object.assign(h.panel(), { params: {} });
+      h.rt.refreshAvailability();
+      Object.assign(h.panel(), { params });
+      break;
+    }
+    case "uid":
+      h.uid("two");
+      h.rt.refreshAvailability();
+      h.uid("one");
+      break;
+  }
+  expect(h.rt.ownsPaletteInput(palette)).toBe(false);
+});

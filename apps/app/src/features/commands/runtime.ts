@@ -80,6 +80,7 @@ export class CommandRuntime {
   // Compare published palette output, never callback identity or copied owner state.
   private paletteObservation?: { content: string; types?: WorkspaceValue["types"] };
   private held = new Set<string>();
+  private paletteInput?: View["palette"];
   private returnFocus?: { origin: Origin; target: Origin; closed: boolean };
   readonly chords = new Chords<Origin>((hint) => this.show({ hint }));
   subscribe = (fn: () => void) => {
@@ -88,6 +89,7 @@ export class CommandRuntime {
   };
   getSnapshot = () => this.view;
   private show(patch: Partial<View>) {
+    if ("palette" in patch) this.paletteInput = patch.palette;
     if (patch.palette) this.returnFocus = undefined;
     this.view = { ...this.view, ...patch };
     this.paletteObservation = this.observePalette();
@@ -117,6 +119,12 @@ export class CommandRuntime {
       config.connection === "outdated"
     )
       this.returnFocus = undefined;
+    if (
+      this.config?.route !== config.route ||
+      config.modalCount > (this.view.palette ? 1 : 0) ||
+      config.connection === "outdated"
+    )
+      this.paletteInput = undefined;
     const mapChanged = this.config?.map !== config.map;
     this.config = config;
     if (mapChanged) this.show({});
@@ -133,7 +141,18 @@ export class CommandRuntime {
       this.chords.cancel();
     };
   }
+  ownsPaletteInput(palette: NonNullable<View["palette"]>) {
+    return (
+      this.paletteInput === palette &&
+      this.view.palette === palette &&
+      !this.view.recording &&
+      this.valid(palette.origin) &&
+      this.config?.connection !== "outdated" &&
+      (this.config?.modalCount ?? 0) <= 1
+    );
+  }
   refreshAvailability() {
+    if (this.paletteInput && !this.valid(this.paletteInput.origin)) this.paletteInput = undefined;
     if (this.returnFocus && !this.valid(this.returnFocus.target)) this.returnFocus = undefined;
     if (this.chords.pending && !this.valid(this.chords.pending.origin)) this.chords.cancel();
     if (
@@ -512,6 +531,8 @@ export class CommandRuntime {
 
   setRecording(recording: boolean) {
     this.chords.cancel();
+    this.paletteInput = undefined;
+    this.returnFocus = undefined;
     this.show({ recording });
   }
   label(id: CommandId, origin = this.capture()) {
@@ -624,6 +645,7 @@ export class CommandRuntime {
   }
   blur = () => {
     this.held.clear();
+    this.paletteInput = undefined;
     this.returnFocus = undefined;
     this.chords.cancel();
   };
