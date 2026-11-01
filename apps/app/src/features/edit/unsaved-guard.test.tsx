@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { commandTestWorkspace } from "../commands/test-runtime.ts";
+const commandOwners: (() => void)[] = [];
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useUnsavedEdits, guardWorkspace, guardPanel } from "./unsaved-edits.ts";
@@ -30,7 +32,8 @@ vi.mock("../workspace/workspace-context.tsx", () => ({ useWorkspace: () => ({ cl
 
 afterEach(() => {
   cleanup();
-  useSettingsOpenWork.setState({ overview: false, preferences: false });
+  for (const off of commandOwners.splice(0)) off();
+  useSettingsOpenWork.setState({ overview: false, preferences: false, keybindings: false });
   for (const id of useExecSessions.getState().entries.keys()) endSession(id);
   useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
   vi.unstubAllGlobals();
@@ -60,6 +63,7 @@ it.each(["button", "middle click"])(
       },
       params: {},
     } as unknown as Parameters<typeof PanelTab>[0];
+    commandOwners.push(commandTestWorkspace(props.api, () => props.params));
     const view = render(
       <>
         <PanelTab {...props} />
@@ -214,6 +218,7 @@ it.each(["button", "middle click"])("guards the Tab's %s close path", async (act
   useUnsavedEdits
     .getState()
     .set("tab", { cluster: "c", label: "ConfigMap web", read: () => "data: mine" });
+  commandOwners.push(commandTestWorkspace(props.api, () => props.params));
   const view = render(
     <>
       <PanelTab {...props} />

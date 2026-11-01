@@ -1,5 +1,6 @@
 import { logReplayFixture } from "../log-replay.ts";
 import { assertLogFiltering, assertPreviousInterruption } from "./logs.ts";
+import { commandTests } from "./commands.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -2125,3 +2126,5 @@ test("Previous interruption preserves confirmed retained lines in the web Host",
     await fixture.close();
   }
 });
+
+commandTests();

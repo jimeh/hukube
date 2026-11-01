@@ -3,29 +3,20 @@ import { useSubscription } from "@hukube/engine-client/react";
 import { Badge } from "@hukube/ui/components/badge";
 import {
   Command,
-  CommandDialog,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
 } from "@hukube/ui/components/command";
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useNamespaces } from "@/features/namespaces/use-namespaces.ts";
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
-import { opensGoToResource } from "../exec/keys.ts";
-import { useExecSessions } from "../exec/sessions.ts";
-import { isMac } from "@/lib/platform.ts";
 
-import { onOpenGoToResource } from "./open.ts";
-import {
-  isPaletteShortcut,
-  matchingTypes,
-  parsePaletteInput,
-  resourceItems,
-  scopeQuery,
-} from "./palette-input.ts";
+import { commands, type Origin } from "../commands/runtime.ts";
+import { formatResourceUri } from "@hukube/k8s";
+import { matchingTypes, parsePaletteInput, resourceItems, scopeQuery } from "./palette-input.ts";
 
 const resourceLimit = 50;
 const typeLimit = 8;
@@ -37,60 +28,11 @@ const typeLimit = 8;
  * its Workspace is hidden or the window is out of date, because the dialog
  * renders outside the frozen content.
  */
-export function GoToResource({ active }: { active: boolean }) {
-  const { cluster, types, openList, openResource } = useWorkspace();
-  const [open, setOpen] = useState(false);
+export function ResourceSearch({ origin }: { origin: Origin }) {
+  const { cluster, types } = useWorkspace();
   const [input, setInput] = useState("");
   const [selected, setSelected] = useState("");
-
-  const [wasActive, setWasActive] = useState(active);
-  if (active !== wasActive) {
-    setWasActive(active);
-    if (!active) setOpen(false);
-  }
-  const shown = open && active;
-
-  const onShortcut = useEffectEvent(() => {
-    if (!open) setInput("");
-    setOpen(!open);
-  });
-  useEffect(() => {
-    if (!active) return;
-    // Capture phase, so the shortcut wins over editors such as Monaco that
-    // use Ctrl+K themselves.
-    const onKeyDown = (e: KeyboardEvent) => {
-      const sessionId =
-        e.target instanceof Element
-          ? e.target.closest<HTMLElement>("[data-exec-session]")?.dataset["execSession"]
-          : undefined;
-      const session = sessionId ? useExecSessions.getState().entries.get(sessionId) : undefined;
-      if (
-        session
-          ? !opensGoToResource(
-              isMac,
-              e,
-              session.terminal?.hasSelection() ?? false,
-              session.state.phase === "live" && !session.terminal?.inputHeld,
-              isPaletteShortcut(e, isMac),
-            )
-          : !isPaletteShortcut(e, isMac)
-      )
-        return;
-      e.preventDefault();
-      e.stopPropagation();
-      onShortcut();
-    };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    const off = onOpenGoToResource(cluster, () => {
-      setInput("");
-      setOpen(true);
-    });
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-      off();
-    };
-  }, [active, cluster]);
-
+  const shown = true;
   const typeList = useMemo(() => [...types.values()], [types]);
   const namespaceList = useNamespaces(cluster, shown);
   // A forbidden or failed Namespace type lists none, so it is not complete.
@@ -127,90 +69,88 @@ export function GoToResource({ active }: { active: boolean }) {
   ];
   const selection = enabledValues.includes(selected) ? selected : (enabledValues[0] ?? "");
 
-  const choose = (action: () => void) => {
-    setOpen(false);
-    action();
-  };
-  const chooseType = (t: ResourceType) => choose(() => openList(t.key));
+  const chooseType = (t: ResourceType) =>
+    commands.dispatch("resource.openType", { type: t.key }, origin);
   const chooseRow = (r: Row) =>
-    choose(() => openResource({ type: r.type, namespace: r.namespace ?? "", name: r.name }));
-
+    commands.dispatch(
+      "resource.open",
+      {
+        uri: formatResourceUri({
+          cluster,
+          type: r.type,
+          namespace: r.namespace ?? "",
+          name: r.name,
+        }),
+      },
+      origin,
+    );
   return (
-    <CommandDialog
-      open={shown}
-      onOpenChange={setOpen}
-      title="Go to Resource"
-      description="Find a Resource or Resource Type by name"
-    >
-      <Command shouldFilter={false} loop value={selection} onValueChange={setSelected}>
-        <CommandInput
-          aria-label="Go to Resource"
-          placeholder="name, type/name, or namespace/type/name"
-          value={input}
-          onValueChange={setInput}
-        />
-        {parsed.kind === "ok" && (parsed.scope.types || parsed.scope.namespace) && (
-          <div className="flex gap-1 px-3 pt-2" aria-label="Scope">
-            {parsed.scope.types && (
-              <Badge variant="secondary">
-                {kindsOf(parsed.scope.types.keys, types) || parsed.scope.types.segment}
-              </Badge>
-            )}
-            {parsed.scope.namespace && (
-              <Badge variant="outline" className="font-mono">
-                {parsed.scope.namespace}
-              </Badge>
-            )}
-          </div>
+    <Command shouldFilter={false} loop value={selection} onValueChange={setSelected}>
+      <CommandInput
+        aria-label="Go to Resource"
+        placeholder="name, type/name, or namespace/type/name"
+        value={input}
+        onValueChange={setInput}
+      />
+      {parsed.kind === "ok" && (parsed.scope.types || parsed.scope.namespace) && (
+        <div className="flex gap-1 px-3 pt-2" aria-label="Scope">
+          {parsed.scope.types && (
+            <Badge variant="secondary">
+              {kindsOf(parsed.scope.types.keys, types) || parsed.scope.types.segment}
+            </Badge>
+          )}
+          {parsed.scope.namespace && (
+            <Badge variant="outline" className="font-mono">
+              {parsed.scope.namespace}
+            </Badge>
+          )}
+        </div>
+      )}
+      <CommandList>
+        {parsed.kind === "error" && <p className="px-3 py-2 text-destructive">{parsed.message}</p>}
+        {error && <p className="px-3 py-2 text-destructive">{error.message}</p>}
+        {parsed.kind === "ok" && parsed.text.trim() && data && (
+          <CommandEmpty>Nothing matches.</CommandEmpty>
         )}
-        <CommandList>
-          {parsed.kind === "error" && (
-            <p className="px-3 py-2 text-destructive">{parsed.message}</p>
-          )}
-          {error && <p className="px-3 py-2 text-destructive">{error.message}</p>}
-          {parsed.kind === "ok" && parsed.text.trim() && data && (
-            <CommandEmpty>Nothing matches.</CommandEmpty>
-          )}
-          {typeMatches.length > 0 && (
-            <CommandGroup heading="Resource types">
-              {typeMatches.map((t) => (
-                <CommandItem key={t.key} value={typeValue(t.key)} onSelect={() => chooseType(t)}>
-                  <span>{t.kind}</span>
-                  <span className="ml-auto font-mono text-muted-foreground">{t.key}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-          {items.length > 0 && (
-            <CommandGroup heading="Resources">
-              {items.map(({ row, value, disabled }) => (
-                <CommandItem
-                  key={value}
-                  value={value}
-                  disabled={disabled}
-                  onSelect={() => chooseRow(row)}
-                >
-                  <span className="shrink-0 text-muted-foreground">
-                    {types.get(row.type)?.kind ?? row.type}
+        {typeMatches.length > 0 && (
+          <CommandGroup heading="Resource types">
+            {typeMatches.map((t) => (
+              <CommandItem key={t.key} value={typeValue(t.key)} onSelect={() => chooseType(t)}>
+                <span>{t.kind}</span>
+                <span className="ml-auto font-mono text-muted-foreground">{t.key}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {items.length > 0 && (
+          <CommandGroup heading="Resources">
+            {items.map(({ row, value, disabled }) => (
+              <CommandItem
+                key={value}
+                value={value}
+                disabled={disabled}
+                onSelect={() => chooseRow(row)}
+              >
+                <span className="shrink-0 text-muted-foreground">
+                  {types.get(row.type)?.kind ?? row.type}
+                </span>
+                <span className="truncate font-mono">{row.name}</span>
+                {row.namespace && (
+                  <span className="ml-auto truncate font-mono text-muted-foreground">
+                    {row.namespace}
                   </span>
-                  <span className="truncate font-mono">{row.name}</span>
-                  {row.namespace && (
-                    <span className="ml-auto truncate font-mono text-muted-foreground">
-                      {row.namespace}
-                    </span>
-                  )}
-                </CommandItem>
-              ))}
-              {data && data.total > items.length && (
-                <p className="px-2.5 py-1.5 text-muted-foreground">
-                  {data.total - items.length} more; type more to narrow them down.
-                </p>
-              )}
-            </CommandGroup>
-          )}
-        </CommandList>
-      </Command>
-    </CommandDialog>
+                )}
+              </CommandItem>
+            ))}
+            {data && data.total > items.length && (
+              <p className="px-2.5 py-1.5 text-muted-foreground">
+                {data.total - items.length} more; type more to narrow them down.
+              </p>
+            )}
+          </CommandGroup>
+        )}
+      </CommandList>
+    </Command>
   );
 }
 

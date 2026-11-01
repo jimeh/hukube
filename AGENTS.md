@@ -68,7 +68,8 @@ Use separate worktrees for concurrent verification.
   `--yes` still asks before overwriting), plus the design tokens in
   `src/styles/globals.css`. `dialog.tsx` and `alert-dialog.tsx` carry a local
   change, `useModalInert`, which keeps Tab inside an open modal dialog, and
-  `combobox.tsx` adds `ComboboxStatus` and `useComboboxFilteredItems`, which
+  `command.tsx` forwards explicit initial and return focus ownership for the
+  window palette; `combobox.tsx` adds `ComboboxStatus` and `useComboboxFilteredItems`, which
   the registry's version lacks; keep them when the CLI offers to overwrite
   these files.
 - `packages/host/`: the `Host` interface the UI uses for platform features.
@@ -147,8 +148,11 @@ Use separate worktrees for concurrent verification.
   xterm.js. After changing the tracker or the recordings, regenerate the
   golden files from `engine/` with
   `mise exec -- go test ./internal/execsession -run TestTrackerGolden -update`.
-- **Session keys:** every key decision for a focused Exec Session is in
-  `features/exec/keys.ts` (ADR-0023). `Mod+J` must stay unhandled there too.
+- **Session keys:** the window command runtime in `features/commands/` alone chooses and
+  executes app shortcuts (ADR-0028). `features/exec/keys.ts` owns only the
+  remaining byte policy. xterm reads the runtime verdict, including native
+  paste, without executing commands again. `Mod+J` stays unbindable and is
+  withheld from terminal input (ADR-0023).
 - **Sessions outlive their panel:** the window's store in
   `features/exec/sessions.ts` owns each session's stream and terminal. A
   panel that mounts again must not start, end, or reset a session. Only a

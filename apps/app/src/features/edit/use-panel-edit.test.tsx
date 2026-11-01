@@ -93,7 +93,7 @@ it("keeps form-origin raw text, freezes live following, and uses one unsaved reg
   });
   expect(h.result.current.field?.raw).toBe("-");
   expect(h.result.current.session?.text).toContain("replicas: 2");
-  await act(async () => h.result.current.reviewChanges());
+  await act(async () => h.result.current.reviewOperation());
   expect(h.request).not.toHaveBeenCalled();
   await act(async () => h.result.current.finishField(true));
   expect(h.result.current.dirty).toBe(false);
@@ -133,7 +133,7 @@ it("late apply success cannot clear newer invalid input even when submitted draf
   const h = setup();
   await act(async () => h.result.current.beginField(path, "Replicas", control, definition));
   await act(async () => h.result.current.input("2"));
-  await act(async () => h.result.current.reviewChanges());
+  await act(async () => h.result.current.reviewOperation());
   await waitFor(() => expect(h.result.current.review.state?.phase).toBe("ready"));
   await act(async () => h.result.current.review.apply());
   await waitFor(() => expect(h.request).toHaveBeenCalledWith("resource.apply", expect.anything()));
@@ -162,7 +162,7 @@ it("review flushes valid pending input and a matching apply clears the edit", as
   const h = setup();
   await act(async () => h.result.current.beginField(path, "Replicas", control, definition));
   await act(async () => h.result.current.input("2"));
-  await act(async () => h.result.current.reviewChanges());
+  await act(async () => h.result.current.reviewOperation());
   expect(h.result.current.field).toBeUndefined();
   await waitFor(() => expect(h.result.current.review.state?.phase).toBe("ready"));
   await act(async () => h.result.current.review.apply());
@@ -254,7 +254,7 @@ it("revisits live data after apply freeze ends with a newer clean draft", async 
   const h = setup();
   await act(async () => h.result.current.beginField(path, "Replicas", control, definition));
   await act(async () => h.result.current.input("2"));
-  await act(async () => h.result.current.reviewChanges());
+  await act(async () => h.result.current.reviewOperation());
   await waitFor(() => expect(h.result.current.review.state?.phase).toBe("ready"));
   await act(async () => h.result.current.review.apply());
   await waitFor(() => expect(h.request).toHaveBeenCalledWith("resource.apply", expect.anything()));

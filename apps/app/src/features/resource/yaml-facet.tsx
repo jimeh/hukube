@@ -1,3 +1,4 @@
+import { commands } from "../commands/runtime.ts";
 import { Button } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import {
@@ -69,9 +70,7 @@ function SharedYamlFacet({
       return issue ? [issue] : [];
     }) ?? [];
   const issues = session ? [...(parsed?.issues ?? []), ...refusalIssues] : [];
-  const reviewChanges = () => {
-    edit.reviewChanges(() => editor.current?.focus(parsed?.issues[0]));
-  };
+
   const refusal = session?.refusal;
   const yamlError = !!parsed?.issues.length;
   const unconfirmed = review.unknownOutcome && !review.pending;
@@ -98,7 +97,7 @@ function SharedYamlFacet({
                 render={<Button variant="ghost" size="sm" disabled={yaml === undefined} />}
                 className="shrink-0 @max-[26rem]/switcher:size-7 @max-[26rem]/switcher:p-0"
                 aria-label="Search"
-                onClick={() => editor.current?.search()}
+                onClick={() => commands.dispatch("editor.find", {})}
               >
                 <HugeiconsIcon
                   icon={Search01Icon}
@@ -160,7 +159,7 @@ function SharedYamlFacet({
                       <Button
                         size="sm"
                         aria-disabled={!!reviewReason}
-                        onClick={reviewChanges}
+                        onClick={() => commands.dispatch("manifest.review", {})}
                         aria-label="Review changes"
                         className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
                       />
@@ -297,7 +296,8 @@ function SharedYamlFacet({
               dirty={dirty && !reviewReason}
               issues={issues}
               onChange={changeText}
-              onReview={reviewChanges}
+              onReview={() => edit.reviewOperation(() => editor.current?.focus(parsed?.issues[0]))}
+              reviewReason={reviewReason}
             />
           </Suspense>
         ) : manifest.data?.deleted ? (

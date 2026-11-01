@@ -4,7 +4,8 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import type { ExecTerminal } from "@/features/exec/sessions.ts";
-import { execKey } from "@/features/exec/keys.ts";
+import { terminalTakesKey } from "@/features/exec/keys.ts";
+import { terminalVerdicts } from "@/features/commands/runtime.ts";
 import { copyText } from "@/features/edit/clipboard.ts";
 import { cssColor } from "@/features/resource/editor-theme.ts";
 import { isMac as mac } from "@/lib/platform.ts";
@@ -213,18 +214,8 @@ export function createExecTerminal(): ExecTerminal {
       .catch(() => {});
   };
   terminal.attachCustomKeyEventHandler((event) => {
-    const action = execKey(mac, event, terminal.hasSelection(), !ended && attached && !held);
-    if (action === "terminal") return true;
-    // The browser's paste event supplies clipboard text, including on plain HTTP.
-    if (action === "leave" || action === "paste" || action === "goToResource") return false;
-    if (event.type === "keydown") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (action === "copy") copy();
-      else if (action === "selectAll") terminal.selectAll();
-      else if (action === "find") for (const fn of finds) fn();
-    }
-    return false;
+    // The window arbiter alone executes commands. Native paste keeps browser activation.
+    return terminalTakesKey(mac, event, !ended && attached && !held, terminalVerdicts.get(event));
   });
   return {
     element,

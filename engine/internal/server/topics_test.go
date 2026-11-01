@@ -111,3 +111,33 @@ func TestAppPreferencesRefusalDoesNotNotify(t *testing.T) {
 		t.Fatalf("invalid preference persisted: %s %q %v", value, revision, err)
 	}
 }
+
+func TestAppKeybindingsGuardedValidation(t *testing.T) {
+	store, err := settings.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{cfg: Config{Settings: store}}
+	valid := json.RawMessage(`{"version":1,"rules":[],"disabledDefaults":[],"future":true}`)
+	empty := ""
+	put := func(value json.RawMessage, revision *string) error {
+		_, err := requests[protocol.RequestSettingsPut.Name](context.Background(), srv, params(protocol.SettingPut{Key: protocol.AppKeybindingsKey, Value: value, IfRevision: revision}))
+		return err
+	}
+	if put(valid, nil) == nil {
+		t.Fatal("accepted missing CAS revision")
+	}
+	if put(json.RawMessage(`{"version":2}`), &empty) == nil {
+		t.Fatal("accepted future version write")
+	}
+	if err := put(valid, &empty); err != nil {
+		t.Fatal(err)
+	}
+	if put(valid, &empty) == nil {
+		t.Fatal("accepted stale CAS revision")
+	}
+	value, revision, err := store.Snapshot(protocol.AppKeybindingsKey)
+	if err != nil || revision == "" || string(value) != string(valid) {
+		t.Fatalf("readback %s %q %v", value, revision, err)
+	}
+}

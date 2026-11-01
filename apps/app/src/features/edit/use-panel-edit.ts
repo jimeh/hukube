@@ -1,3 +1,4 @@
+import { commands } from "../commands/runtime.ts";
 import { useEngine, useConnectionState } from "@hukube/engine-client/react";
 import type { Access, ResourceData } from "@hukube/engine-client";
 import type { SubscriptionState } from "@hukube/engine-client/react";
@@ -469,7 +470,9 @@ export function usePanelEdit({
     setFieldValue,
     beginNewKey,
     addKey,
-    reviewChanges,
+    reviewOperation: reviewChanges,
+    reviewChanges: () =>
+      commands.dispatch("manifest.review", {}, commands.capture(address?.cluster, panelId)),
     cancel,
     setFocus,
     returnFocus: () => focus.current?.(),

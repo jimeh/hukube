@@ -9,6 +9,9 @@ import { EngineProvider } from "@hukube/engine-client/react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useImperativeHandle, useRef, type Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
+import { commandTestWorkspace } from "../commands/test-runtime.ts";
+import { useCommandSurface } from "../commands/owners.ts";
+const commandOwners: (() => void)[] = [];
 import { YamlFacet } from "./yaml-facet.tsx";
 import type { FacetProps } from "./facet-props.ts";
 import type { YamlEditorHandle } from "./yaml-editor.tsx";
@@ -20,13 +23,29 @@ import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
 function MockEditor({
   value,
   onChange,
+  onReview,
+  reviewReason,
+  dirty,
+  editUid,
   ref,
 }: {
   value: string;
   onChange: (text: string) => void;
   ref: Ref<YamlEditorHandle>;
+  onReview?: () => void;
+  reviewReason?: string;
+  dirty?: boolean;
+  editUid?: string;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
+  useCommandSurface(input, () => ({
+    kind: "editor",
+    review: onReview,
+    reviewReason,
+    dirty,
+    uid: editUid,
+    focus: () => input.current?.focus(),
+  }));
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus(), search: () => {} }));
   return (
     <textarea
@@ -61,6 +80,8 @@ const review: EditReview = {
 };
 afterEach(() => {
   cleanup();
+  for (const off of commandOwners.splice(0)) off();
+  vi.restoreAllMocks();
   useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
   vi.useRealTimers();
 });
@@ -85,6 +106,8 @@ function setup() {
       return () => listeners.delete(listener);
     },
   } as unknown as EngineClient;
+  vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+  commandOwners.push(commandTestWorkspace({ id: "p" }, () => ({})));
   const controls = document.createElement("div");
   document.body.append(controls);
   const props: FacetProps = {
@@ -101,7 +124,9 @@ function setup() {
   };
   const view = render(
     <EngineProvider client={client}>
-      <YamlFacet {...props} />
+      <div data-command-panel="p">
+        <YamlFacet {...props} />
+      </div>
       <HostProvider host={createBrowserHost()}>
         <UnsavedGuard />
       </HostProvider>
@@ -110,7 +135,9 @@ function setup() {
   const rerender = () =>
     view.rerender(
       <EngineProvider client={client}>
-        <YamlFacet {...props} />
+        <div data-command-panel="p">
+          <YamlFacet {...props} />
+        </div>
         <HostProvider host={createBrowserHost()}>
           <UnsavedGuard />
         </HostProvider>

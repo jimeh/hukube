@@ -125,3 +125,23 @@ _Avoid_: Tunnel, proxy
 A set of staged edits across one or more Resources, reviewed as one diff and
 applied together. Applying it is not atomic across Resources.
 _Avoid_: Transaction, batch, patch
+
+### Commands and shortcuts
+
+**Command**:
+A typed app action with named arguments, availability, and an exact captured
+window or Workspace target. It is distinct from the Exec command line that
+starts a process in a container.
+
+**Command palette**:
+The window's searchable list of Commands and argument forms. It shares one
+modal with Go to Resource, preserving the target captured before focus moves.
+
+**Shortcut**:
+One or two normalized keyboard strokes bound to a Command, with an app or
+terminal scope and an optional typed condition.
+
+**Chord**:
+A Shortcut consisting of two strokes in order. Its eligible first stroke is
+consumed, and its second stroke must arrive before the deadline. Cancellation
+never replays the first stroke into an editor or process.

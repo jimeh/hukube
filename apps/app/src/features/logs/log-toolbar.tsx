@@ -1,3 +1,4 @@
+import { commands } from "../commands/runtime.ts";
 import type { LogContainer } from "@hukube/engine-client";
 import { Button } from "@hukube/ui/components/button";
 import {
@@ -68,8 +69,7 @@ export function LogToolbar({
   filterButton?: React.ReactNode;
   children?: React.ReactNode;
 }) {
-  const { timestamps, wrap, setTimestamps, setWrap, loaded, saveStatus, saveError, retrySave } =
-    useLogSettings();
+  const { timestamps, wrap, loaded, saveStatus, saveError, retrySave } = useLogSettings();
   const single = containers.length === 1;
   const containerTrigger = useRef<HTMLButtonElement>(null);
   const previousToggle = useRef<HTMLButtonElement>(null);
@@ -187,8 +187,20 @@ export function LogToolbar({
           previousToggle,
         )}
         <div className="min-w-1 flex-1" />
-        {toggle("Timestamps", Clock01Icon, timestamps, setTimestamps, !loaded)}
-        {toggle("Wrap", TextWrapIcon, wrap, setWrap, !loaded)}
+        {toggle(
+          "Timestamps",
+          Clock01Icon,
+          timestamps,
+          (enabled) => commands.dispatch("logs.setTimestamps", { enabled }),
+          !loaded,
+        )}
+        {toggle(
+          "Wrap",
+          TextWrapIcon,
+          wrap,
+          (enabled) => commands.dispatch("logs.setWrap", { enabled }),
+          !loaded,
+        )}
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Button

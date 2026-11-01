@@ -28,6 +28,8 @@ import { frame } from "../../../../../packages/engine-client/src/log-test-fixtur
 import type { LogDocument } from "./log-document.ts";
 import type { LogEditorHandle } from "./log-editor.tsx";
 import LogStreamView, { type LogStreamViewProps } from "./log-stream-view.tsx";
+import { commands } from "../commands/runtime.ts";
+import { compileKeymap, emptyDocument } from "../commands/keyboard.ts";
 import { PreferenceRuntime } from "../settings/preference-runtime.tsx";
 import { getPreferenceStore } from "../settings/store.ts";
 import { useLogSettings } from "./log-settings.ts";
@@ -130,6 +132,24 @@ const line = (text = "hello") =>
       ]),
   );
 beforeEach(() => {
+  commands.configure({
+    route: "/",
+    platform: "mac",
+    host: "web",
+    connection: "open",
+    modalCount: 0,
+    map: compileKeymap(emptyDocument, "mac"),
+    preferencesReady: () => useLogSettings.getState().loaded,
+    preference: (field, value) => {
+      if (field === "wrap") useLogSettings.getState().setWrap(!!value);
+      else if (field === "timestamps") useLogSettings.getState().setTimestamps(!!value);
+    },
+    settings: () => {},
+  });
+  useLogSettings.setState({
+    setWrap: (wrap) => useLogSettings.setState({ wrap }),
+    setTimestamps: (timestamps) => useLogSettings.setState({ timestamps }),
+  });
   opened = [];
   vi.useFakeTimers();
   // The fixture's lines are from this day. A line from another day shows its date.

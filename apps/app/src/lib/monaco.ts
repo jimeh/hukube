@@ -64,7 +64,7 @@ monaco.editor.addKeybindingRules([
   {
     keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF,
     command: "actions.find",
-    when: "editorFocus",
+    when: "editorFocus && (!hukubeCommandOwned || findInputFocussed)",
   },
 ]);
 

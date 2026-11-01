@@ -1,3 +1,5 @@
+import { commands } from "../commands/runtime.ts";
+import { useCommandSurface } from "../commands/owners.ts";
 import { Button } from "@hukube/ui/components/button";
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -39,6 +41,11 @@ export default function LogEditor({
   const container = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const searchRef = useRef<(() => void) | undefined>(undefined);
+  useCommandSurface(container, () => ({
+    kind: "log",
+    find: () => searchRef.current?.(),
+    focus: () => editorRef.current?.focus(),
+  }));
   const follow = useRef(true);
   const ownScroll = useRef(false);
   const [following, setFollowing] = useState(true);
@@ -47,7 +54,9 @@ export default function LogEditor({
   useImperativeHandle(
     ref,
     () => ({
-      search: () => searchRef.current?.(),
+      search: () => {
+        commands.dispatch("editor.find", {});
+      },
     }),
     [],
   );
@@ -108,6 +117,7 @@ export default function LogEditor({
       matchBrackets: "never",
       hover: { enabled: "off" },
     });
+    editor.createContextKey("hukubeCommandOwned", true);
     editorRef.current = editor;
     // A log is read from its end. With the caret there, the nearest match is
     // the newest one, and Enter in the find box goes to it and then to older
@@ -127,9 +137,11 @@ export default function LogEditor({
       editor.addAction({
         id: "hukube.logs.find",
         label: "Search",
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF],
+        keybindings: [],
         keybindingContext: scope,
-        run: openSearch,
+        run: () => {
+          commands.dispatch("editor.find", {});
+        },
       }),
       editor.addAction({
         id: "hukube.logs.newerMatch",

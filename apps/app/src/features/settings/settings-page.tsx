@@ -22,15 +22,18 @@ import {
   type Field,
   type NumericField,
 } from "./preferences.ts";
+import { KeyboardSettings } from "../commands/keyboard-settings.tsx";
 import { usePreferences } from "./store.ts";
 
 const sections = {
+  "keyboard-shortcuts": "Keyboard shortcuts",
   appearance: "Appearance",
   "log-streams": "Log Streams",
   "overview-definitions": "Overview definitions",
 };
 type Section = keyof typeof sections;
 let origin: HTMLElement | undefined;
+let explicitOrigin = false;
 let returnLocation = "/";
 try {
   const saved = sessionStorage.getItem("hukube.settings-return");
@@ -38,8 +41,13 @@ try {
 } catch {
   /* Window-local history is optional. */
 }
-export function rememberSettingsOrigin(location: string, target?: HTMLElement) {
+export function rememberSettingsOrigin(location: string, target?: HTMLElement, explicit = false) {
   if (location.startsWith("/settings")) return;
+  if (!explicit && explicitOrigin) {
+    explicitOrigin = false;
+    return;
+  }
+  explicitOrigin = explicit;
   returnLocation = location;
   origin = target;
   try {
@@ -196,6 +204,8 @@ export function SettingsPage({ visible }: { visible: boolean }) {
                   <h2 className="mb-4 text-lg font-medium">{sections[key as Section]}</h2>
                   {key === "overview-definitions" ? (
                     <DefinitionManager />
+                  ) : key === "keyboard-shortcuts" ? (
+                    <KeyboardSettings />
                   ) : (
                     <>
                       <p className="mb-4 text-sm text-muted-foreground">

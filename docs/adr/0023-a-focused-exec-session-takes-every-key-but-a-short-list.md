@@ -4,14 +4,15 @@ A terminal needs nearly every key, and the app has shortcuts of its own.
 While a live Exec Session's terminal has focus, each key goes to the process
 in the container, except these:
 
-| Key                | macOS       | Windows and Linux                                                                                                       |
-| ------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Go to Resource     | `Cmd+K`     | `Ctrl+Shift+K`. `Ctrl+K` goes to the process.                                                                           |
-| Copy               | `Cmd+C`     | `Ctrl+C` when text is selected, which also clears the selection; otherwise it goes to the process. Also `Ctrl+Shift+C`. |
-| Paste              | `Cmd+V`     | `Ctrl+V` and `Ctrl+Shift+V`                                                                                             |
-| Find in scrollback | `Cmd+F`     | `Ctrl+Shift+F`. `Ctrl+F` goes to the process.                                                                           |
-| Select all         | `Cmd+A`     | none                                                                                                                    |
-| `Mod+J`            | not handled | not handled, so the process does not receive `Ctrl+J`                                                                   |
+| Key                | macOS         | Windows and Linux                                                                                                       |
+| ------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Go to Resource     | `Cmd+K`       | `Ctrl+Shift+K`. `Ctrl+K` goes to the process.                                                                           |
+| Command palette    | `Cmd+Shift+P` | `Ctrl+Shift+P`                                                                                                          |
+| Copy               | `Cmd+C`       | `Ctrl+C` when text is selected, which also clears the selection; otherwise it goes to the process. Also `Ctrl+Shift+C`. |
+| Paste              | `Cmd+V`       | `Ctrl+V` and `Ctrl+Shift+V`                                                                                             |
+| Find in scrollback | `Cmd+F`       | `Ctrl+Shift+F`. `Ctrl+F` goes to the process.                                                                           |
+| Select all         | `Cmd+A`       | none                                                                                                                    |
+| `Mod+J`            | not handled   | not handled, so the process does not receive `Ctrl+J`                                                                   |
 
 Status: the macOS column is settled. The Windows and Linux column was built
 on the coordinator's approval and awaits Jim's confirmation. The four points
@@ -32,10 +33,15 @@ JupyterLab.
 Linux that means withholding `Ctrl+J` from the process, which costs a
 duplicate of Enter.
 
-The decision is one pure function, `execKey` in
-`apps/app/src/features/exec/keys.ts`, from the platform, the key, and whether
-text is selected, to what happens. The terminal and Go to Resource both ask
-it, and its test has a case for each cell of the table.
+The window command runtime compiles this allowlist as stable default rules
+(ADR-0028). Its single capture listener chooses an available command for the
+exact captured target. xterm reads that event's verdict and applies only the
+remaining terminal byte policy in `features/exec/keys.ts`.
+
+Users can explicitly choose terminal scope for their own bindings. It takes
+those keys away from a focused live process; generic app rules cannot do so.
+`Mod+J` remains reserved, including inside a chord. The only newly shipped
+shortcut is Mod+Shift+P, an explicitly approved live-terminal exception.
 
 ## Considered Options
 
@@ -50,8 +56,9 @@ it, and its test has a case for each cell of the table.
   `Ctrl+Q` for the same command.
 - **Copy on select,** as ttyd and Wetty do. It replaces the clipboard without
   being asked.
-- **A setting for which keys skip the terminal,** as VS Code has. One rule
-  is easier to learn, and to change.
+- **A setting for which keys skip the terminal.** ADR-0028 now permits explicit
+  terminal-scoped rules and exact-default disables without changing the default
+  terminal-first behavior.
 
 ## Consequences
 

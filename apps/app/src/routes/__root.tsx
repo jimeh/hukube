@@ -2,6 +2,7 @@ import { useConnectionState } from "@hukube/engine-client/react";
 import { cn } from "@hukube/ui/lib/utils";
 import { createRootRoute, Outlet, useParams, useLocation } from "@tanstack/react-router";
 
+import { CommandRuntime } from "@/features/commands/command-runtime.tsx";
 import { UnsavedGuard } from "@/features/edit/unsaved-guard.tsx";
 
 import { ClusterTabs } from "@/features/clusters/cluster-tabs.tsx";
@@ -40,6 +41,7 @@ function RootLayout() {
     <div className="flex h-full flex-col">
       <OutOfDateNotice />
       <PreferenceRuntime />
+      <CommandRuntime />
       <UnsavedGuard />
       {/* Freeze the content when out of date because the connection cannot recover. */}
       <div

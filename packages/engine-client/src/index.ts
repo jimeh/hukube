@@ -4,6 +4,7 @@ export * from "./methods.gen.ts";
 export type * from "./protocol.gen.ts";
 export {
   AppPreferencesKey,
+  AppKeybindingsKey,
   PreferenceDefaultTheme,
   PreferenceDefaultWrap,
   PreferenceDefaultTimestamps,
