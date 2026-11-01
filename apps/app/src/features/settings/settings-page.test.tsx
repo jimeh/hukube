@@ -263,7 +263,7 @@ it("finishes a stale retention retry as Saved without leaving confirmed drafts d
   await screen.findByText(/Not saved: changed in another window/);
   expect(lines.getAttribute("value")).toBe("60000");
 
-  fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry pending limits" }));
   await screen.findByText("Retained lines: Saved");
   expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 60_000 } });
   expect(lines.getAttribute("value")).toBe("60000");
@@ -280,7 +280,7 @@ it("confirms a stale retry from its retained change after the visible draft chan
   fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
   await screen.findByText(/Not saved: changed in another window/);
   fireEvent.change(lines, { target: { value: "70000" } });
-  fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry pending limits" }));
 
   const dialog = screen.getByRole("alertdialog", {
     name: "Reduce retained Log Stream entries?",
@@ -296,24 +296,32 @@ it("confirms a stale retry from its retained change after the visible draft chan
 it("confirms a conflicted Reset from its retained defaults after the visible draft changes", async () => {
   const h = await mountPage("logs", {
     version: 1,
-    logStreams: { maxLines: 80_000 },
+    logStreams: { maxLines: 40_000 },
   });
   const lines = screen.getByRole("textbox", { name: /Retained lines/ });
-  h.conflictNextPut({ version: 1, logStreams: { maxLines: 70_000 } });
+  h.conflictNextPut({ version: 1, logStreams: { maxLines: 65_000 } });
 
   fireEvent.click(screen.getAllByRole("button", { name: "Reset section" })[0]!);
-  let dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
   await screen.findByText(/Not saved: changed in another window/);
-  fireEvent.change(lines, { target: { value: "90000" } });
-  fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
+  fireEvent.change(lines, { target: { value: "70000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Retry reset" }));
 
+  let dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
+  expect(
+    within(dialog).getByText("Reset Retained lines from 65,000 to the 50,000 default."),
+  ).toBeDefined();
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 65_000 } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 65_000 } });
+  expect(lines.getAttribute("value")).toBe("70000");
+  expect(screen.getByRole("button", { name: "Retry reset" })).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry reset" }));
   dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
-  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 70_000 } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply reset" }));
   await act(async () => {});
   expect(h.value()).toEqual({ version: 1 });
-  expect(lines.getAttribute("value")).toBe("90000");
+  expect(lines.getAttribute("value")).toBe("70000");
   expect(screen.getByText("Unsaved changes")).toBeDefined();
 });
 
@@ -343,7 +351,7 @@ it("confirms a Reset that lowers an effective retention budget", async () => {
   fireEvent.click(screen.getAllByRole("button", { name: "Reset section" })[0]!);
   const dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
   expect(h.puts).toHaveLength(0);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply reset" }));
   await act(async () => {});
   expect(h.value()).toEqual({ version: 1 });
   expect(lines.getAttribute("value")).toBe("50000");

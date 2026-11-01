@@ -332,7 +332,12 @@ function LogStreamSettings() {
   const [drafts, setDrafts] = useState<Partial<Record<BudgetName, string>>>({});
   const [reduction, setReduction] = useState<
     | { kind: "save"; changes: readonly PreferenceChange[]; clearDrafts: boolean }
-    | { kind: "retry"; paths: readonly PreferencePath[]; overwrite: boolean }
+    | {
+        kind: "retry";
+        changes: readonly PreferenceChange[];
+        paths: readonly PreferencePath[];
+        overwrite: boolean;
+      }
   >();
   const values = {
     maxLines: drafts.maxLines ?? String(confirmed.maxLines),
@@ -403,7 +408,7 @@ function LogStreamSettings() {
       const intended = typeof value === "number" ? value : logPreferenceDefaults[name];
       return intended < confirmed[name];
     });
-    if (isReduction) setReduction({ kind: "retry", paths, overwrite });
+    if (isReduction && changes) setReduction({ kind: "retry", changes, paths, overwrite });
     else retry(paths, overwrite);
   };
   const submit = (event: FormEvent) => {
@@ -422,6 +427,22 @@ function LogStreamSettings() {
   const disabled = snapshot.status !== "ready";
   const invalid = budgetFields.some(({ name }) => !!validations[name].error);
   const anyDirty = budgetFields.some(({ name }) => Object.hasOwn(drafts, name));
+  const retryIsReset = snapshot.saves.retention.changes?.every(({ value }) => value === undefined);
+  const reductionDetails =
+    reduction?.changes.flatMap(({ path, value }) => {
+      const name = path.split(".")[1] as BudgetName;
+      const intended = typeof value === "number" ? value : logPreferenceDefaults[name];
+      if (intended >= confirmed[name]) return [];
+      return [
+        {
+          label: budgetFields.find((field) => field.name === name)?.label ?? name,
+          current: confirmed[name],
+          intended,
+          reset: value === undefined,
+        },
+      ];
+    }) ?? [];
+  const reductionIncludesReset = reductionDetails.some(({ reset }) => reset);
 
   return (
     <SettingsSection
@@ -519,6 +540,7 @@ function LogStreamSettings() {
               scope="retention"
               save={snapshot.saves.retention}
               onRetry={retryChanges}
+              retryLabel={retryIsReset ? "Retry reset" : "Retry pending limits"}
               onUseCurrent={() => {
                 store.acceptCurrent("retention");
                 resetDrafts();
@@ -599,8 +621,20 @@ function LogStreamSettings() {
         <AlertDialogContent>
           <AlertDialogTitle>Reduce retained Log Stream entries?</AlertDialogTitle>
           <AlertDialogDescription>
-            Applying lower limits may discard the oldest retained entries from every mounted Log
-            Stream. Discarded entries cannot be restored by raising the limits later.
+            <span className="block font-medium text-foreground">
+              {reductionDetails
+                .map(({ label, current, intended, reset }) =>
+                  reset
+                    ? `Reset ${label} from ${current.toLocaleString()} to the ${intended.toLocaleString()} default`
+                    : `Change ${label} from ${current.toLocaleString()} to ${intended.toLocaleString()}`,
+                )
+                .join("; ")}
+              .
+            </span>
+            <span className="mt-2 block">
+              Applying lower limits may discard the oldest retained entries from every mounted Log
+              Stream. Discarded entries cannot be restored by raising the limits later.
+            </span>
           </AlertDialogDescription>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -613,7 +647,7 @@ function LogStreamSettings() {
                 else if (pending) retry(pending.paths, pending.overwrite);
               }}
             >
-              Apply lower limits
+              {reductionIncludesReset ? "Apply reset" : "Apply lower limits"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -638,11 +672,13 @@ export function SaveStatus({
   scope,
   save,
   onRetry,
+  retryLabel,
   onUseCurrent,
 }: {
   scope: PreferenceScope;
   save: PreferenceSaveState;
   onRetry?: (overwriteCurrent: boolean) => void;
+  retryLabel?: string;
   onUseCurrent?: () => void;
 }) {
   if (save.phase === "idle") return null;
@@ -664,7 +700,7 @@ export function SaveStatus({
         <AlertDescription className="mt-1 flex flex-wrap gap-2">
           {onRetry && (
             <Button size="sm" variant="outline" onClick={() => onRetry(save.phase === "conflict")}>
-              {save.phase === "conflict" ? "Retry with my value" : "Retry"}
+              {retryLabel ?? (save.phase === "conflict" ? "Retry with my value" : "Retry")}
             </Button>
           )}
           {onUseCurrent && (
