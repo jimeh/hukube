@@ -118,8 +118,9 @@ standalone config paths, because k3d deletion otherwise edits user config.
 
 Each E2E web Engine binds `127.0.0.1:0`. Playwright captures its spawned
 process's ready URL and probes `/healthz` before using it. Worktrees can run
-concurrently. Within one checkout, run `dev:verify` and E2E sequentially:
-they rebuild the same UI bundle.
+concurrently. Within one checkout, run only one `dev:verify` or E2E workflow
+at a time, including repeated E2E runs: they share the Cluster, Engine data
+and UI bundle. Use separate worktrees for concurrent verification.
 
 Before relocating or removing a linked worktree:
 

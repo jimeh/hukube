@@ -27,9 +27,10 @@ the background on a free port. It prints the URL with its token, also saved in
 change and stop it with `mise run dev:verify:stop`; do not `pkill -f`, which
 can match your own shell. It never touches the clusters in your kubeconfig.
 
-Run `dev:verify` and `e2e` sequentially. Both Hosts serve `apps/app/dist`,
-and a Vite rebuild replaces it, so rebuilding for one can give the other
-Host a 404 during a test.
+Within one checkout, run only one `dev:verify` or `e2e` workflow at a time,
+including repeated E2E runs. They share the Cluster, Engine data and
+`apps/app/dist`; overlapping runs can replace active data or the UI bundle.
+Use separate worktrees for concurrent verification.
 
 ## Designing features
 

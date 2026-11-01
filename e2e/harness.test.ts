@@ -39,6 +39,9 @@ import {
 import { stopVerify } from "./verify.ts";
 
 const temporary: string[] = [];
+const fixtureEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
 function directory(name = "hukube-harness-") {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), name)));
   temporary.push(dir);
@@ -196,7 +199,7 @@ class Runtime {
 }
 
 const treeboot = (cwd: string, ...args: string[]) =>
-  execFileSync("treeboot", args, { cwd, encoding: "utf8", stdio: "pipe" });
+  execFileSync("treeboot", args, { cwd, encoding: "utf8", stdio: "pipe", env: fixtureEnv });
 
 describe("private test identity and environment", () => {
   test("resolves canonical actual Git root and calls Treeboot once with explicit path", () => {
@@ -221,10 +224,10 @@ describe("private test identity and environment", () => {
     execFileSync(
       "git",
       ["-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "init", root],
-      { stdio: "ignore" },
+      { stdio: "ignore", env: fixtureEnv },
     );
     const env = {
-      ...process.env,
+      ...fixtureEnv,
       TREEBOOT_ROOT_PATH: "/foreign",
       TREEBOOT_WORKTREE_PATH: "/foreign",
       TREEBOOT_WORKTREE_ID: "foreign",
@@ -254,7 +257,7 @@ describe("private test identity and environment", () => {
           "core.hooksPath=/dev/null",
           ...args,
         ],
-        { cwd: root, stdio: "pipe" },
+        { cwd: root, stdio: "pipe", env: fixtureEnv },
       );
     git("init");
     git("commit", "--allow-empty", "-m", "Fixture");
@@ -266,6 +269,7 @@ describe("private test identity and environment", () => {
     const rootTeardown = spawnSync("treeboot", ["teardown", "--yes"], {
       cwd: root,
       encoding: "utf8",
+      env: fixtureEnv,
     });
     expect(rootTeardown.status).toBe(1);
     expect(rootTeardown.stderr).toContain("teardown is only valid for a linked worktree");
