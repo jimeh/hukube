@@ -5,7 +5,7 @@ export const useLogSettings = create<{
   loaded: boolean;
   saveStatus: string;
   saveError?: string;
-  retrySave: () => void;
+  retrySave?: () => void;
   maxLines: number;
   maxCharacters: number;
   maxDecorations: number;
@@ -17,7 +17,7 @@ export const useLogSettings = create<{
   ...defaults,
   loaded: false,
   saveStatus: "",
-  retrySave: () => {},
+  retrySave: undefined,
   timestamps: false,
   wrap: true,
   setTimestamps: (timestamps) => set({ timestamps }),

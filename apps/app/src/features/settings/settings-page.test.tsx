@@ -11,11 +11,170 @@ import { useLogSettings } from "../logs/log-settings.ts";
 import { UnsavedGuard } from "../edit/unsaved-guard.tsx";
 import { HostProvider } from "@/lib/host.tsx";
 import type { Host } from "@hukube/host";
+import { defaults, type Preferences, type NumericField } from "./preferences.ts";
 afterEach(() => {
   cleanup();
   useSettingsOpenWork.setState({ preferences: false, overview: false });
   vi.useRealTimers();
 });
+
+function fieldHarness() {
+  let value: Preferences = { version: 1, logStreams: { maxLines: 80 } };
+  let revision = "original";
+  let refused = false;
+  const watches = new Set<{ data(value: Setting): void }>();
+  const put = vi.fn<(method: string, params: { value: Preferences }) => Promise<unknown>>(
+    async (_method, params) => {
+      if (refused) throw new EngineRequestError({ code: "internal", message: "Disk is full" });
+      value = params.value;
+      revision += "x";
+      return {};
+    },
+  );
+  const engine = {
+    getState: () => "open",
+    onStateChange: () => () => {},
+    request: put,
+    subscribe: (_method: string, _params: unknown, listener: { data(value: Setting): void }) => {
+      watches.add(listener);
+      queueMicrotask(() => {
+        if (watches.has(listener)) listener.data({ key: "app/preferences", value, revision });
+      });
+      return { close: () => watches.delete(listener), update() {} };
+    },
+  } as unknown as EngineClient;
+  return {
+    engine,
+    put,
+    store: getPreferenceStore(engine),
+    refuse: (next: boolean) => (refused = next),
+    remote: (next: Preferences) => {
+      value = next;
+      revision += "r";
+      for (const watch of watches) watch.data({ key: "app/preferences", value, revision });
+    },
+  };
+}
+
+it.each<NumericField>(["maxLines", "maxCharacters", "maxDecorations"])(
+  "discards %s through its recovery actions without a blur write, then preserves ordinary blur and Enter commits",
+  async (field) => {
+    const h = fieldHarness();
+    const view = render(
+      <EngineProvider client={h.engine}>
+        <PreferenceField field={field} />
+        <button type="button">Another control</button>
+      </EngineProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+      const input = view.container.querySelector("input")!;
+      act(() => input.focus());
+      fireEvent.change(input, { target: { value: "1" } });
+      const discard = screen.getByRole("button", { name: "Use Engine value" });
+      act(() => discard.focus());
+      expect(h.put).not.toHaveBeenCalled();
+      expect(input.value).toBe("1");
+      fireEvent.click(discard);
+      expect(h.put).not.toHaveBeenCalled();
+      expect(input.value).toBe(String(field === "maxLines" ? 80 : defaults[field]));
+      expect(document.activeElement).toBe(input);
+
+      act(() => input.focus());
+      fireEvent.change(input, { target: { value: "2" } });
+      await act(async () => screen.getByRole("button", { name: "Another control" }).focus());
+      await vi.waitFor(() => expect(h.store.getSnapshot().values[field]).toBe(2));
+      expect(h.put).toHaveBeenCalledTimes(1);
+      fireEvent.change(input, { target: { value: "3" } });
+      await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+      await vi.waitFor(() => expect(h.store.getSnapshot().values[field]).toBe(3));
+      expect(h.put).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      h.store.dispose();
+    }
+  },
+);
+
+it("keeps recovery focus unsent until explicit Retry or Keep my value and leaves incomplete input discardable", async () => {
+  const h = fieldHarness();
+  const view = render(
+    <EngineProvider client={h.engine}>
+      <PreferenceField field="maxLines" />
+    </EngineProvider>,
+  );
+  try {
+    await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+    const input = screen.getByLabelText("Maximum retained lines") as HTMLInputElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: "12" } });
+    const retry = screen.getByRole("button", { name: "Retry save" });
+    act(() => retry.focus());
+    expect(h.put).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(retry));
+    await vi.waitFor(() => expect(h.store.getSnapshot().values.maxLines).toBe(12));
+    expect(h.put).toHaveBeenCalledTimes(1);
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: "15" } });
+    act(() => h.remote({ version: 1, logStreams: { maxLines: 14 } }));
+    const keep = screen.getByRole("button", { name: "Keep my value" });
+    act(() => keep.focus());
+    expect(h.put).toHaveBeenCalledTimes(1);
+    await act(async () => fireEvent.click(keep));
+    await vi.waitFor(() => expect(h.store.getSnapshot().values.maxLines).toBe(15));
+    expect(h.put).toHaveBeenCalledTimes(2);
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: "-" } });
+    const discard = screen.getByRole("button", { name: "Use Engine value" });
+    act(() => discard.focus());
+    fireEvent.click(discard);
+    expect(input.value).toBe("15");
+    expect(h.put).toHaveBeenCalledTimes(2);
+  } finally {
+    view.unmount();
+    h.store.dispose();
+  }
+});
+
+it.each(["wrap", "timestamps"] as const)(
+  "withholds toolbar retry for a %s conflict, retains the error and restores genuine failure recovery",
+  async (field) => {
+    const h = fieldHarness();
+    const original = useLogSettings.getState();
+    const view = render(
+      <EngineProvider client={h.engine}>
+        <PreferenceRuntime />
+      </EngineProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+      h.refuse(true);
+      await act(async () => h.store.change(field, !defaults[field]));
+      await vi.waitFor(() => expect(useLogSettings.getState().saveError).toBe("Disk is full"));
+      expect(useLogSettings.getState().retrySave).toEqual(expect.any(Function));
+      act(() => h.remote({ version: 1, logStreams: { maxLines: 80, [field]: defaults[field] } }));
+      expect(h.store.getSnapshot().drafts[field]?.conflict).toBe(true);
+      expect(useLogSettings.getState().saveError).toBe("Disk is full");
+      expect(useLogSettings.getState().retrySave).toBeUndefined();
+      expect(h.put).toHaveBeenCalledTimes(1);
+
+      act(() => h.store.discard([field]));
+      await act(async () => h.store.change(field, !defaults[field]));
+      await vi.waitFor(() => expect(useLogSettings.getState().saveError).toBe("Disk is full"));
+      h.refuse(false);
+      await act(async () => useLogSettings.getState().retrySave?.());
+      await vi.waitFor(() => expect(h.store.getSnapshot().values[field]).toBe(!defaults[field]));
+      expect(useLogSettings.getState().saveError).toBeUndefined();
+      expect(h.put).toHaveBeenCalledTimes(3);
+    } finally {
+      view.unmount();
+      h.store.dispose();
+      useLogSettings.setState(original);
+    }
+  },
+);
 it("keeps incomplete numeric text on typing/navigation, commits Enter/blur only, and confirms or cancels section reset", async () => {
   let value: unknown = null,
     revision = "";

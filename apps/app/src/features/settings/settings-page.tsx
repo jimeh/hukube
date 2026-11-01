@@ -264,6 +264,7 @@ const labels: Record<Field, string> = {
 };
 export function PreferenceField({ field }: { field: Field }) {
   const { store, snapshot } = usePreferences();
+  const status = useRef<HTMLDivElement>(null);
   const draft = snapshot.drafts[field];
   const value = draft && draft.status !== "Saved" ? draft.value : snapshot.values[field];
   const disabled = !snapshot.loaded || !!snapshot.error;
@@ -293,7 +294,9 @@ export function PreferenceField({ field }: { field: Field }) {
             aria-invalid={!!draft?.error}
             aria-describedby={`${help ? `${id}-help ` : ""}${id}-status`}
             onChange={(event) => store.edit(field, event.target.value)}
-            onBlur={() => store.commit([field])}
+            onBlur={(event) => {
+              if (!status.current?.contains(event.relatedTarget)) store.commit([field]);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
@@ -333,7 +336,7 @@ export function PreferenceField({ field }: { field: Field }) {
           {help} Range: 1 to {maximums[field as NumericField]?.toLocaleString()}.
         </p>
       )}
-      <div id={`${id}-status`} aria-live="polite" className="break-words text-xs">
+      <div ref={status} id={`${id}-status`} aria-live="polite" className="break-words text-xs">
         {draft ? (
           <>
             <p>
@@ -359,7 +362,15 @@ export function PreferenceField({ field }: { field: Field }) {
                     {draft.conflict ? "Keep my value" : "Retry save"}
                   </Button>
                 )}
-                <Button size="sm" variant="ghost" onClick={() => store.discard([field])}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    store.discard([field]);
+                    document.getElementById(id)?.focus();
+                  }}
+                >
                   Use Engine value
                 </Button>
               </div>

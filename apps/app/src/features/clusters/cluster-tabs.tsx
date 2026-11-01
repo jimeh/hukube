@@ -173,7 +173,7 @@ function ThemeToggle() {
           <Link to="/settings/$section" params={{ section: "appearance" }}>
             {draft && draft.status !== "Saved" ? draft.status : "Checking preferences…"}
           </Link>
-          {draft?.error && (
+          {draft?.error && !draft.conflict && (
             <Button size="sm" variant="ghost" onClick={() => store.commit(["theme"])}>
               Retry
             </Button>

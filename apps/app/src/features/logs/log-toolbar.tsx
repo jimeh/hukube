@@ -107,7 +107,7 @@ export function LogToolbar({
       {(saveStatus || saveError) && (
         <output className="flex flex-wrap items-center gap-2 px-3 py-1 text-xs">
           <span>{saveError ?? saveStatus}</span>
-          {saveError && (
+          {saveError && retrySave && (
             <Button variant="link" size="sm" onClick={retrySave}>
               Retry display preferences
             </Button>

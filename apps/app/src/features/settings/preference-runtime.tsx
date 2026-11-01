@@ -8,6 +8,10 @@ import { usePreferences } from "./store.ts";
 export function PreferenceRuntime() {
   const { store, snapshot } = usePreferences();
   useEffect(() => {
+    const retrySave = () => {
+      store.retry();
+      store.commit(["wrap", "timestamps"]);
+    };
     const sync = () => {
       const state = store.getSnapshot();
       useSettingsOpenWork.getState().setPreferences(hasPreferenceOpenWork(state));
@@ -25,6 +29,8 @@ export function PreferenceRuntime() {
               ? ""
               : "Reconnecting"),
         saveError: draft?.error ?? state.error,
+        retrySave:
+          state.drafts.wrap?.conflict || state.drafts.timestamps?.conflict ? undefined : retrySave,
       });
       if (state.loaded) {
         applyConfirmedTheme(state.values.theme);
@@ -34,10 +40,6 @@ export function PreferenceRuntime() {
     sync();
     const stop = store.subscribe(sync);
     useLogSettings.setState({
-      retrySave: () => {
-        store.retry();
-        store.commit(["wrap", "timestamps"]);
-      },
       setTimestamps: (value) => store.change("timestamps", value),
       setWrap: (value) => store.change("wrap", value),
     });
