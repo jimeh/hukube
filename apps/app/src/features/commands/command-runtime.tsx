@@ -20,8 +20,8 @@ import { WorkspaceContext } from "../workspace/workspace-context.tsx";
 import { ResourceSearch } from "../go-to-resource/go-to-resource.tsx";
 import { commands } from "./runtime.ts";
 import { useKeybindings } from "./store.ts";
-import { catalog } from "./catalog.ts";
-import { ArgumentFields } from "./argument-fields.tsx";
+import { catalog, definition, validateArguments, type ArgumentIssue } from "./catalog.ts";
+import { ArgumentFields, focusInvalidArgument } from "./argument-fields.tsx";
 export function CommandRuntime() {
   const { snapshot } = useKeybindings();
   const preferences = usePreferences();
@@ -248,6 +248,7 @@ function Prompt({
   origin: Parameters<typeof commands.invoke>[2];
 }) {
   const [args, setArgs] = useState(prompt.args);
+  const [issues, setIssues] = useState<ArgumentIssue[]>([]);
   const form = useRef<HTMLFormElement>(null);
   useLayoutEffect(() => {
     form.current?.querySelector<HTMLElement>("input,select")?.focus();
@@ -258,10 +259,26 @@ function Prompt({
       className="flex flex-col gap-4 p-3"
       onSubmit={(e) => {
         e.preventDefault();
+        const validation = validateArguments(prompt.id, args);
+        setIssues(validation.issues);
+        if (validation.issues.length) {
+          focusInvalidArgument(form.current, validation.issues);
+          return;
+        }
         commands.invoke(prompt.id, args, origin, "pointer");
       }}
     >
+      <h3 className="font-medium">{definition(prompt.id).title}</h3>
+      {issues
+        .filter((issue) => !issue.field)
+        .map((issue) => (
+          <p key={issue.message} role="alert">
+            {issue.message}
+          </p>
+        ))}
       <ArgumentFields
+        issues={issues}
+        cluster={origin.workspace?.value.cluster}
         id={prompt.id}
         onSubmit={() => form.current?.requestSubmit()}
         value={args}

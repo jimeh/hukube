@@ -47,7 +47,9 @@ afterEach(() => {
 async function setup() {
   // Only the Engine transport is fake. Stores, root hooks, modal count and Base UI
   // focus/transition owners are mounted together, as in the real window.
+  const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({}));
   const client = {
+    request,
     getState: () => "open",
     onStateChange: () => () => {},
     subscribe: (_method: string, params: { key: string }, listener: { data(s: Setting): void }) => {
@@ -82,7 +84,7 @@ async function setup() {
   });
   const search = screen.getByLabelText("Search commands");
   expect(document.activeElement).toBe(search);
-  return { origin, search };
+  return { origin, search, request };
 }
 
 it.each(["Enter", "Escape"])(
@@ -116,3 +118,66 @@ it.each(["Enter", "Escape"])(
     expect(document.activeElement).toBe(origin);
   },
 );
+
+it.each([
+  ["appearance.setTheme", "Theme (required)", "Theme: Choose a value."],
+  ["logs.setWrap", "Enabled (required)", "Enabled: Choose Yes or No."],
+  ["resource.openType", "Resource Type (required)", "Resource Type: Enter a value."],
+] as const)(
+  "labels missing %s arguments and focuses the first invalid field",
+  async (id, label, message) => {
+    await setup();
+    act(() => commands.editArguments(id, commands.getSnapshot().palette!.origin));
+    const field = screen.getByLabelText(label);
+    fireEvent.click(screen.getByRole("button", { name: "Run command" }));
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(field);
+    expect(
+      (field.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .some((descriptionId) => document.getElementById(descriptionId)?.textContent === message),
+    ).toBe(true);
+  },
+);
+it("keeps command orientation and canonical Resource URI guidance with associated invalid feedback", async () => {
+  await setup();
+  act(() => commands.editArguments("resource.open", commands.getSnapshot().palette!.origin));
+  const field = screen.getByLabelText("Resource URI (required)");
+  fireEvent.change(field, { target: { value: "pod-name" } });
+  fireEvent.click(screen.getByRole("button", { name: "Run command" }));
+  expect(field.getAttribute("aria-invalid")).toBe("true");
+  expect(document.activeElement).toBe(field);
+  expect(screen.getByRole("heading", { name: "Open Resource" })).toBeTruthy();
+  expect(field.getAttribute("placeholder")).toMatch(/^hukube:\/\/resource\/v1\//);
+  const description = (field.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent)
+    .join(" ");
+  expect(description).toContain("percent-encoded");
+  expect(description).toContain("cluster-scoped");
+  expect(description).toContain("Resource URI: Use a canonical Resource URI.");
+});
+it("submits corrected arguments once through Enter and Escape returns from arguments to search", async () => {
+  const { request } = await setup();
+  act(() => {
+    commands.invoke("appearance.setTheme", {}, commands.getSnapshot().palette!.origin);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Run command" }));
+  fireEvent.change(screen.getByLabelText("Theme (required)"), { target: { value: "dark" } });
+  await act(async () => {
+    fireEvent.submit(screen.getByRole("button", { name: "Run command" }).closest("form")!);
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(commands.getSnapshot().palette).toBeUndefined();
+  await act(async () => {
+    commands.openPalette("commands");
+  });
+  act(() => commands.editArguments("resource.open", commands.getSnapshot().palette!.origin));
+  fireEvent.keyDown(screen.getByLabelText("Resource URI (required)"), {
+    key: "Escape",
+    code: "Escape",
+  });
+  fireEvent.keyUp(window, { key: "Escape", code: "Escape" });
+  expect(commands.getSnapshot().palette?.prompt).toBeUndefined();
+  expect(request).toHaveBeenCalledTimes(1);
+});

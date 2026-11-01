@@ -573,6 +573,9 @@ export class CommandRuntime {
       this.chords.cancel();
       return;
     }
+    // Modifier transitions are not a second stroke. Validate the origin and modal
+    // above first, and leave the existing deadline untouched.
+    if (this.chords.pending && ["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
     const pending = this.chords.pending;
     if (pending) {
       this.chords.cancel();

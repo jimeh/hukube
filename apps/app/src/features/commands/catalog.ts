@@ -138,17 +138,50 @@ export const catalog: Definition[] = (Object.keys(schemas) as CommandId[]).map((
 export function isCommand(id: string): id is CommandId {
   return Object.hasOwn(schemas, id);
 }
-export function argumentsFor(id: CommandId, raw: unknown, prompt = false) {
+export interface ArgumentIssue {
+  field?: string;
+  message: string;
+}
+/** One schema and readable diagnostics for invocation and both argument forms. */
+export function validateArguments(id: CommandId, raw: unknown, prompt = false) {
   const schema = schemas[id];
   // Partial validates supplied arguments without accepting unknown ones. Missing required fields prompt later.
-  const result = (prompt ? schema.partial() : schema).safeParse(raw ?? {});
-  if (!result.success)
-    throw Error(
-      result.error.issues
-        .map((issue) => `${issue.path.join(".") || "Arguments"}: ${issue.message}`)
-        .join("; "),
-    );
-  return result.data as Record<string, unknown>;
+  const result = (prompt ? schema.partial() : schema).safeParse(raw);
+  if (result.success) return { data: result.data as Record<string, unknown>, issues: [] };
+  const issues: ArgumentIssue[] = result.error.issues.map((issue) => {
+    const field = definition(id).fields.find((f) => f.name === issue.path[0]);
+    if (!field)
+      return {
+        message:
+          issue.code === "unrecognized_keys"
+            ? `Arguments: Unknown field${issue.keys.length === 1 ? "" : "s"}: ${issue.keys.join(", ")}.`
+            : "Arguments: Enter a JSON object.",
+      };
+    const value =
+      raw && typeof raw === "object" ? (raw as Record<string, unknown>)[field.name] : undefined;
+    const missing = value === undefined || value === "";
+    const detail =
+      field.kind === "boolean"
+        ? "Choose Yes or No."
+        : missing
+          ? field.kind === "enum"
+            ? "Choose a value."
+            : "Enter a value."
+          : field.kind === "enum"
+            ? `Choose ${field.options!.join(" or ")}.`
+            : typeof value !== "string"
+              ? "Enter text."
+              : field.name === "uri"
+                ? "Use a canonical Resource URI."
+                : issue.message;
+    return { field: field.name, message: `${field.label}: ${detail}` };
+  });
+  return { data: undefined, issues };
+}
+export function argumentsFor(id: CommandId, raw: unknown, prompt = false) {
+  const result = validateArguments(id, raw ?? {}, prompt);
+  if (!result.data) throw Error(result.issues.map((issue) => issue.message).join("; "));
+  return result.data;
 }
 export function definition(id: CommandId) {
   return catalog.find((c) => c.id === id)!;

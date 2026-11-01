@@ -849,3 +849,136 @@ it("uses Workspace validation through prompted Resource arguments after source h
   ).toBe(true);
   expect(h.owner.value.openResource).toHaveBeenCalledOnce();
 });
+
+it.each([
+  { modifiers: ["Control"], flags: { ctrlKey: true } },
+  { modifiers: ["Control", "Alt"], flags: { ctrlKey: true, altKey: true } },
+  { modifiers: ["Meta", "Shift"], flags: { ctrlKey: false, metaKey: true, shiftKey: true } },
+])(
+  "retains the chord deadline and origin across $modifiers release/re-press",
+  ({ modifiers, flags }) => {
+    vi.useFakeTimers();
+    try {
+      const h = harness([
+        {
+          id: "released",
+          command: "app.openSettings",
+          keys: [modifiers.join("+") + "+G", modifiers.join("+") + "+H"],
+          when: "",
+          scope: "app",
+          enabled: true,
+        },
+      ]);
+      h.rt.key(key("g", "KeyG", flags));
+      const pending = h.rt.chords.pending;
+      expect(pending).toBeDefined();
+      h.rt.key(new KeyboardEvent("keyup", { key: "g", code: "KeyG" }));
+      for (const modifier of modifiers)
+        h.rt.key(new KeyboardEvent("keyup", { key: modifier, code: modifier + "Left" }));
+      vi.advanceTimersByTime(500);
+      for (const modifier of modifiers) {
+        h.rt.key(key(modifier, modifier + "Left", flags));
+        expect(h.rt.chords.pending).toBe(pending);
+      }
+      h.rt.key(key("h", "KeyH", flags));
+      expect(h.settings).toHaveBeenCalledExactlyOnceWith("appearance", pending!.origin);
+      for (const type of ["keydown", "keypress", "keyup"]) {
+        const event = new KeyboardEvent(type, {
+          key: "h",
+          code: "KeyH",
+          repeat: type === "keydown",
+          cancelable: true,
+          ...flags,
+        });
+        h.rt.key(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+      expect(h.settings).toHaveBeenCalledOnce();
+      h.rt.key(key("g", "KeyG", flags));
+      h.rt.key(new KeyboardEvent("keyup", { key: "g", code: "KeyG" }));
+      vi.advanceTimersByTime(999);
+      for (const modifier of modifiers) h.rt.key(key(modifier, modifier + "Left", flags));
+      expect(h.rt.chords.pending).toBeDefined();
+      vi.advanceTimersByTime(1);
+      expect(h.rt.chords.pending).toBeUndefined();
+      h.rt.key(key("h", "KeyH", flags));
+      expect(h.settings).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+it.each([
+  "panel",
+  "pane",
+  "params",
+  "uid",
+  "workspace",
+  "hidden",
+  "route",
+  "modal",
+  "map",
+  "recording",
+  "blur",
+  "reserved",
+  "escape",
+])("modifier input cannot bypass %s chord cancellation", (boundary) => {
+  const h = harness([
+    {
+      id: "cancel",
+      command: "app.openSettings",
+      keys: ["Control+G", "Control+H"],
+      scope: "app",
+      when: "",
+      enabled: true,
+    },
+  ]);
+  h.rt.key(key("g", "KeyG"));
+  h.rt.key(new KeyboardEvent("keyup", { key: "g", code: "KeyG" }));
+  expect(h.rt.chords.pending).toBeDefined();
+  switch (boundary) {
+    case "panel":
+      h.replace();
+      break;
+    case "pane":
+      Object.assign(h.panel(), { group: {} });
+      break;
+    case "params":
+      Object.assign(h.panel(), { params: {} });
+      break;
+    case "uid":
+      h.uid("new");
+      break;
+    case "workspace":
+      h.rt.registerWorkspace("c", { ...h.owner, token: {} });
+      break;
+    case "hidden":
+      h.owner.value.active = false;
+      break;
+    case "route":
+      h.rt.configure({ ...h.config, route: "/" });
+      break;
+    case "modal":
+      h.rt.configure({ ...h.config, modalCount: 1 });
+      break;
+    case "map":
+      h.rt.configure({ ...h.config, map: compileKeymap(emptyDocument, "linux") });
+      break;
+    case "recording":
+      h.rt.setRecording(true);
+      break;
+    case "blur":
+      h.rt.blur();
+      break;
+    case "reserved":
+      h.rt.key(key("j", "KeyJ"));
+      break;
+    case "escape":
+      h.rt.key(key("Escape", "Escape", { ctrlKey: false }));
+      break;
+  }
+  h.rt.key(key("Control", "ControlLeft"));
+  expect(h.rt.chords.pending).toBeUndefined();
+  h.rt.key(key("h", "KeyH"));
+  expect(h.settings).not.toHaveBeenCalled();
+});

@@ -1,11 +1,17 @@
-import { useEffect, useLayoutEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo, useState, useId } from "react";
 import { HotkeyRecorder } from "@tanstack/hotkeys";
 import { Button } from "@hukube/ui/components/button";
 import { Input } from "@hukube/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@hukube/ui/components/native-select";
 import { commandPlatform } from "@/lib/platform.ts";
-import { catalog, definition, isCommand } from "./catalog.ts";
-import { ArgumentFields } from "./argument-fields.tsx";
+import {
+  catalog,
+  definition,
+  isCommand,
+  validateArguments,
+  type ArgumentIssue,
+} from "./catalog.ts";
+import { ArgumentFields, focusInvalidArgument } from "./argument-fields.tsx";
 import { commands } from "./runtime.ts";
 import { compileKeymap, defaultRules, displayKeys, emptyDocument, type Rule } from "./keyboard.ts";
 import { vocabulary } from "./conditions.ts";
@@ -61,7 +67,7 @@ export function KeyboardSettings() {
     change({ ...candidate, rules });
   };
   const matching = (r: Rule) =>
-    `${r.id} ${r.command} ${JSON.stringify(r.args)} ${r.when} ${r.keys.join(" ")}`
+    `${r.id} ${r.command} ${isCommand(r.command) ? definition(r.command).title : ""} ${JSON.stringify(r.args)} ${r.when} ${r.keys.join(" ")}`
       .toLowerCase()
       .includes(search.toLowerCase());
   const context = commands.context({
@@ -377,6 +383,9 @@ function RuleEditor({
   disabled: boolean;
 }) {
   const form = useRef<HTMLFormElement>(null);
+  const jsonId = useId();
+  const [issues, setIssues] = useState<ArgumentIssue[]>([]);
+  const jsonError = issues.find((issue) => !issue.field);
   useLayoutEffect(() => {
     form.current?.querySelector("select")?.focus({ preventScroll: true });
     const section = form.current?.closest("section");
@@ -426,9 +435,30 @@ function RuleEditor({
       className="flex min-w-0 flex-col gap-3 rounded border p-3"
       onSubmit={(e) => {
         e.preventDefault();
+        let args: unknown;
+        let diagnostics: ArgumentIssue[];
         try {
-          const args = JSON.parse(argsText) as Record<string, unknown>;
-          const next = { ...rule, keys: keys.trim().split(/\s+/), args };
+          args = JSON.parse(argsText);
+          diagnostics = isCommand(rule.command)
+            ? validateArguments(rule.command, args, true).issues
+            : !args || typeof args !== "object" || Array.isArray(args)
+              ? [{ message: "Arguments: Enter a JSON object." }]
+              : [];
+        } catch {
+          diagnostics = [{ message: "Arguments: Enter valid JSON for a named argument object." }];
+        }
+        setIssues(diagnostics);
+        setError("");
+        if (diagnostics.length) {
+          focusInvalidArgument(form.current, diagnostics);
+          return;
+        }
+        try {
+          const next = {
+            ...rule,
+            keys: keys.trim().split(/\s+/),
+            args: args as Record<string, unknown>,
+          };
           compileKeymap(
             { ...emptyDocument, disabledDefaults: defaultRules.map((r) => r.id), rules: [next] },
             commandPlatform,
@@ -448,6 +478,7 @@ function RuleEditor({
           onChange={(e) => {
             setRule({ ...rule, command: e.target.value, args: {} });
             setArgsText("{}");
+            setIssues([]);
           }}
         >
           {!isCommand(rule.command) && (
@@ -501,13 +532,21 @@ function RuleEditor({
         </output>
       )}
       {isCommand(rule.command) && (
-        <ArgumentFields id={rule.command} value={rule.args ?? {}} onChange={updateArgs} />
+        <ArgumentFields
+          id={rule.command}
+          value={rule.args ?? {}}
+          onChange={updateArgs}
+          issues={issues}
+        />
       )}
-      <label className="flex flex-col gap-1">
+      <label htmlFor={jsonId} className="flex flex-col gap-1">
         Named arguments (JSON object)
         <textarea
           className="min-h-20 w-full rounded border p-2 font-mono text-xs"
           name="arguments"
+          id={jsonId}
+          aria-invalid={jsonError ? true : undefined}
+          aria-describedby={jsonError ? `${jsonId}-error` : undefined}
           spellCheck={false}
           value={argsText}
           onChange={(e) => {
@@ -520,6 +559,11 @@ function RuleEditor({
           }}
         />
       </label>
+      {jsonError && (
+        <p id={`${jsonId}-error`} role="alert" className="text-destructive">
+          {jsonError.message}
+        </p>
+      )}
       <label htmlFor="when" className="flex flex-col gap-1">
         Condition (when)
         <Input
