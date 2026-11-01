@@ -528,6 +528,118 @@ async function go(page: Page, namespace: string, type: string, name: string) {
   await page.getByRole("option", { name: new RegExp(` ${name} ${namespace}$`) }).click();
 }
 
+/** Best-effort, read-only state after the original hidden-navigation assertion fails. */
+async function logHiddenNavigationFailure(page: Page, namespace: string, name: string) {
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<void>((finishDeadline) => {
+      timer = setTimeout(() => {
+        expired = true;
+        finishDeadline();
+      }, 1000);
+    });
+    await Promise.race([
+      deadline,
+      (async () => {
+        const state = await page.evaluate(
+          (target) => {
+            // These helpers must stay inside the callback serialized by page.evaluate.
+            /* oxlint-disable unicorn/consistent-function-scoping */
+            const text = (value: string | null | undefined) => value?.slice(0, 64) ?? null;
+            const take = <T extends Element>(nodes: NodeListOf<T>, limit: number): T[] =>
+              Array.from({ length: Math.min(nodes.length, limit) }, (_, index) =>
+                nodes.item(index),
+              );
+            /* oxlint-enable unicorn/consistent-function-scoping */
+            const identity = (element: Element | null) => ({
+              tag: text(element?.tagName),
+              id: text(element?.id),
+              role: text(element?.getAttribute("role")),
+              label: text(element?.getAttribute("aria-label")),
+            });
+            const groups = take(document.querySelectorAll<HTMLElement>(".dv-groupview"), 4);
+            return {
+              target,
+              panes: groups.map((group) => {
+                const bounds = group.getBoundingClientRect();
+                return {
+                  bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+                  classes: text(group.className),
+                  inert: group.hasAttribute("inert"),
+                  ancestorInert: !!group.parentElement?.closest("[inert]"),
+                  tabs: take(group.querySelectorAll<HTMLElement>(".dv-tab"), 6).map(
+                    (headerTab) => ({
+                      ...identity(headerTab),
+                      close: text(
+                        headerTab
+                          .querySelector('button[aria-label^="Close "]')
+                          ?.getAttribute("aria-label"),
+                      ),
+                      classes: text(headerTab.className),
+                      selected: text(headerTab.getAttribute("aria-selected")),
+                    }),
+                  ),
+                  actions: take(group.querySelectorAll("[data-pane-header-actions] button"), 2).map(
+                    (button) => ({
+                      ...identity(button),
+                      pressed: text(button.getAttribute("aria-pressed")),
+                      disabled: text(button.getAttribute("aria-disabled")),
+                    }),
+                  ),
+                };
+              }),
+              dialogs: take(
+                document.querySelectorAll('[role="dialog"], [role="alertdialog"]'),
+                2,
+              ).map((dialog) => ({
+                ...identity(dialog),
+                labelledBy: text(dialog.getAttribute("aria-labelledby")),
+                options: take(dialog.querySelectorAll('[role="option"]'), 6).map((option) => ({
+                  ...identity(option),
+                  label: text(
+                    option.getAttribute("aria-label") ??
+                      (dialog.querySelector('[role="combobox"][aria-label="Go to Resource"]')
+                        ? option.textContent
+                        : null),
+                  ),
+                  selected: text(option.getAttribute("aria-selected")),
+                  disabled: text(option.getAttribute("aria-disabled")),
+                })),
+                comboboxes: take(dialog.querySelectorAll('[role="combobox"]'), 2).map(
+                  (combobox) => ({
+                    ...identity(combobox),
+                    activeDescendant: text(combobox.getAttribute("aria-activedescendant")),
+                    expanded: text(combobox.getAttribute("aria-expanded")),
+                    disabled: text(combobox.getAttribute("aria-disabled")),
+                  }),
+                ),
+              })),
+              focus: {
+                ...identity(document.activeElement),
+                activeDescendant: text(
+                  document.activeElement?.getAttribute("aria-activedescendant"),
+                ),
+                pane: groups.findIndex((group) => group.contains(document.activeElement)),
+              },
+            };
+          },
+          { namespace: namespace.slice(0, 64), type: "pods", name: name.slice(0, 64) },
+        );
+        if (expired) return;
+        const serialized = JSON.stringify(state);
+        if (expired) return;
+        await Promise.resolve(
+          console.log("PANE_ZOOM_HIDDEN_NAVIGATION_FAILURE", serialized.slice(0, 12000)),
+        );
+      })(),
+    ]);
+  } finally {
+    expired = true;
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /** Reach the actual control using document order, without a synthetic focus jump. */
 async function tabToZoom(page: Page, target: Locator) {
   for (let index = 0; index < 100; index++) {
@@ -1026,7 +1138,16 @@ export async function paneZoomExecScenario(
     pane(page, resourceNames[1]).getByRole("button", { name: "Restore Panes" }),
   ).toBeVisible();
   await go(page, namespace, "pods", zoomPod);
-  await expect(page.getByRole("button", { name: "Restore Panes" })).toHaveCount(0);
+  try {
+    await expect(page.getByRole("button", { name: "Restore Panes" })).toHaveCount(0);
+  } catch (error) {
+    try {
+      await logHiddenNavigationFailure(page, namespace, zoomPod);
+    } catch {
+      // Diagnostic failures must not replace the original assertion error.
+    }
+    throw error;
+  }
   await expect(pod.locator(".monaco-editor:visible .view-lines")).toContainText("zoom-log-");
   await expect
     .poll(() => wire.streams.filter((stream) => stream.method === "resource.logs").length)
