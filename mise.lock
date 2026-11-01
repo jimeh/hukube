@@ -122,6 +122,77 @@ url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-windows-x
 checksum = "sha256:d7a7d3eb216614544aab0cde2d8d9f2e4e87839bf5a30a1cd11d077f02d84e0c"
 url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-windows-x64-baseline.zip"
 
+[[tools."github:jimeh/treeboot"]]
+version = "0.16.0"
+backend = "github:jimeh/treeboot"
+specifiers = ["0.16.0"]
+
+[tools."github:jimeh/treeboot"."platforms.linux-arm64"]
+checksum = "sha256:ec4d49fdcc417f5dc258f98eb334376b4f160f86a82cf6563c0e8fa8454a3ea2"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272674"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.linux-arm64-musl"]
+checksum = "sha256:ec4d49fdcc417f5dc258f98eb334376b4f160f86a82cf6563c0e8fa8454a3ea2"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272674"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.linux-x64"]
+checksum = "sha256:60bd1167ac8af7e82e0e349670cbf808a0a2e98e7b60701dc9c8befd0444355a"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272691"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.linux-x64-baseline"]
+checksum = "sha256:60bd1167ac8af7e82e0e349670cbf808a0a2e98e7b60701dc9c8befd0444355a"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272691"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.linux-x64-musl"]
+checksum = "sha256:60bd1167ac8af7e82e0e349670cbf808a0a2e98e7b60701dc9c8befd0444355a"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272691"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:60bd1167ac8af7e82e0e349670cbf808a0a2e98e7b60701dc9c8befd0444355a"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272691"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.macos-arm64"]
+checksum = "sha256:c333702f761c5b54aea367472ae3a40924680ccee13a59c37641d7e4472d2095"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272662"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.macos-x64"]
+checksum = "sha256:530bc19f54e7ccd9c49da5fe6c2a2b1fa1ec91566c4a04b197c819bba1bd000d"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272685"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.macos-x64-baseline"]
+checksum = "sha256:530bc19f54e7ccd9c49da5fe6c2a2b1fa1ec91566c4a04b197c819bba1bd000d"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272685"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.windows-x64"]
+checksum = "sha256:207b340bf9c8a6c6a42989b6d92336462de465564b039853b68866402525e71f"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272688"
+provenance = "github-attestations"
+
+[tools."github:jimeh/treeboot"."platforms.windows-x64-baseline"]
+checksum = "sha256:207b340bf9c8a6c6a42989b6d92336462de465564b039853b68866402525e71f"
+url = "https://github.com/jimeh/treeboot/releases/download/v0.16.0/treeboot-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/jimeh/treeboot/releases/assets/537272688"
+provenance = "github-attestations"
+
 [[tools.go]]
 version = "1.27.2"
 backend = "core:go"

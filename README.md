@@ -29,7 +29,7 @@ in [`CONTEXT.md`](CONTEXT.md).
 Tools are managed with [mise](https://mise.jdx.dev):
 
 ```sh
-mise install          # Bun, Go, linters, k3d, kubectl
+mise install --locked # Bun, Go, linters, Treeboot, k3d, kubectl
 mise run setup        # JavaScript dependencies and the pre-commit hook
 ```
 
@@ -89,6 +89,59 @@ mise run web          # prints a URL including the Engine's token
 
 The Engine only listens on loopback and requires a token. It has no user
 authentication yet, so do not expose it on a network.
+
+## Worktrees and private test Clusters
+
+In a linked worktree, `mise run worktree:bootstrap` runs Treeboot 0.16.0 and
+then the existing setup task. Repeat bootstrap runs setup again. It does not
+copy configuration, credentials or ignored files, or create a Cluster. In the
+root checkout Treeboot bootstrap is a no-op; run `mise run setup` directly.
+CI runs the ordinary install/check/e2e entrypoints without bootstrap.
+
+`mise run e2e:cluster`, `mise run dev:verify` and `mise run e2e` resolve the
+canonical Git checkout path with Treeboot's public `worktree id` command.
+Each checkout, including the root, owns `hukube-e2e-<12-character-id>` and
+`.data/e2e/kubeconfig`. The wrapper exports the validated identity to child
+processes. Direct Playwright invocation without that environment fails.
+Inherited Cluster names, kubeconfig paths and Engine URLs cannot select a
+target. The old shared `hukube-e2e` Cluster is never adopted or deleted.
+
+Repeat runs reuse only a Cluster whose full canonical path matches the
+`dev.hukube.test-owner` Docker label (UTF-8 encoded as base64url). A verified
+stopped Cluster is started explicitly. Lifecycle commands serialize through
+`.data/e2e/lifecycle.lock`. A live, stale or unverifiable lock fails with its
+exact path, process evidence and recovery instruction; it is never reclaimed
+automatically. Query errors and foreign or unprovable partial resources also
+fail closed. Failed creates retain resources for inspection and disable k3d's
+by-name rollback. k3d subprocesses also use checkout-local default and
+standalone config paths, because k3d deletion otherwise edits user config.
+
+Each E2E web Engine binds `127.0.0.1:0`. Playwright captures its spawned
+process's ready URL and probes `/healthz` before using it. Worktrees can run
+concurrently. Within one checkout, run `dev:verify` and E2E sequentially:
+they rebuild the same UI bundle.
+
+Before relocating or removing a linked worktree:
+
+```sh
+mise exec -- treeboot teardown --yes
+# Or explicitly, including in the root checkout:
+mise run worktree:teardown
+```
+
+Teardown stops the recorded verification Host and deletes only the verified
+private Cluster. Treeboot rejects teardown of the root checkout and never
+removes a worktree itself. `mise run e2e:cluster:delete` deletes just the owned
+Cluster; it does not stop a verification Host.
+
+A relocated path gets a new ID. Changing `.treeboot.toml`'s ID length also
+renames Clusters and requires updating the harness's twelve-character guard.
+Clean up using the old path and configuration first. Removing a worktree with
+another tool can leave a Cluster behind. There is no automatic orphan manager:
+deliberately inspect the exact container name and decode its complete
+`dev.hukube.test-owner` label before operator cleanup. Another checkout will
+neither adopt nor delete that orphan. Unlabelled auxiliary resources left by a
+failed create require deliberate inspection of the exact names in the error.
 
 ## Checks
 

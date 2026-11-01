@@ -1,4 +1,5 @@
 [tools]
+"github:jimeh/treeboot" = "0.16.0"
 bun = "1.4.3"
 go = "1.27.2"
 # Vitest, Playwright, and electron-builder run on Node.
@@ -16,10 +17,6 @@ zizmor = "1.31.0"
 [env]
 # Kubernetes version used for envtest's kube-apiserver and etcd binaries.
 ENVTEST_K8S_VERSION = "1.37.x"
-# k3d cluster used by end-to-end tests, and its kubeconfig. The cluster is kept
-# out of ~/.kube/config so tests never touch your own contexts.
-E2E_CLUSTER = "hukube-e2e"
-E2E_KUBECONFIG = "{{config_root}}/.data/e2e/kubeconfig"
 
 [settings]
 experimental = true
@@ -278,20 +275,21 @@ depends = ["fmt:check", "lint", "typecheck", "gen:check", "test"]
 
 # --- End-to-end ---
 
+[tasks."worktree:bootstrap"]
+description = "Run Treeboot setup for a linked worktree (root is a no-op)"
+run = "treeboot run"
+
+[tasks."worktree:teardown"]
+description = "Stop this checkout's verification Host and delete only its verified private test Cluster"
+run = ["mise run dev:verify:stop", "mise run e2e:cluster:delete"]
+
 [tasks."e2e:cluster"]
-description = "Create the k3d cluster used by end-to-end tests, if missing, and write its kubeconfig to .data/e2e"
-run = '''
-k3d cluster list "$E2E_CLUSTER" >/dev/null 2>&1 || \
-  k3d cluster create "$E2E_CLUSTER" --no-lb --wait --timeout 180s \
-    --kubeconfig-update-default=false --kubeconfig-switch-context=false \
-    --k3s-arg "--disable=traefik,metrics-server@server:0"
-mkdir -p .data/e2e
-k3d kubeconfig get "$E2E_CLUSTER" > "$E2E_KUBECONFIG"
-'''
+description = "Create or reuse this checkout's owned private k3d Cluster and refresh its local kubeconfig"
+run = "bun e2e/harness-cli.ts cluster"
 
 [tasks."e2e:cluster:delete"]
-description = "Delete the end-to-end k3d cluster"
-run = 'k3d cluster delete "$E2E_CLUSTER"'
+description = "Delete only this checkout's verified private k3d Cluster"
+run = "bun e2e/harness-cli.ts delete"
 
 [tasks."e2e:browsers"]
 description = "Install the Chromium build Playwright drives"
@@ -301,99 +299,22 @@ run = "bunx playwright install chromium"
 # --- Checking UI changes ---
 
 [tasks."dev:verify:seed"]
-description = "Apply the sample Resources in e2e/fixtures/sample to the e2e cluster"
-depends = ["e2e:cluster"]
-run = '''
-kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/crds.yaml
-kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for condition=established --timeout 30s \
-  crd/widgets.sample.hukube.dev crd/gadgets.sample.hukube.dev
-kubectl --kubeconfig "$E2E_KUBECONFIG" apply -f e2e/fixtures/sample/resources.yaml -f e2e/fixtures/sample/edit.yaml
-'''
+description = "Apply sample Resources to this checkout's verified private test Cluster"
+run = "bun e2e/harness-cli.ts seed"
 
 [tasks."dev:verify"]
-description = "Build the UI and start a background web Host against the seeded e2e cluster, printing its URL"
-depends = ["build:engine", "build:ui", "dev:verify:seed"]
-# A free port and its own data dir, so worktrees can each run one.
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-dir="$PWD/.data/verify"
-mise run dev:verify:stop
-mkdir -p "$dir"
-token="$(openssl rand -hex 16)"
-HUKUBE_TOKEN="$token" nohup "$PWD/engine/bin/hukube-engine" --web --ui-dir "$PWD/apps/app/dist" \
-  --listen 127.0.0.1:0 --kubeconfig "$E2E_KUBECONFIG" --data-dir "$dir/engine" \
-  >"$dir/engine.out" 2>"$dir/engine.log" </dev/null &
-pid=$!
-trap 'kill "$pid" 2>/dev/null || true; rm -f "$dir/engine.pid" "$dir/url"' EXIT
-# The Engine prints one JSON line with its URL once it listens.
-url=""
-for _ in $(seq 100); do
-  url="$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' "$dir/engine.out")"
-  if [[ -n "$url" ]] || ! kill -0 "$pid" 2>/dev/null; then break; fi
-  sleep 0.1
-done
-if [[ -z "$url" ]]; then
-  echo "The Engine did not start; see $dir/engine.log." >&2
-  exit 1
-fi
-# Record start time and the exact command, including this checkout's paths.
-identity="$(ps -ww -p "$pid" -o lstart= -o command=)"
-[[ -n "$identity" ]] || exit 1
-printf '%s\n%s\n' "$pid" "$identity" >"$dir/engine.pid"
-echo "$url/#token=$token" >"$dir/url"
-trap - EXIT
-echo "hukube: $url/#token=$token"
-echo "Engine log: $dir/engine.log. Stop it with \`mise run dev:verify:stop\`."
-'''
+description = "Build, seed this checkout's private Cluster, and start its background web Host on a free port"
+depends = ["build:engine", "build:ui"]
+run = "bun e2e/harness-cli.ts verify"
 
 [tasks."dev:verify:stop"]
-description = "Stop the web Host that dev:verify started"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-pid_file=.data/verify/engine.pid
-[[ -f "$pid_file" ]] || exit 0
-pid="$(sed -n '1p' "$pid_file")"
-identity="$(sed -n '2p' "$pid_file")"
-[[ "$pid" =~ ^[0-9]+$ ]] && [[ "$pid" -gt 0 ]] || {
-  echo "Invalid Engine PID record: $pid_file." >&2
-  exit 1
-}
-current="$(ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null || true)"
-if [[ -n "$current" ]]; then
-  if [[ -z "$identity" || "$current" != "$identity" ]]; then
-    echo "The Engine PID record no longer identifies its process; leaving PID $pid running." >&2
-    exit 1
-  fi
-  kill "$pid"
-  for _ in $(seq 50); do
-    current="$(ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null || true)"
-    [[ "$current" == "$identity" ]] || break
-    sleep 0.1
-  done
-  if [[ "$current" == "$identity" ]]; then
-    echo "The Engine did not stop; retaining $pid_file so cleanup can be retried." >&2
-    exit 1
-  fi
-fi
-rm -f "$pid_file" .data/verify/url
-'''
+description = "Stop only the verification Host identified by this checkout's exact process record"
+run = "bun e2e/harness-cli.ts verify-stop"
 
 [tasks.e2e]
-description = "Run end-to-end tests for the web and desktop Hosts against the k3d cluster"
-depends = ["e2e:cluster", "e2e:browsers", "build"]
-dir = "e2e"
-# Electron needs a display; use a virtual one on headless Linux.
-run = '''
-# Stored Workspace layouts and settings from an earlier run change what a test sees.
-rm -rf ../.data/e2e/engine
-if [ "$(uname)" = Linux ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-  xvfb-run -a bunx playwright test
-else
-  bunx playwright test
-fi
-'''
+description = "Run web and desktop end-to-end tests against this checkout's private k3d Cluster"
+depends = ["e2e:browsers", "build"]
+run = "bun e2e/harness-cli.ts e2e"
 
 [tasks."gen:overview"]
 description = "Generate the Overview definition JSON Schema"

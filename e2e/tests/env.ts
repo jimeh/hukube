@@ -1,25 +1,18 @@
-import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { Harness, readEnvironment } from "../harness.ts";
 
-export const enginePort = 7555;
+const owner = readEnvironment();
+const harness = new Harness(owner);
 export const engineToken = "e2e";
-export const kubeconfig = resolve(
-  import.meta.dirname,
-  "..",
-  process.env["E2E_KUBECONFIG"] ?? "../.data/e2e/kubeconfig",
-);
-/** The kubeconfig context k3d creates for the e2e cluster. */
-export const clusterId = `k3d-${process.env["E2E_CLUSTER"] ?? "hukube-e2e"}`;
+export const kubeconfig = owner.kubeconfig;
+/** The kubeconfig context k3d creates for this checkout's private test Cluster. */
+export const clusterId = `k3d-${owner.cluster}`;
 
-/** Runs kubectl against the e2e cluster. */
+/** Runs kubectl only after validating the private kubeconfig's current context. */
 export function kubectl(...args: string[]): string {
-  return execFileSync("kubectl", ["--kubeconfig", kubeconfig, ...args], { encoding: "utf8" });
+  return harness.kubectl(args);
 }
 
-/** Creates a Resource from JSON in the e2e cluster. */
+/** Creates a Resource from JSON in the private test Cluster. */
 export function kubectlCreate(resource: Record<string, unknown>): string {
-  return execFileSync("kubectl", ["--kubeconfig", kubeconfig, "create", "-f", "-"], {
-    encoding: "utf8",
-    input: JSON.stringify(resource),
-  });
+  return harness.kubectl(["create", "-f", "-"], JSON.stringify(resource));
 }
