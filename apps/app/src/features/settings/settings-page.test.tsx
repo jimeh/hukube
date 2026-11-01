@@ -13,10 +13,11 @@ import {
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { useOpenClusters } from "@/features/clusters/open-clusters.ts";
 
+import { SettingsFocusReturnContext } from "./focus-return.ts";
 import { SettingsPage, type SettingsCategory } from "./settings-page.tsx";
 
 interface PreferenceHarness {
@@ -112,11 +113,17 @@ async function mountPage(
   initial: unknown = { version: 1 },
   fromCluster?: string,
   connection: ConnectionState = "open",
+  requestFocusReturn: ((cluster: string) => void) | null = null,
 ) {
   const harness = preferenceHarness(initial, connection);
   let showCategory: ((category: SettingsCategory) => void) | undefined;
   const root = createRootRoute({ component: Outlet });
   const index = createRoute({ getParentRoute: () => root, path: "/", component: () => null });
+  const cluster = createRoute({
+    getParentRoute: () => root,
+    path: "/c/$cluster",
+    component: () => null,
+  });
   const settings = createRoute({
     getParentRoute: () => root,
     path: "/settings",
@@ -127,14 +134,16 @@ async function mountPage(
     },
   });
   const router = createRouter({
-    routeTree: root.addChildren([index, settings]),
+    routeTree: root.addChildren([index, cluster, settings]),
     history: createMemoryHistory({ initialEntries: ["/settings"] }),
   });
   await router.load();
   render(
-    <EngineProvider client={harness.client}>
-      <RouterProvider router={router} />
-    </EngineProvider>,
+    <SettingsFocusReturnContext value={requestFocusReturn}>
+      <EngineProvider client={harness.client}>
+        <RouterProvider router={router} />
+      </EngineProvider>
+    </SettingsFocusReturnContext>,
   );
   await act(async () => {});
   return {
@@ -400,11 +409,16 @@ it("requires explicit confirmation before replacing a malformed preference docum
 });
 
 it("returns to the originating Workspace only while its Cluster tab remains open", async () => {
+  const requestFocusReturn = vi.fn<(cluster: string) => void>();
   useOpenClusters.setState({ ids: ["dev"] });
-  await mountPage("appearance", { version: 1 }, "dev");
-  expect(screen.getByRole("button", { name: "Back to dev" })).toBeDefined();
+  await mountPage("appearance", { version: 1 }, "dev", "open", requestFocusReturn);
+  const back = screen.getByRole("button", { name: "Back to dev" });
+  fireEvent.click(back);
+  expect(requestFocusReturn).toHaveBeenCalledOnce();
+  expect(requestFocusReturn).toHaveBeenCalledWith("dev");
   cleanup();
   useOpenClusters.setState({ ids: [] });
-  await mountPage("appearance", { version: 1 }, "dev");
-  expect(screen.getByRole("button", { name: "Back to clusters" })).toBeDefined();
+  await mountPage("appearance", { version: 1 }, "dev", "open", requestFocusReturn);
+  fireEvent.click(screen.getByRole("button", { name: "Back to clusters" }));
+  expect(requestFocusReturn).toHaveBeenCalledOnce();
 });

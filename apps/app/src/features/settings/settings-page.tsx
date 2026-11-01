@@ -29,6 +29,7 @@ import {
   type PreferenceSaveState,
   type PreferenceScope,
 } from "./preferences.ts";
+import { useSettingsFocusReturn } from "./focus-return.ts";
 
 export const settingsCategories = ["appearance", "logs", "overview"] as const;
 export type SettingsCategory = (typeof settingsCategories)[number];
@@ -65,6 +66,7 @@ export function SettingsPage({
   const ids = useOpenClusters((state) => state.ids);
   const { snapshot, store } = usePreferences();
   const navigate = useNavigate();
+  const requestFocusReturn = useSettingsFocusReturn();
   const [replaceOpen, setReplaceOpen] = useState(false);
   const returnsToCluster = !!fromCluster && ids.includes(fromCluster);
   const search = fromCluster ? { fromCluster } : {};
@@ -78,6 +80,15 @@ export function SettingsPage({
             variant="ghost"
             size="sm"
             nativeButton={false}
+            onClick={(event) => {
+              const sameWindow =
+                event.button === 0 &&
+                !event.altKey &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.shiftKey;
+              if (sameWindow && returnsToCluster && fromCluster) requestFocusReturn?.(fromCluster);
+            }}
             render={
               returnsToCluster ? (
                 <Link to="/c/$cluster" params={{ cluster: fromCluster }} />
