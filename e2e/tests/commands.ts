@@ -1,5 +1,40 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { engineToken } from "./env.ts";
+
+/** The raw process reads one sentinel byte after all palette input has finished. */
+export async function palettePreservesExecInput(page: Page, input: Locator, screen: Locator) {
+  await input.pressSequentially(
+    "stty raw -echo; printf 'command-%s-ready\\n' $((6*7)); printf 'key-byte-%s\\n' \"$(head -c 1 | od -An -tx1 | tr -d ' \\n')\"; stty sane; printf 'command-%s-done\\n' $((6*7))",
+  );
+  await input.press("Enter");
+  // The computed marker proves the reader is running; echoed command text cannot match it.
+  await expect(screen).toContainText("command-42-ready");
+  await input.focus();
+  await page.keyboard.down("ControlOrMeta");
+  await page.keyboard.down("Shift");
+  try {
+    await page.keyboard.down("P");
+    await page.keyboard.down("P"); // An actual repeated keydown must stay consumed.
+    await expect(page.getByRole("combobox", { name: "Search commands" })).toBeFocused();
+  } finally {
+    await page.keyboard.up("P");
+    await page.keyboard.up("Shift");
+    await page.keyboard.up("ControlOrMeta");
+  }
+  await page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+  await input.press("ControlOrMeta+Shift+P");
+  const search = page.getByRole("combobox", { name: "Search commands" });
+  await search.fill("Select all terminal text");
+  await search.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeHidden();
+  await expect(input).toBeFocused();
+  await input.pressSequentially("Z");
+  // Completion orders the negative assertion: every preceding input would have
+  // reached head before Z. A leaked Ctrl+P, Escape or Enter changes the first byte.
+  await expect(screen).toContainText("command-42-done");
+  await expect(screen).toContainText("key-byte-5a");
+}
 
 /** Fresh bounded observation; writes always CAS against that observation. */
 async function keyboardSetting(

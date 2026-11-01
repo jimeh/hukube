@@ -12,6 +12,7 @@ import { expect, test } from "../fixtures.ts";
 import { assertLogFiltering, assertPreviousInterruption } from "./logs.ts";
 
 import { openGoToResource, savedSessionLayout } from "./exec.ts";
+import { palettePreservesExecInput } from "./commands.ts";
 
 import { clusterId, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 import {
@@ -181,6 +182,7 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
     await input.pressSequentially("echo reload-$HUKUBE_DESKTOP");
     await input.press("Enter");
     await expect(screen).toContainText("reload-kept-42");
+    await palettePreservesExecInput(window, input, screen);
     expect(
       await app.evaluate(
         () => (globalThis as typeof globalThis & { unloadPrompts: unknown[] }).unloadPrompts,
