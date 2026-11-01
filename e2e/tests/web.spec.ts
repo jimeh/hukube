@@ -1690,23 +1690,28 @@ async function resetLogStreamPreferences(page: Page): Promise<void> {
     ["Retained characters", 32_000_000],
     ["Styled ranges", 200_000],
   ] as const;
+  let changes = false;
   let reduces = false;
   for (const [label, value] of budgets) {
     const input = page.getByRole("textbox", { name: new RegExp(`^${label}`) });
-    reduces ||= Number(await input.inputValue()) > value;
+    const current = await input.inputValue();
+    changes ||= current !== String(value);
+    reduces ||= Number(current) > value;
     await input.fill(String(value));
   }
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  if (reduces) {
-    const dialog = page.getByRole("alertdialog", {
-      name: "Reduce retained Log Stream entries?",
-    });
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Apply lower limits" }).click();
+  if (changes) {
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    if (reduces) {
+      const dialog = page.getByRole("alertdialog", {
+        name: "Reduce retained Log Stream entries?",
+      });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("button", { name: "Apply lower limits" }).click();
+    }
+    await expect(
+      page.getByText("Retained lines, Retained characters, Styled ranges: Saved"),
+    ).toBeVisible();
   }
-  await expect(
-    page.getByText("Retained lines, Retained characters, Styled ranges: Saved"),
-  ).toBeVisible();
 
   const wrap = page.getByRole("checkbox", { name: "Wrap long lines" });
   if ((await wrap.getAttribute("aria-checked")) !== "true") {
