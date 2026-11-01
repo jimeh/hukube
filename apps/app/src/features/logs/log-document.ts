@@ -149,6 +149,18 @@ export class LogDocument {
   emptyFork(): LogDocument {
     return this.#fork(true);
   }
+  /** An empty reconciliation candidate that keeps committed presentation ownership. */
+  #reconciliationFork(): LogDocument {
+    const fork = this.emptyFork();
+    for (const [key, color] of this.#originColors) fork.#originColors.set(key, color);
+    fork.#nextOriginColor = this.#nextOriginColor;
+    fork.#multipleSources = this.#multipleSources;
+    fork.#multipleContainers = this.#multipleContainers;
+    fork.#podPrefix = this.#podPrefix;
+    fork.#podPrefixInitialized = this.#podPrefixInitialized;
+    fork.#sequence = this.#sequence;
+    return fork;
+  }
   #fork(empty: boolean): LogDocument {
     const fork = new LogDocument(this.type, this.budgets);
     fork.#timestamps = this.#timestamps;
@@ -343,10 +355,9 @@ export class LogDocument {
   ): void {
     if (staged === this || staged.type !== this.type)
       throw new Error("Cannot reconcile a LogDocument from this candidate");
-    const next = this.emptyFork();
+    const next = this.#reconciliationFork();
     next.status(status);
     next.retentionLoss = this.retentionLoss || staged.retentionLoss;
-    next.#sequence = this.#sequence;
 
     for (const entry of this.#entries) {
       if (entry.line && removedOrChangedSources.has(entry.line.source)) continue;

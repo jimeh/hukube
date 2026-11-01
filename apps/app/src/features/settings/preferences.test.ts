@@ -743,7 +743,69 @@ it("migrates a valid legacy theme only for a wholly absent document and Engine s
   expect(engineDark.effective.appearance.theme).toBe("dark");
 });
 
-it("retires a blocked legacy migration when Appearance is repaired after document creation", async () => {
+it("retires legacy theme migration when watch delivery creates a theme-less document", async () => {
+  const server = new SettingsServer();
+  server.broadcastOnCommit = true;
+  const gate = deferred();
+  server.behaviors.push(async (params) => {
+    await gate.promise;
+    server.compare(params);
+    server.commit(params.value);
+  });
+  const migrating = storeFor(server, "light");
+  await until(() => expect(server.puts).toHaveLength(1));
+
+  const concurrent = storeFor(server);
+  await ready(concurrent.store);
+  await concurrent.store.save("display", [{ path: "logStreams.wrap", value: false }]);
+  expect(server.value).toEqual({ version: 1, logStreams: { wrap: false } });
+  gate.resolve();
+  await until(() =>
+    expect(migrating.store.getSnapshot().saves.appearance.phase).not.toBe("saving"),
+  );
+
+  expect(server.puts).toHaveLength(2);
+  expect(server.value).toEqual({ version: 1, logStreams: { wrap: false } });
+  expect(migrating.store.getSnapshot()).toMatchObject({
+    effective: { appearance: { theme: "dark" } },
+    saves: { appearance: { phase: "idle" } },
+  });
+  expect(migrating.cache()).toBe("dark");
+  expect(concurrent.store.getSnapshot().saves.display.phase).toBe("saved");
+  migrating.stop();
+  concurrent.stop();
+});
+
+it("retires legacy theme migration after an empty-revision conflict creates a theme-less document", async () => {
+  const server = new SettingsServer();
+  server.behaviors.push(async (params) => {
+    server.compare(params);
+    server.commit({
+      version: 1,
+      logStreams: { timestamps: true },
+      future: { owner: "other window" },
+    });
+    throw new EngineRequestError({ code: "conflict", message: "changed" });
+  });
+  const h = storeFor(server, "light");
+  await until(() => expect(server.puts.length).toBeGreaterThanOrEqual(1));
+  await until(() => expect(h.store.getSnapshot().saves.appearance.phase).not.toBe("saving"));
+
+  expect(server.puts).toHaveLength(1);
+  expect(server.value).toEqual({
+    version: 1,
+    logStreams: { timestamps: true },
+    future: { owner: "other window" },
+  });
+  expect(h.store.getSnapshot()).toMatchObject({
+    effective: { appearance: { theme: "dark" } },
+    saves: { appearance: { phase: "idle" } },
+  });
+  expect(h.cache()).toBe("dark");
+  h.stop();
+});
+
+it("retires legacy migration when a malformed Appearance document is created and repairs independently", async () => {
   const server = new SettingsServer();
   const gate = deferred();
   server.behaviors.push(async () => {
@@ -755,10 +817,9 @@ it("retires a blocked legacy migration when Appearance is repaired after documen
 
   server.commit({ version: 1, appearance: "broken", remote: true });
   server.broadcast();
-  expect(h.store.getSnapshot().saves.appearance).toMatchObject({
-    phase: "error",
-    message: expect.stringMatching(/Repair Appearance section/),
-  });
+  expect(h.store.getSnapshot().saves.appearance.phase).toBe("idle");
+  expect(h.store.getSnapshot().display.appearance.theme).toBe("dark");
+  expect(h.cache()).toBe("dark");
 
   const repair = h.store.repairSection("appearance");
   server.commit({ version: 1, remote: true });

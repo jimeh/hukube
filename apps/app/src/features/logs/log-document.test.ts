@@ -395,6 +395,92 @@ it("selectively reconciles changed epochs without restoring unchanged rows or er
   expect(doc.retentionLoss).toBe(true);
 });
 
+it.each(["removed", "changed"] as const)(
+  "keeps exact survivor presentation when the first source is %s during reconciliation",
+  (firstDisposition) => {
+    const first = {
+      ...source,
+      id: 0,
+      pod: "web-old-aaa",
+      podUid: "uid-old",
+      instance: "old-1",
+      container: "main",
+    };
+    const survivor = {
+      ...source,
+      id: 1,
+      pod: "web-new-bbb",
+      podUid: "uid-survivor",
+      instance: "survivor-1",
+      container: "sidecar",
+    };
+    const doc = new LogDocument("deployments.apps", {
+      lines: 20,
+      characters: 10_000,
+      decorations: 1_000,
+    });
+    doc.status({
+      ...status,
+      sources: [first, survivor],
+      pods: 2,
+      followed: 2,
+      loaded: 2,
+    });
+    doc.append([
+      { source: first.id, time: 1, text: "first" },
+      {
+        source: survivor.id,
+        time: 2,
+        text: "survivor",
+        spans: [[0, 4, 1, -1, 1]],
+      },
+    ]);
+    const before = {
+      ...doc.rows[1]!,
+      spans: doc.rows[1]!.spans.map((span) => ({ ...span })),
+    };
+    expect(before.text).toBe("new-bbb/sidecar survivor");
+    expect(before.spans[0]?.className).toBe("log-fg-5");
+
+    const changedFirst = { ...first, instance: "old-2" };
+    const added = {
+      ...source,
+      id: 2,
+      pod: "web-new-ccc",
+      podUid: "uid-added",
+      instance: "added-1",
+      container: "worker",
+    };
+    const nextSources =
+      firstDisposition === "removed" ? [survivor, added] : [survivor, changedFirst, added];
+    const nextStatus = {
+      ...status,
+      sources: nextSources,
+      pods: nextSources.length,
+      followed: nextSources.length,
+      loaded: nextSources.length,
+    };
+    const staged = doc.emptyFork();
+    staged.status(nextStatus);
+    if (firstDisposition === "changed")
+      staged.append([{ source: changedFirst.id, time: 3, text: "changed-first" }]);
+    staged.append([{ source: added.id, time: 4, text: "added" }]);
+
+    doc.reconcile(staged, new Set([first.id]), nextStatus);
+
+    expect(doc.rows.find((row) => row.sequence === before.sequence)).toEqual(before);
+    const addedRow = doc.rows.find((row) => row.text.endsWith(" added"));
+    expect(addedRow?.spans[0]?.className).toBe("log-fg-4");
+    expect(doc.diagnostics()).toMatchObject({
+      entries: firstDisposition === "removed" ? 2 : 3,
+      sources: firstDisposition === "removed" ? 2 : 3,
+      currentSources: firstDisposition === "removed" ? 2 : 3,
+      referencedSources: firstDisposition === "removed" ? 2 : 3,
+      colors: firstDisposition === "removed" ? 2 : 3,
+    });
+  },
+);
+
 it("drops a superseded staged epoch and carries staged retention loss into reconciliation", () => {
   const doc = new LogDocument("pods", { lines: 10, characters: 1_000, decorations: 100 });
   const first = { ...source, id: 0, instance: "i1", previous: true };

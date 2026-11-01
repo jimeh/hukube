@@ -489,6 +489,22 @@ export function createPreferenceStore(
     return operation;
   };
 
+  const retireMigration = (operation: Operation): boolean => {
+    if (
+      !operation.migration ||
+      (revision === "" && raw === null) ||
+      pathsMatch(raw, intended(operation.changes))
+    )
+      return false;
+    retiredOperations.add(operation.id);
+    if (saves[operation.scope].id === operation.id) saves[operation.scope] = emptySave();
+    return true;
+  };
+
+  const retireMigrations = () => {
+    for (const operation of pendingOperations.values()) retireMigration(operation);
+  };
+
   const applySetting = (setting: Setting) => {
     serial++;
     revision = setting.revision;
@@ -569,6 +585,7 @@ export function createPreferenceStore(
       fieldErrors = {};
       sectionErrors = {};
     }
+    retireMigrations();
     publish();
     settleWaiters();
     if (migration) void queueOperation(migration);
@@ -701,6 +718,10 @@ export function createPreferenceStore(
         if (retiredOperations.has(operation.id)) return;
         await ensureFresh();
         if (retiredOperations.has(operation.id)) return;
+        if (retireMigration(operation)) {
+          publish();
+          return;
+        }
         if (blockOperation(operation)) return;
         if (pathsMatch(raw, intended(operation.changes))) {
           updateSave(operation, "saved", "Saved");

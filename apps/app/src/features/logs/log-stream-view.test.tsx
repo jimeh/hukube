@@ -565,6 +565,50 @@ it("keeps a partial previous-run handle and appends its resumed suffix", () => {
   expect(screen.getByRole("textbox").textContent).toBe("onetwothree");
 });
 
+it.each([
+  ["initial", "without an instance"],
+  ["initial", "as provisional no-previous"],
+  ["changed", "without an instance"],
+  ["changed", "as provisional no-previous"],
+] as const)(
+  "preserves %s staged previous rows when a replacement socket first describes the source %s",
+  (stage, provisional) => {
+    const first = { ...source, instance: "run-1", previous: true };
+    mount();
+    event({ ...ready, sources: [first] });
+    fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+    event({ ...ready, ready: false, sources: [first] });
+
+    if (stage === "changed") {
+      line("committed");
+      event({ ...ready, sources: [first] });
+      act(() => latest().listener.state?.("reconnecting"));
+    }
+
+    const staged = {
+      ...first,
+      instance: stage === "changed" ? "run-2" : first.instance,
+    };
+    event({ ...ready, ready: false, sources: [staged] });
+    line("prefix");
+    act(() => latest().listener.state?.("reconnecting"));
+    event({
+      ...ready,
+      ready: false,
+      sources: [
+        provisional === "without an instance"
+          ? { ...staged, instance: undefined }
+          : { ...staged, previous: false, instance: undefined },
+      ],
+    });
+    event({ ...ready, ready: false, sources: [staged] });
+    line("suffix");
+    event({ ...ready, sources: [staged] });
+
+    expect(screen.getByRole("textbox").textContent).toBe("prefixsuffix");
+  },
+);
+
 it("keeps a resolved previous-run gap and appends the resumed suffix", () => {
   mount();
   event({ ...ready, sources: [{ ...source, previous: true }] });
@@ -1143,6 +1187,67 @@ it("resumes a previous LogRun through SocketStream and LogCodec from the committ
     ]),
   );
   expect(screen.getByRole("textbox").textContent).toBe("onetwothreefour");
+
+  view.unmount();
+  wire.connection.close();
+});
+
+it("preserves staged rows through an early no-instance SocketStream and LogCodec status", async () => {
+  const wire = makeWireEngine();
+  engine = wire.client;
+  const wireSource = { ...source, id: 7, instance: "run-1", previous: true };
+  const wireStatus = { ...ready, sources: [wireSource] };
+  const view = mount();
+  await act(async () => {});
+  act(() => {
+    wire.sockets[1]!.hello();
+    wire.sockets[1]!.receive({ type: "event", event: wireStatus });
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  await act(async () => {});
+
+  const first = wire.sockets.at(-1)!;
+  act(() => {
+    first.hello();
+    first.receive({ type: "event", event: { ...wireStatus, ready: false } });
+    first.receive(wireFrame(7, 0, 1_000_000_000n, "prefix"));
+    first.close();
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+
+  const resumed = wire.sockets.at(-1)!;
+  act(() => resumed.hello());
+  expect(resumed.sent[0]?.params).toMatchObject({
+    previous: true,
+    resume: [
+      {
+        podUid: "uid",
+        container: "constructor",
+        instance: "run-1",
+        time: "1000000000",
+      },
+    ],
+  });
+  act(() => {
+    resumed.receive({
+      type: "event",
+      event: {
+        ...wireStatus,
+        ready: false,
+        sources: [{ ...wireSource, id: 9, instance: undefined }],
+      },
+    });
+    resumed.receive({
+      type: "event",
+      event: { ...wireStatus, ready: false, sources: [{ ...wireSource, id: 9 }] },
+    });
+    resumed.receive(wireFrame(9, 0, 2_000_000_000n, "suffix"));
+    resumed.receive({
+      type: "event",
+      event: { ...wireStatus, sources: [{ ...wireSource, id: 9 }] },
+    });
+  });
+  expect(screen.getByRole("textbox").textContent).toBe("prefixsuffix");
 
   view.unmount();
   wire.connection.close();

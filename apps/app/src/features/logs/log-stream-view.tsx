@@ -221,17 +221,18 @@ function LogRun({
       [...replay.epochs.values()].some(
         (epoch) => !epoch.complete && (epoch.unresolved || epoch.untimed),
       );
-    const classifySource = (source: LogStreamStatus["sources"][number]) => {
+    const classifySource = (source: LogStreamStatus["sources"][number], definitive: boolean) => {
       const candidate = replay!;
       const superseded = candidate.stagedBySource.get(source.id);
-      if (!source.previous || !source.instance) {
-        if (superseded) {
+      if (!source.previous) {
+        if (definitive && superseded) {
           candidate.staged.discardSources(new Set([source.id]));
           candidate.epochs.delete(superseded);
           candidate.stagedBySource.delete(source.id);
         }
         return;
       }
+      if (!source.instance) return;
       const key = sourceEpoch(source.id, source.instance);
       const owner = candidate.fingerprint?.epochs.has(key) ? "committed" : "staged";
       if (superseded && superseded !== key) {
@@ -305,16 +306,19 @@ function LogRun({
           }
           candidate.socketEpochs.clear();
           candidate.staged.status(value);
+          const definitive = value.ready && value.loaded >= value.followed;
           for (const source of value.sources) {
             const committed = candidate.fingerprint?.sources.get(source.id);
+            const resolved = source.previous ? !!source.instance : definitive;
             if (
               candidate.fingerprint &&
+              resolved &&
               (!committed ||
                 committed.previous !== (source.previous ?? false) ||
                 (committed.previous && committed.instance !== source.instance))
             )
               candidate.pendingChange = true;
-            classifySource(source);
+            classifySource(source, definitive);
           }
           const fingerprint = replayFingerprint(value);
           if (!fingerprint) return;
