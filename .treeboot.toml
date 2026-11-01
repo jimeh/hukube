@@ -1,0 +1,3 @@
+worktree_id = { length = 12 }
+commands = ["mise run setup"]
+teardown_commands = ["mise run worktree:teardown"]

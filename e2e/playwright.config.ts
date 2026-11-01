@@ -1,6 +1,8 @@
 import { defineConfig } from "@playwright/test";
 
-import { enginePort, engineToken, kubeconfig } from "./tests/env.ts";
+import { readEnvironment, readyPattern } from "./harness.ts";
+
+readEnvironment();
 
 // Needs the k3d cluster and built Engine, UI, and desktop Host:
 // `mise run e2e` prepares all of them.
@@ -11,7 +13,6 @@ export default defineConfig({
   retries: process.env["CI"] ? 1 : 0,
   reporter: process.env["CI"] ? [["github"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: `http://127.0.0.1:${enginePort}`,
     trace: "retain-on-failure",
     viewport: { width: 1440, height: 900 },
   },
@@ -20,16 +21,10 @@ export default defineConfig({
     { name: "desktop", testMatch: "desktop.spec.ts" },
   ],
   webServer: {
-    command: [
-      "../engine/bin/hukube-engine",
-      "--web",
-      "--ui-dir=../apps/app/dist",
-      `--listen=127.0.0.1:${enginePort}`,
-      `--token=${engineToken}`,
-      `--kubeconfig=${kubeconfig}`,
-      "--data-dir=../.data/e2e/engine",
-    ].join(" "),
-    url: `http://127.0.0.1:${enginePort}/healthz`,
+    command: "bun harness-cli.ts engine",
+    // Port zero plus this process's ready record prevents reuse. Workers read
+    // the named capture at fixture runtime, after Playwright starts the Engine.
+    wait: { stdout: readyPattern },
     reuseExistingServer: false,
     stdout: "pipe",
   },

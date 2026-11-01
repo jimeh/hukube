@@ -6,7 +6,8 @@ import { resolve as resolvePath } from "node:path";
 
 import { createHash } from "node:crypto";
 
-import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
+import type { Dialog, Locator, Page } from "@playwright/test";
+import { expect, test } from "../fixtures.ts";
 
 import { overviewTests } from "./overview.ts";
 

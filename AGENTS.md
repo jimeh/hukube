@@ -21,15 +21,16 @@ take files; Go paths are relative to `engine/`.
 ## Checking UI changes
 
 `mise run dev:verify` rebuilds the Engine and UI, seeds the sample Resources
-in `e2e/fixtures/sample` into the e2e k3d cluster, and starts a web Host in
+in `e2e/fixtures/sample` into this checkout's private k3d Cluster, and starts a web Host in
 the background on a free port. It prints the URL with its token, also saved in
 `.data/verify/url`, and logs to `.data/verify/engine.log`. Rerun it after a
 change and stop it with `mise run dev:verify:stop`; do not `pkill -f`, which
 can match your own shell. It never touches the clusters in your kubeconfig.
 
-Run `dev:verify` and `e2e` sequentially. Both Hosts serve `apps/app/dist`,
-and a Vite rebuild replaces it, so rebuilding for one can give the other
-Host a 404 during a test.
+Within one checkout, run only one `dev:verify` or `e2e` workflow at a time,
+including repeated E2E runs. They share the Cluster, Engine data and
+`apps/app/dist`; overlapping runs can replace active data or the UI bundle.
+Use separate worktrees for concurrent verification.
 
 ## Designing features
 
@@ -192,8 +193,19 @@ Host a 404 during a test.
 - **Panels attach late:** dockview can run a panel's effects before it
   attaches the panel's element, and a detached element resolves every CSS
   custom property to nothing. Check `isConnected` before reading styles.
-- **Test clusters:** the e2e k3d cluster's kubeconfig is written to
-  `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config`.
+- **Test Clusters:** use the Mise harness tasks, not direct Playwright or k3d
+  lifecycle commands. The wrapper resolves Treeboot's twelve-character ID for
+  the actual canonical Git top level, verifies its full owner label, and writes
+  only `.data/e2e/kubeconfig`. Never merge it into `~/.kube/config` or override
+  the Cluster/path environment to target another checkout. Live, stale or
+  unverifiable lifecycle locks and unprovable partial resources require the
+  exact inspection/recovery described by the error, never broad cleanup.
+  Before moving/removing a worktree or changing ID length, run
+  `mise run worktree:teardown` in its original path/configuration. Linked
+  worktrees can instead use `mise exec -- treeboot teardown --yes`; Treeboot
+  bootstrap is a root-checkout no-op and its root teardown is rejected.
+  Root/CI ordinary test tasks need no bootstrap. See README.md for orphan
+  inspection and the distinction between Treeboot teardown and direct tasks.
 - **End-to-end lists:** tests share one Engine and one Workspace within a run,
   so a test finds lists earlier tests opened. Scope each list's locators to its
   tab panel, and select the Facet a test needs, because a Resource tab opens
