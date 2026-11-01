@@ -6,7 +6,7 @@ import { closeSessionTab } from "../exec/window-tabs.ts";
 import { useExecSessions, type ExecTerminal } from "../exec/sessions.ts";
 import { isReservedKey } from "../exec/keys.ts";
 import { pinPanel } from "../workspace/dock.ts";
-import { argumentsFor, definition, type CommandArgs, type CommandId } from "./catalog.ts";
+import { argumentsFor, catalog, definition, type CommandArgs, type CommandId } from "./catalog.ts";
 import {
   Chords,
   matchesStroke,
@@ -78,6 +78,8 @@ export class CommandRuntime {
   private listeners = new Set<() => void>();
   private config?: Configuration;
   private view: View = { hint: "", error: "", recording: false };
+  // Compare published palette output, never callback identity or copied owner state.
+  private paletteObservation?: { content: string; types?: WorkspaceValue["types"] };
   private held = new Set<string>();
   readonly chords = new Chords<Origin>((hint) => this.show({ hint }));
   subscribe = (fn: () => void) => {
@@ -87,7 +89,19 @@ export class CommandRuntime {
   getSnapshot = () => this.view;
   private show(patch: Partial<View>) {
     this.view = { ...this.view, ...patch };
+    this.paletteObservation = this.observePalette();
     for (const fn of this.listeners) fn();
+  }
+  private observePalette() {
+    const origin = this.view.palette?.origin;
+    if (!origin) return;
+    return {
+      content: JSON.stringify([
+        origin.panel?.api.title ?? origin.workspace?.value.cluster ?? "Window",
+        catalog.map(({ id }) => [this.reason(id, origin), this.label(id, origin)]),
+      ]),
+      types: origin.workspace?.value.types,
+    };
   }
   configure(config: Configuration) {
     if (
@@ -99,30 +113,45 @@ export class CommandRuntime {
     const mapChanged = this.config?.map !== config.map;
     this.config = config;
     if (mapChanged) this.show({});
-    if (
-      config.connection === "outdated" ||
-      (this.view.palette?.mode === "resources" && !this.valid(this.view.palette.origin))
-    )
-      this.closePalette();
+    this.refreshAvailability();
   }
   registerWorkspace(cluster: string, owner: WorkspaceOwner) {
     this.workspaces.set(cluster, owner);
+    this.refreshAvailability();
     return () => {
-      if (this.workspaces.get(cluster) === owner) this.workspaces.delete(cluster);
+      if (this.workspaces.get(cluster) === owner) {
+        this.workspaces.delete(cluster);
+        this.refreshAvailability();
+      }
       this.chords.cancel();
     };
   }
   refreshAvailability() {
     if (this.chords.pending && !this.valid(this.chords.pending.origin)) this.chords.cancel();
-    if (this.view.palette) this.show({});
+    if (
+      this.config?.connection === "outdated" ||
+      (this.view.palette?.mode === "resources" && !this.valid(this.view.palette.origin))
+    ) {
+      this.closePalette();
+      return;
+    }
+    const next = this.observePalette();
+    if (
+      next &&
+      (next.content !== this.paletteObservation?.content ||
+        next.types !== this.paletteObservation?.types)
+    )
+      this.show({});
   }
   registerSurface(surface: Surface) {
     this.surfaces.set(surface.element, surface);
+    this.refreshAvailability();
     return () => {
       if (this.surfaces.get(surface.element) === surface) {
         this.surfaces.delete(surface.element);
         const origin = this.chords.pending?.origin;
         if (origin?.surface === surface || origin?.resource === surface) this.chords.cancel();
+        this.refreshAvailability();
       }
     };
   }

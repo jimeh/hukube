@@ -6,7 +6,6 @@ export function useCommandSurface(element: RefObject<HTMLElement | null>, read: 
   const registration = useRef<{ element: HTMLElement; off(): void } | undefined>(undefined);
   useLayoutEffect(() => {
     latest.current = read;
-    commands.refreshAvailability();
     if (registration.current?.element !== element.current) {
       registration.current?.off();
       registration.current = undefined;
@@ -16,6 +15,13 @@ export function useCommandSurface(element: RefObject<HTMLElement | null>, read: 
           off: commands.registerSurface({ element: element.current, read: () => latest.current() }),
         };
     }
+    commands.refreshAvailability();
   });
-  useLayoutEffect(() => () => registration.current?.off(), []);
+  useLayoutEffect(
+    () => () => {
+      registration.current?.off();
+      registration.current = undefined;
+    },
+    [],
+  );
 }

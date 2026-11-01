@@ -127,7 +127,7 @@ export function commandTests() {
     await expect(page.getByText("Open a Cluster Workspace first.", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toBeHidden();
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
     await page.getByRole("link", { name: "Keyboard shortcuts", exact: true }).click();
     await page.getByRole("button", { name: "Add binding for Open Settings", exact: true }).click();
     await page.getByLabel("Settings category (optional)").selectOption("appearance");

@@ -127,9 +127,13 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
     if (!api) return;
     const d = api.onDidActivePanelChange(() => {
       commands.chords.cancel();
+      commands.refreshAvailability();
       setActiveListType((api.activePanel?.params as Partial<ListPanelParams> | undefined)?.type);
     });
-    const layout = api.onDidLayoutChange(() => commands.chords.cancel());
+    const layout = api.onDidLayoutChange(() => {
+      commands.chords.cancel();
+      commands.refreshAvailability();
+    });
     return () => {
       d.dispose();
       layout.dispose();
@@ -233,6 +237,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   }, [api, cluster]);
   useLayoutEffect(() => {
     if (owner.current) owner.current.value = value;
+    commands.refreshAvailability();
   });
   const routed = useMemo<WorkspaceValue>(
     () => ({

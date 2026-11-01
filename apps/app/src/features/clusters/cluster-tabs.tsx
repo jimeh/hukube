@@ -6,7 +6,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@hukube/ui/components/context-menu";
-import { Button } from "@hukube/ui/components/button";
+import { Button, buttonVariants } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { cn } from "@hukube/ui/lib/utils";
 import {
@@ -147,22 +147,32 @@ export function ClusterTabs() {
         <Tooltip>
           <TooltipTrigger
             render={
-              <Button
-                variant="ghost"
-                size="icon"
+              <Link
+                to="/settings/$section"
+                params={{ section: "appearance" }}
+                className={buttonVariants({ variant: "ghost", size: "icon" })}
                 aria-label="Settings"
                 onPointerDown={() => {
                   settingsOrigin.current = commands.capture();
                 }}
                 onClick={(event) => {
+                  const origin = settingsOrigin.current;
+                  settingsOrigin.current = undefined;
+                  if (
+                    event.defaultPrevented ||
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
                   commands.dispatch(
                     "app.openSettings",
                     {},
-                    event.detail
-                      ? (settingsOrigin.current ?? commands.capture())
-                      : commands.capture(),
+                    event.detail ? (origin ?? commands.capture()) : commands.capture(),
                   );
-                  settingsOrigin.current = undefined;
                 }}
               />
             }
