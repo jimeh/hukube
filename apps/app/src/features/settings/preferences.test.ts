@@ -789,6 +789,75 @@ it.each([
   },
 );
 
+it.each([
+  ["stored JSON null", null],
+  ["future-version", { version: 2 }],
+  ["non-object", "malformed"],
+] as const)(
+  "retires a terminally failed legacy migration after a fresh %s snapshot that cannot decode",
+  async (_kind, remote) => {
+    const server = new SettingsServer();
+    server.behaviors.push(async () => {
+      throw new EngineRequestError({ code: "unavailable", message: "disk full" });
+    });
+    const h = storeFor(server, "light");
+    await until(() =>
+      expect(h.store.getSnapshot().saves.appearance).toMatchObject({
+        phase: "error",
+        message: "Not saved: disk full",
+      }),
+    );
+
+    // This no-op is queued behind the migration, so its completion proves the
+    // failed migration operation and its finally cleanup have both finished.
+    await h.store.save("display", []);
+    expect(h.store.getSnapshot().saves.appearance.phase).toBe("error");
+    expect(server.puts).toHaveLength(1);
+
+    server.commit(remote);
+    server.broadcast();
+
+    expect(server.puts).toHaveLength(1);
+    expect(h.store.getSnapshot()).toMatchObject({
+      status: "malformed",
+      effective: { appearance: { theme: "dark" } },
+      display: { appearance: { theme: "dark" } },
+      saves: { appearance: { phase: "idle" } },
+    });
+    expect(h.cache()).toBe("dark");
+    h.stop();
+  },
+);
+
+it("preserves a failed user theme draft across a fresh malformed snapshot", async () => {
+  const server = new SettingsServer({ version: 1, appearance: { theme: "dark" } });
+  const h = storeFor(server);
+  await ready(h.store);
+  server.behaviors.push(async () => {
+    throw new EngineRequestError({ code: "unavailable", message: "disk full" });
+  });
+
+  await h.store.save("appearance", [{ path: "appearance.theme", value: "light" }]);
+  expect(h.store.getSnapshot().saves.appearance).toMatchObject({
+    phase: "error",
+    message: "Not saved: disk full",
+  });
+  expect(server.puts).toHaveLength(1);
+
+  server.commit({ version: 2 });
+  server.broadcast();
+
+  expect(server.puts).toHaveLength(1);
+  expect(h.store.getSnapshot()).toMatchObject({
+    status: "malformed",
+    effective: { appearance: { theme: "dark" } },
+    display: { appearance: { theme: "light" } },
+    saves: { appearance: { phase: "error", message: "Not saved: disk full" } },
+  });
+  expect(h.cache()).toBe("light");
+  h.stop();
+});
+
 it("retires legacy theme migration when watch delivery creates a theme-less document", async () => {
   const server = new SettingsServer();
   server.broadcastOnCommit = true;

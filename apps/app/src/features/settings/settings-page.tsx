@@ -272,7 +272,7 @@ function SectionRepair({ section, label }: { section: PreferenceSection; label: 
               Ordinary changes are blocked so they cannot overwrite this section. Repair removes
               only this malformed section and preserves the rest of the stored document.
             </span>
-            <Button size="sm" variant="destructive" onClick={() => setOpen(true)}>
+            <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
               Repair {label} section
             </Button>
           </AlertDescription>
