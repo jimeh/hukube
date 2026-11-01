@@ -494,6 +494,11 @@ function LogRun({
             }}
           />
         )}
+      <output aria-label="Log filter result" aria-live="polite" className="sr-only">
+        {noMatches
+          ? "No matching lines. Filters inspect retained line text. Stream notices stay visible."
+          : ""}
+      </output>
       {noMatches && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
           <div className="min-w-0 flex-[1_1_12rem]">

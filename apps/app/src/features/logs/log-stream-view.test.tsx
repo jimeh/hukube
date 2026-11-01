@@ -960,3 +960,28 @@ it("keeps the applied filter when choosing another container and clearing replac
   expect(opened[0]!.close).toHaveBeenCalledOnce();
   expect(latest().close).not.toHaveBeenCalled();
 });
+
+it("keeps a polite filter result mounted and announces no matches without per-line updates", () => {
+  mount();
+  event();
+  line("hello");
+  const status = screen.queryByRole("status", { name: "Log filter result" });
+  expect(status).not.toBeNull();
+  expect(status!.getAttribute("aria-live")).toBe("polite");
+  expect(status!.textContent).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  applyFilter("Include text", "missing");
+  expect(status!.textContent).toBe(
+    "No matching lines. Filters inspect retained line text. Stream notices stay visible.",
+  );
+  const observer = new MutationObserver(() => {});
+  observer.observe(status!, { childList: true, characterData: true, subtree: true });
+  line("another hidden line");
+  line("still hidden");
+  expect(screen.getByText("0 of 3 retained lines match")).toBeDefined();
+  expect(observer.takeRecords()).toEqual([]);
+  fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]!);
+  expect(screen.getByRole("status", { name: "Log filter result" })).toBe(status);
+  expect(status!.textContent).toBe("");
+  observer.disconnect();
+});
