@@ -515,6 +515,13 @@ function tab(page: Page, title: string) {
 function pane(page: Page, title: string) {
   return page.locator(".dv-groupview").filter({ has: tab(page, title) });
 }
+// Land inside a native Tab insertion zone. Its exact midpoint accepts neither side.
+async function dragOntoTab(source: Locator, target: Locator) {
+  const box = (await target.boundingBox())!;
+  await source.dragTo(target, {
+    targetPosition: { x: box.width / 4, y: box.height / 2 },
+  });
+}
 async function go(page: Page, namespace: string, type: string, name: string) {
   await openGoToResource(page);
   await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/${type}/${name}`);
@@ -759,10 +766,7 @@ export async function paneZoomResourceScenario(
   await expect(right.getByRole("button", { name: "Restore Panes" })).toBeVisible();
   // Reorder by a real drag. Splitting a Tab off accepts the native exit.
   const firstTab = tab(page, resourceNames[0]);
-  const firstTabBounds = (await firstTab.boundingBox())!;
-  await preview.dragTo(firstTab, {
-    targetPosition: { x: firstTabBounds.width / 2, y: firstTabBounds.height / 2 },
-  });
+  await dragOntoTab(preview, firstTab);
   await expect(right.getByRole("button", { name: "Restore Panes" })).toBeVisible();
   const content = right.locator(".dv-content-container");
   const box = (await content.boundingBox())!;
@@ -828,7 +832,7 @@ export async function paneZoomExecScenario(
   await expect(screen).toContainText("/ #");
   const title = `app in ${zoomPod}`;
   // Put live Logs in the peer Pane. Zoom, rather than a Tab change, hides them below.
-  await tab(page, zoomPod).dragTo(tab(page, "pods"));
+  await dragOntoTab(tab(page, zoomPod), tab(page, "pods"));
   await expect(pod).toBeVisible();
   await expect(session).toBeVisible();
   await tab(page, title).click();
