@@ -105,6 +105,7 @@ export class LogDocument {
   #podPrefixInitialized = false;
   #timestamps = false;
   budgets: LogBudgets;
+  displayedStatus: LogStreamStatus | undefined;
   revision = 0;
   retentionLoss = false;
   /** Counts the times every row was formatted again, or dropped. */
@@ -134,7 +135,86 @@ export class LogDocument {
     this.rewrites++;
     this.#changed();
   }
+  /** A listener-free bounded candidate that starts with this document's rows. */
+  fork(): LogDocument {
+    return this.#fork(false);
+  }
+  /** A listener-free bounded candidate with the same display configuration and no rows. */
+  emptyFork(): LogDocument {
+    return this.#fork(true);
+  }
+  #fork(empty: boolean): LogDocument {
+    const fork = new LogDocument(this.type, this.budgets);
+    for (const [id, source] of this.sources) fork.sources.set(id, source);
+    for (const id of this.#currentSources) fork.#currentSources.add(id);
+    for (const [key, color] of this.#originColors) fork.#originColors.set(key, color);
+    fork.#nextOriginColor = this.#nextOriginColor;
+    fork.#multipleSources = this.#multipleSources;
+    fork.#multipleContainers = this.#multipleContainers;
+    fork.#podPrefix = this.#podPrefix;
+    fork.#podPrefixInitialized = this.#podPrefixInitialized;
+    fork.#timestamps = this.#timestamps;
+    fork.displayedStatus = this.displayedStatus;
+    fork.revision = this.revision;
+    fork.rewrites = this.rewrites;
+    if (empty) {
+      fork.#pruneSources();
+    } else {
+      fork.#entries = [...this.#entries];
+      fork.rows = [...this.rows];
+      for (const [id, count] of this.#sourceReferences) fork.#sourceReferences.set(id, count);
+      fork.#sequence = this.#sequence;
+      fork.#characters = this.#characters;
+      fork.#decorations = this.#decorations;
+      fork.retentionLoss = this.retentionLoss;
+    }
+    return fork;
+  }
+  /** Publishes a hidden candidate through this document's existing subscription. */
+  replaceFrom(candidate: LogDocument): void {
+    if (candidate === this || candidate.type !== this.type)
+      throw new Error("Cannot replace a LogDocument from this candidate");
+    this.sources.clear();
+    for (const [id, source] of candidate.sources) this.sources.set(id, source);
+    this.#currentSources.clear();
+    for (const id of candidate.#currentSources) this.#currentSources.add(id);
+    this.#sourceReferences.clear();
+    for (const [id, count] of candidate.#sourceReferences) this.#sourceReferences.set(id, count);
+    this.#originColors.clear();
+    for (const [key, color] of candidate.#originColors) this.#originColors.set(key, color);
+    this.#entries = candidate.#entries;
+    this.rows = candidate.rows;
+    this.#sequence = candidate.#sequence;
+    this.#characters = candidate.#characters;
+    this.#decorations = candidate.#decorations;
+    this.#multipleSources = candidate.#multipleSources;
+    this.#multipleContainers = candidate.#multipleContainers;
+    this.#podPrefix = candidate.#podPrefix;
+    this.#podPrefixInitialized = candidate.#podPrefixInitialized;
+    this.#timestamps = candidate.#timestamps;
+    this.#nextOriginColor = candidate.#nextOriginColor;
+    this.budgets = { ...candidate.budgets };
+    this.displayedStatus = candidate.displayedStatus;
+    this.retentionLoss = candidate.retentionLoss;
+    this.rewrites++;
+    candidate.release();
+    this.#changed();
+  }
+  /** Releases a discarded hidden candidate without notifying subscribers. */
+  release(): void {
+    this.sources.clear();
+    this.#currentSources.clear();
+    this.#sourceReferences.clear();
+    this.#originColors.clear();
+    this.#listeners.clear();
+    this.#entries = [];
+    this.rows = [];
+    this.#characters = 0;
+    this.#decorations = 0;
+    this.displayedStatus = undefined;
+  }
   status(status: LogStreamStatus): number {
+    this.displayedStatus = status;
     for (const source of status.sources) {
       this.sources.set(source.id, source);
       const key = this.#colorKey(source);
@@ -171,6 +251,7 @@ export class LogDocument {
       this.#podPrefix = nextPrefix;
       return this.#rebuild();
     }
+    this.#changed();
     return 0;
   }
   #colorKey(source: LogSource): string {

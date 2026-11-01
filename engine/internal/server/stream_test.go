@@ -265,7 +265,8 @@ func TestStreamSlowClientBound(t *testing.T) {
 			received++
 		}
 	}
-	if gap != expected || gap.Bytes != gap.Records*(64<<10) || previous != 1023 {
+	if gap.Bytes != expected.Bytes || gap.Records != expected.Records ||
+		!slices.Equal(gap.Sources, expected.Sources) || gap.Bytes != gap.Records*(64<<10) || previous != 1023 {
 		t.Fatalf("gap=%+v want=%+v last=%d", gap, expected, previous)
 	}
 	close(release)
@@ -408,6 +409,35 @@ func TestStreamQueueTextAndGapOrder(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "before gap:4:3 middle [5 6] [7 8]" {
 		t.Fatalf("queue order=%v", got)
+	}
+}
+
+func TestStreamQueueSourceGapTextBarriers(t *testing.T) {
+	q := newStreamQueue(streamLimits{queue: 4, window: 2, texts: 5})
+	first := []protocol.StreamGapSource{{ID: 2, Records: 1}}
+	q.sourceFrame([]byte{1, 2}, 1, first)
+	first[0].Records = 99
+	q.sourceFrame([]byte{3, 4}, 2, []protocol.StreamGapSource{{ID: 1, Records: 2}})
+	q.text(protocol.StreamServerMessage{Type: protocol.StreamServerTypeEvent, Event: "new sources"})
+	q.sourceFrame([]byte{5, 6}, 3, []protocol.StreamGapSource{{ID: 2, Records: 3}})
+	q.sourceFrame([]byte{7, 8}, 4, []protocol.StreamGapSource{{ID: 1, Records: 4}})
+	q.mu.Lock()
+	q.drop(0)
+	defer q.mu.Unlock()
+	var gaps []protocol.StreamGap
+	for _, item := range q.items {
+		if item.msg.Gap != nil {
+			gaps = append(gaps, *item.msg.Gap)
+		}
+	}
+	want := []protocol.StreamGap{
+		{Bytes: 4, Records: 3, Sources: []protocol.StreamGapSource{{ID: 1, Records: 2}, {ID: 2, Records: 1}}},
+		{Bytes: 4, Records: 7, Sources: []protocol.StreamGapSource{{ID: 1, Records: 4}, {ID: 2, Records: 3}}},
+	}
+	if !slices.EqualFunc(gaps, want, func(a, b protocol.StreamGap) bool {
+		return a.Bytes == b.Bytes && a.Records == b.Records && slices.Equal(a.Sources, b.Sources)
+	}) {
+		t.Fatalf("source-aware gaps = %+v, want %+v", gaps, want)
 	}
 }
 

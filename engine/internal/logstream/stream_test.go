@@ -146,12 +146,13 @@ func newFake(pods ...*corev1.Pod) (*fakeCluster, *fakeGraph) {
 }
 
 type capture struct {
-	mu          sync.Mutex
-	records     []record
-	statuses    []protocol.LogStreamStatus
-	statusTimes []time.Time
-	frames      [][]byte
-	changed     chan struct{}
+	mu           sync.Mutex
+	records      []record
+	statuses     []protocol.LogStreamStatus
+	statusTimes  []time.Time
+	frames       [][]byte
+	frameSources [][]protocol.StreamGapSource
+	changed      chan struct{}
 }
 
 func newCapture() *capture { return &capture{changed: make(chan struct{}, 1)} }
@@ -177,16 +178,44 @@ func decodeFrame(frame []byte) []record {
 	}
 	return out
 }
-func (c *capture) Frame(frame []byte, count int) {
+func (c *capture) Frame(frame []byte, count int, sources []protocol.StreamGapSource) {
 	records := decodeFrame(frame)
 	if len(records) != count {
 		panic("incorrect frame record count")
 	}
 	c.mu.Lock()
 	c.frames = append(c.frames, append([]byte(nil), frame...))
+	c.frameSources = append(c.frameSources, slices.Clone(sources))
 	c.records = append(c.records, records...)
 	c.mu.Unlock()
 	c.notify()
+}
+
+func TestLogFrameSourceTotals(t *testing.T) {
+	out := newCapture()
+	s := &stream{
+		out: out,
+		t:   Timing{FrameBytes: 33},
+		sources: map[int]*sourceEntry{
+			7: {source: protocol.LogSource{ID: 7}},
+			9: {source: protocol.LogSource{ID: 9}},
+		},
+		batch: []record{
+			{source: 9, time: 1, content: []byte("a")},
+			{source: 7, time: 2, content: []byte("b")},
+			{source: 9, time: 3, content: []byte("c")},
+		},
+	}
+	s.flushLocked()
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	want := [][]protocol.StreamGapSource{
+		{{ID: 7, Records: 1}, {ID: 9, Records: 1}},
+		{{ID: 9, Records: 1}},
+	}
+	if !reflect.DeepEqual(out.frameSources, want) {
+		t.Fatalf("frame source totals = %+v, want %+v", out.frameSources, want)
+	}
 }
 func (c *capture) snapshot() ([]record, protocol.LogStreamStatus) {
 	c.mu.Lock()

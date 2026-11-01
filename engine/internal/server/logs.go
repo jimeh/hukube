@@ -27,7 +27,9 @@ type logConsumer struct {
 	streamOutput[protocol.LogStreamStatus]
 }
 
-func (c logConsumer) Frame(frame []byte, records int)        { c.frame(frame, records) }
+func (c logConsumer) Frame(frame []byte, records int, sources []protocol.StreamGapSource) {
+	c.sourceFrame(frame, records, sources)
+}
 func (c logConsumer) Status(status protocol.LogStreamStatus) { c.event(status) }
 
 func init() {

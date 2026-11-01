@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { LogDocument, commonPodPrefix, formatLogTime, logOrigin } from "./log-document.ts";
 import { source, status } from "../../../../../packages/engine-client/src/log-test-fixtures.ts";
 
@@ -255,4 +255,61 @@ it("initializes the common Pod prefix from the first definitive live set", () =>
   doc.append([{ source: first.id, time: 0, text: "line" }]);
   doc.status({ ...status, sources: [first, second], pods: 2, followed: 2, loaded: 2 });
   expect(doc.rows[0]!.text).toBe("aaa line");
+});
+
+it("forks bounded candidates and atomically replaces rows, status, formatting, and loss state", () => {
+  const budgets = { lines: 3, characters: 1_000, decorations: 100 };
+  const doc = new LogDocument("pods", budgets);
+  doc.status(status);
+  doc.timestamps(true);
+  doc.append([
+    { source: source.id, time: 1_767_225_600_000, text: "one" },
+    { source: source.id, time: 1_767_225_601_000, text: "two" },
+    { source: source.id, time: 1_767_225_602_000, text: "three" },
+  ]);
+  doc.updateBudgets({ ...budgets, lines: 2 });
+  expect(doc.retentionLoss).toBe(true);
+
+  const fork = doc.fork();
+  const empty = doc.emptyFork();
+  expect(fork.rows.map(({ text }) => text)).toEqual(doc.rows.map(({ text }) => text));
+  expect(fork.retentionLoss).toBe(true);
+  expect(empty.rows).toEqual([]);
+  expect(empty.retentionLoss).toBe(false);
+  const replacementStatus = {
+    ...status,
+    sources: [{ ...source, instance: "run-2", error: "partial" }],
+  };
+  empty.status(replacementStatus);
+  empty.append([{ source: source.id, time: 1_767_225_603_000, text: "replacement" }]);
+  expect(empty.rows[0]!.text).toMatch(/replacement$/);
+
+  const changed = vi.fn<() => void>();
+  const unsubscribe = doc.subscribe(changed);
+  const revision = doc.revision;
+  const rewrites = doc.rewrites;
+  doc.replaceFrom(empty);
+  expect(changed).toHaveBeenCalledOnce();
+  expect(doc.revision).toBe(revision + 1);
+  expect(doc.rewrites).toBe(rewrites + 1);
+  expect(doc.rows.map(({ text }) => text)).toEqual([expect.stringMatching(/replacement$/)]);
+  expect(doc.displayedStatus).toBe(replacementStatus);
+  expect(doc.retentionLoss).toBe(false);
+  expect(empty.diagnostics()).toMatchObject({
+    entries: 0,
+    sources: 0,
+    currentSources: 0,
+    referencedSources: 0,
+    colors: 0,
+  });
+
+  fork.release();
+  expect(fork.diagnostics()).toMatchObject({
+    entries: 0,
+    sources: 0,
+    currentSources: 0,
+    referencedSources: 0,
+    colors: 0,
+  });
+  unsubscribe();
 });

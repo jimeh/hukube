@@ -23,6 +23,57 @@ interface KnownContainers {
   hasPrevious: boolean;
 }
 
+interface ReplayFingerprint {
+  value: string;
+  epochs: Set<string>;
+  sources: Map<number, { previous: boolean; instance: string }>;
+}
+
+interface PreviousReplay {
+  unchanged?: LogDocument;
+  replacement?: LogDocument;
+  remaining: Map<string, number>;
+  crossed: Map<string, number>;
+  epochs: Map<number, string>;
+  classified?: ReplayFingerprint;
+  mode?: "unchanged" | "replacement";
+  committed: boolean;
+}
+
+const sourceEpoch = (id: number, instance: string): string => JSON.stringify([id, instance]);
+
+function replayFingerprint(status: LogStreamStatus | undefined): ReplayFingerprint | undefined {
+  if (!status?.ready || status.loaded < status.followed) return undefined;
+  if (status.sources.some((source) => source.previous && !source.instance)) return undefined;
+  const sources = new Map<number, { previous: boolean; instance: string }>();
+  const epochs = new Set<string>();
+  const canonical = status.sources
+    .toSorted((a, b) => a.id - b.id)
+    .map((source) => {
+      const instance = source.previous ? (source.instance ?? "") : "";
+      sources.set(source.id, { previous: source.previous ?? false, instance });
+      if (source.previous) epochs.add(sourceEpoch(source.id, instance));
+      return [source.id, source.previous ?? false, instance] as const;
+    });
+  return { value: JSON.stringify(canonical), epochs, sources };
+}
+
+function provenReplayChange(status: LogStreamStatus, fingerprint: ReplayFingerprint): boolean {
+  return status.sources.some((source) => {
+    const expected = fingerprint.sources.get(source.id);
+    if (!expected) return false;
+    if ((source.previous ?? false) !== expected.previous) return true;
+    return !!source.previous && !!source.instance && source.instance !== expected.instance;
+  });
+}
+
+function integrityEnd(
+  reason: "ProtocolViolation" | "ReplayIncomplete",
+  message: string,
+): StreamEnd {
+  return { reason: "error", error: { code: "internal", reason, message } };
+}
+
 export interface LogStreamViewProps {
   target: Pick<ResourceAddress, "cluster" | "type" | "namespace" | "name">;
   uid?: string;
@@ -115,7 +166,6 @@ function LogRun({
   restart: () => void;
 }) {
   const engine = useEngine();
-  const [status, setStatus] = useState<LogStreamStatus>();
   const { containers } = known;
   const [state, setState] = useState<StreamState>("connecting");
   const [end, setEnd] = useState<StreamEnd>();
@@ -126,33 +176,123 @@ function LogRun({
   const { timestamps, wrap, budgets } = useLogSettings();
   const { cluster, type, namespace, name } = target;
   const [document] = useState(() => new LogDocument(type, budgets));
+  const replayCandidate = useRef<PreviousReplay | undefined>(undefined);
   useSyncExternalStore(document.subscribe, document.snapshot);
   const current = useEffectEvent(() => visible);
   const remember = useEffectEvent(setKnown);
+  const restartRun = useEffectEvent(restart);
   useEffect(() => {
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
-    // A previous run is sent whole on every socket. Track every logical record
-    // crossed on this run, including records retention discarded or a gap
-    // dropped, so a later socket skips that replayed prefix and appends only a
-    // tail the earlier socket did not reach.
-    let delivered = 0;
-    let replayPrefix = 0;
+    let handle: EngineStream | undefined;
     let pods: Map<string, string> | undefined;
-    const handle = engine.openStream(
+    let replay: PreviousReplay | undefined;
+    let baselineFingerprint = replayFingerprint(document.displayedStatus)?.value;
+    let baselineCounts = new Map<string, number>();
+    const releaseReplay = () => {
+      replay?.unchanged?.release();
+      replay?.replacement?.release();
+      replay?.remaining.clear();
+      replay?.crossed.clear();
+      replay?.epochs.clear();
+      if (replayCandidate.current === replay) replayCandidate.current = undefined;
+      replay = undefined;
+    };
+    const beginReplay = () => {
+      releaseReplay();
+      if (!previous) return;
+      replay = {
+        unchanged: document.fork(),
+        replacement: document.emptyFork(),
+        remaining: new Map(baselineCounts),
+        crossed: new Map(),
+        epochs: new Map(),
+        committed: false,
+      };
+      replayCandidate.current = replay;
+    };
+    const restartChangedReplay = () => {
+      if (!active) return;
+      releaseReplay();
+      active = false;
+      handle?.close();
+      restartRun();
+    };
+    const failIntegrity = (reason: "ProtocolViolation" | "ReplayIncomplete", message: string) => {
+      if (!active) return;
+      releaseReplay();
+      active = false;
+      handle?.close();
+      setState("ended");
+      setEnd(integrityEnd(reason, message));
+    };
+    const addCount = (counts: Map<string, number>, key: string, count: number): boolean => {
+      const next = (counts.get(key) ?? 0) + count;
+      if (!Number.isSafeInteger(next)) {
+        failIntegrity(
+          "ProtocolViolation",
+          "The previous-run replay count exceeded its safe range.",
+        );
+        return false;
+      }
+      counts.set(key, next);
+      return true;
+    };
+    const droppedMarker = (targetDocument: LogDocument, records: number) => {
+      targetDocument.marker(
+        `··· ${records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
+      );
+    };
+    const commitCandidate = (
+      candidate: PreviousReplay,
+      mode: "unchanged" | "replacement",
+      fingerprint: ReplayFingerprint,
+    ) => {
+      const next = mode === "unchanged" ? candidate.unchanged : candidate.replacement;
+      if (!next) {
+        failIntegrity("ProtocolViolation", "The previous-run replay candidate was unavailable.");
+        return;
+      }
+      baselineFingerprint = fingerprint.value;
+      baselineCounts = new Map(candidate.crossed);
+      candidate.classified = fingerprint;
+      candidate.mode = mode;
+      candidate.committed = true;
+      if (mode === "unchanged") {
+        candidate.replacement?.release();
+        candidate.replacement = undefined;
+        candidate.unchanged = undefined;
+      } else {
+        candidate.unchanged?.release();
+        candidate.unchanged = undefined;
+        candidate.replacement = undefined;
+      }
+      document.replaceFrom(next);
+    };
+    const commitUnchangedIfComplete = (candidate: PreviousReplay) => {
+      if (
+        !candidate.committed &&
+        candidate.mode === "unchanged" &&
+        candidate.classified &&
+        candidate.remaining.size === 0
+      )
+        commitCandidate(candidate, "unchanged", candidate.classified);
+    };
+    beginReplay();
+    handle = engine.openStream(
       "resource.logs",
       { cluster, type, namespace, name, uid: incarnation, container, previous },
       {
         state: (value) => {
           if (!active) return;
           setState(value);
-          if (value === "connecting" || value === "reconnecting")
-            replayPrefix = previous ? delivered : 0;
+          if (value === "reconnecting" || (value === "connecting" && !replay)) beginReplay();
+          else if (value === "paused") releaseReplay();
         },
         event: (value) => {
           if (!active) return;
-          document.status(value);
+          if (!previous) document.status(value);
           const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
           // A status can be ready before a slow Pod's containers are known.
           // Only one whose Pods are all loaded says who joined and who left.
@@ -165,51 +305,189 @@ function LogRun({
             }
             pods = next;
           }
-          setStatus(value);
           // The last status of a deleted Resource lists none, and the names stay.
           if (value.containers.length)
             remember({
               containers: value.containers,
               hasPrevious: value.sources.some((source) => source.previous),
             });
+          if (!previous) {
+            return;
+          }
+          const candidate = replay;
+          if (!candidate) {
+            failIntegrity(
+              "ProtocolViolation",
+              "The previous-run socket sent status outside a replay.",
+            );
+            return;
+          }
+          candidate.epochs.clear();
+          for (const source of value.sources)
+            if (source.instance) candidate.epochs.set(source.id, source.instance);
+          const fingerprint = replayFingerprint(value);
+          if (
+            candidate.classified &&
+            (provenReplayChange(value, candidate.classified) ||
+              (fingerprint && fingerprint.value !== candidate.classified.value))
+          ) {
+            restartChangedReplay();
+            return;
+          }
+          if (candidate.committed) {
+            document.status(value);
+            return;
+          }
+          candidate.unchanged?.status(value);
+          candidate.replacement?.status(value);
+          if (!fingerprint) return;
+          for (const epoch of candidate.crossed.keys())
+            if (!fingerprint.epochs.has(epoch)) {
+              restartChangedReplay();
+              return;
+            }
+          candidate.classified = fingerprint;
+          if (fingerprint.value !== baselineFingerprint) {
+            commitCandidate(candidate, "replacement", fingerprint);
+            return;
+          }
+          candidate.mode = "unchanged";
+          candidate.replacement?.release();
+          candidate.replacement = undefined;
+          commitUnchangedIfComplete(candidate);
         },
         data: (lines) => {
           if (!active) return;
-          const skipped = Math.min(replayPrefix, lines.length);
-          replayPrefix -= skipped;
-          const next = skipped ? lines.slice(skipped) : lines;
-          delivered += next.length;
-          if (next.length) document.append(next);
+          if (!previous) {
+            if (lines.length) document.append(lines);
+            return;
+          }
+          const candidate = replay;
+          if (!candidate) {
+            failIntegrity(
+              "ProtocolViolation",
+              "The previous-run socket sent data outside a replay.",
+            );
+            return;
+          }
+          const epochs: string[] = [];
+          for (const line of lines) {
+            const instance = candidate.epochs.get(line.source);
+            if (!instance) {
+              failIntegrity(
+                "ProtocolViolation",
+                "The previous-run socket sent a line before its source instance.",
+              );
+              return;
+            }
+            const epoch = sourceEpoch(line.source, instance);
+            if (candidate.classified && !candidate.classified.epochs.has(epoch)) {
+              restartChangedReplay();
+              return;
+            }
+            epochs.push(epoch);
+          }
+          if (candidate.committed) {
+            for (const epoch of epochs) if (!addCount(baselineCounts, epoch, 1)) return;
+            if (lines.length) document.append(lines);
+            return;
+          }
+          if (lines.length) candidate.replacement?.append(lines);
+          const suffix = [] as typeof lines;
+          for (let index = 0; index < lines.length; index++) {
+            const epoch = epochs[index]!;
+            if (!addCount(candidate.crossed, epoch, 1)) return;
+            const remaining = candidate.remaining.get(epoch) ?? 0;
+            if (remaining > 0) {
+              if (remaining === 1) candidate.remaining.delete(epoch);
+              else candidate.remaining.set(epoch, remaining - 1);
+            } else suffix.push(lines[index]!);
+          }
+          if (suffix.length) candidate.unchanged?.append(suffix);
+          commitUnchangedIfComplete(candidate);
         },
         gap: (gap) => {
           if (!active) return;
           if (!previous) {
-            document.marker(
-              `··· ${gap.records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
+            droppedMarker(document, gap.records);
+            return;
+          }
+          const candidate = replay;
+          if (!candidate || !gap.sources?.length) {
+            failIntegrity(
+              "ProtocolViolation",
+              "The previous-run socket sent a gap without source totals.",
             );
             return;
           }
-          let records = gap.records;
-          const skipped = Math.min(replayPrefix, records);
-          replayPrefix -= skipped;
-          records -= skipped;
-          delivered += records;
-          if (records)
-            document.marker(
-              `··· ${records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
-            );
+          const totals: { epoch: string; records: number }[] = [];
+          for (const source of gap.sources) {
+            const instance = candidate.epochs.get(source.id);
+            if (!instance) {
+              failIntegrity(
+                "ProtocolViolation",
+                "The previous-run socket sent a gap before its source instance.",
+              );
+              return;
+            }
+            const epoch = sourceEpoch(source.id, instance);
+            if (candidate.classified && !candidate.classified.epochs.has(epoch)) {
+              restartChangedReplay();
+              return;
+            }
+            totals.push({ epoch, records: source.records });
+          }
+          if (candidate.committed) {
+            for (const total of totals)
+              if (!addCount(baselineCounts, total.epoch, total.records)) return;
+            droppedMarker(document, gap.records);
+            return;
+          }
+          if (candidate.replacement) droppedMarker(candidate.replacement, gap.records);
+          let visibleRecords = 0;
+          for (const total of totals) {
+            if (!addCount(candidate.crossed, total.epoch, total.records)) return;
+            const remaining = candidate.remaining.get(total.epoch) ?? 0;
+            const skipped = Math.min(remaining, total.records);
+            const nextRemaining = remaining - skipped;
+            if (nextRemaining) candidate.remaining.set(total.epoch, nextRemaining);
+            else candidate.remaining.delete(total.epoch);
+            visibleRecords += total.records - skipped;
+          }
+          if (visibleRecords && candidate.unchanged)
+            droppedMarker(candidate.unchanged, visibleRecords);
+          commitUnchangedIfComplete(candidate);
         },
         end: (value) => {
-          if (active) setEnd(value);
+          if (!active) return;
+          if (!previous || value.reason === "error" || replay?.committed) {
+            releaseReplay();
+            setEnd(value);
+            return;
+          }
+          const classified = replay?.classified;
+          releaseReplay();
+          setEnd(
+            classified
+              ? integrityEnd(
+                  "ReplayIncomplete",
+                  "The previous-run replay ended before every retained source boundary was reached.",
+                )
+              : integrityEnd(
+                  "ProtocolViolation",
+                  "The previous-run replay ended before its source instances were complete.",
+                ),
+          );
         },
       },
     );
     stream.current = handle;
-    if (!current()) hiddenTimer.current = setTimeout(() => handle.pause(), 10_000);
+    if (!current()) hiddenTimer.current = setTimeout(() => handle?.pause(), 10_000);
     return () => {
       active = false;
+      releaseReplay();
       clearTimeout(hiddenTimer.current);
-      handle.close();
+      handle?.close();
       stream.current = undefined;
     };
   }, [engine, cluster, type, namespace, name, initialUid, container, previous, document]);
@@ -221,11 +499,16 @@ function LogRun({
   }, [visible]);
   useEffect(() => {
     document.updateBudgets(budgets);
+    replayCandidate.current?.unchanged?.updateBudgets(budgets);
+    replayCandidate.current?.replacement?.updateBudgets(budgets);
   }, [document, budgets]);
   useEffect(() => {
     document.timestamps(timestamps);
+    replayCandidate.current?.unchanged?.timestamps(timestamps);
+    replayCandidate.current?.replacement?.timestamps(timestamps);
   }, [document, timestamps]);
 
+  const status = document.displayedStatus;
   const sources = status?.sources ?? [];
   const count = sources.length;
   const one = count === 1;
@@ -233,7 +516,7 @@ function LogRun({
   const waiting = sources.filter((source) => source.state === "waiting");
   // An init container that completed is where it should be, not a problem to report.
   const initContainers = new Set(
-    containers.filter((item) => item.kind === "init").map((item) => item.name),
+    (status?.containers ?? []).filter((item) => item.kind === "init").map((item) => item.name),
   );
   const notRunning = sources.filter(
     (source) =>

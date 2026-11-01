@@ -1,10 +1,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,8 +26,9 @@ type streamLimits struct {
 var defaultStreamLimits = streamLimits{4 << 20, 1 << 20, 1024, 10 * time.Second, 10 * time.Second, 10 * time.Second}
 
 type streamOutput[E any] struct {
-	frame func([]byte, int)
-	event func(E)
+	frame       func([]byte, int)
+	sourceFrame func([]byte, int, []protocol.StreamGapSource)
+	event       func(E)
 }
 
 type streamHandler func(context.Context, *Server, json.RawMessage, *streamQueue) protocol.StreamEnd
@@ -43,7 +46,7 @@ func handleStream[P, E any](method protocol.Stream[P, E], handler func(context.C
 		if err != nil {
 			return streamError(err)
 		}
-		return handler(ctx, srv, p, streamOutput[E]{frame: q.frame, event: func(e E) {
+		return handler(ctx, srv, p, streamOutput[E]{frame: q.frame, sourceFrame: q.sourceFrame, event: func(e E) {
 			q.text(protocol.StreamServerMessage{Type: protocol.StreamServerTypeEvent, Event: e})
 		}})
 	}
@@ -56,6 +59,7 @@ func streamError(err error) protocol.StreamEnd {
 type streamItem struct {
 	data    []byte
 	records int
+	sources []protocol.StreamGapSource
 	msg     protocol.StreamServerMessage
 }
 
@@ -109,13 +113,25 @@ func (q *streamQueue) acknowledgeInput(total uint64) {
 }
 
 func (q *streamQueue) frame(data []byte, records int) {
+	q.enqueueFrame(data, records, nil)
+}
+
+func (q *streamQueue) sourceFrame(data []byte, records int, sources []protocol.StreamGapSource) {
+	q.enqueueFrame(data, records, sources)
+}
+
+func (q *streamQueue) enqueueFrame(data []byte, records int, sources []protocol.StreamGapSource) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.finished || q.overflow {
 		return
 	}
 	// A producer may reuse its buffer as soon as this call returns.
-	q.items = append(q.items, streamItem{data: append([]byte(nil), data...), records: records})
+	q.items = append(q.items, streamItem{
+		data:    append([]byte(nil), data...),
+		records: records,
+		sources: append([]protocol.StreamGapSource(nil), sources...),
+	})
 	q.bytes += len(data)
 	q.drop(q.limits.queue)
 	q.signal()
@@ -127,14 +143,23 @@ func (q *streamQueue) drop(bound int) {
 	gapAt := -1
 	for i := 0; q.bytes > bound && i < len(q.items); {
 		item := q.items[i]
-		if item.msg.Gap != nil && gapAt < 0 {
-			gapAt = i
-		}
 		if item.data == nil {
+			if item.msg.Gap != nil {
+				if gapAt < 0 || (len(q.items[gapAt].msg.Gap.Sources) > 0) != (len(item.msg.Gap.Sources) > 0) {
+					gapAt = i
+				}
+			} else if gapAt >= 0 && len(q.items[gapAt].msg.Gap.Sources) > 0 {
+				// A Log status introduces the socket-local IDs that follow it. A
+				// source-aware gap must never move before that status.
+				gapAt = -1
+			}
 			i++
 			continue
 		}
 		q.bytes -= len(item.data)
+		if gapAt >= 0 && (len(q.items[gapAt].msg.Gap.Sources) > 0) != (len(item.sources) > 0) {
+			gapAt = -1
+		}
 		if gapAt < 0 {
 			q.items[i] = streamItem{msg: protocol.StreamServerMessage{Type: protocol.StreamServerTypeGap, Gap: &protocol.StreamGap{}}}
 			q.texts++
@@ -147,8 +172,27 @@ func (q *streamQueue) drop(bound int) {
 		}
 		q.items[gapAt].msg.Gap.Bytes += uint64(len(item.data))
 		q.items[gapAt].msg.Gap.Records += uint64(item.records)
+		mergeGapSources(q.items[gapAt].msg.Gap, item.sources)
 	}
 	q.overflow = q.overflow || q.texts > q.limits.texts
+}
+
+func mergeGapSources(gap *protocol.StreamGap, sources []protocol.StreamGapSource) {
+	if len(sources) == 0 {
+		return
+	}
+	totals := make(map[int]uint64, len(gap.Sources)+len(sources))
+	for _, source := range gap.Sources {
+		totals[source.ID] += source.Records
+	}
+	for _, source := range sources {
+		totals[source.ID] += source.Records
+	}
+	gap.Sources = gap.Sources[:0]
+	for id, records := range totals {
+		gap.Sources = append(gap.Sources, protocol.StreamGapSource{ID: id, Records: records})
+	}
+	slices.SortFunc(gap.Sources, func(a, b protocol.StreamGapSource) int { return cmp.Compare(a.ID, b.ID) })
 }
 
 func (q *streamQueue) acknowledge(n uint64) bool {

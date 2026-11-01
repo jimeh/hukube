@@ -5,6 +5,12 @@ import { LogCodec } from "./log-codec.ts";
 
 import { frame, source, status } from "./log-test-fixtures.ts";
 
+const codecWithStatus = () => {
+  const codec = new LogCodec();
+  codec.event(status);
+  return codec;
+};
+
 it("decodes the Go golden frame, every flag, absent time, and invalid UTF-8", () => {
   const codec = new LogCodec();
   codec.event({
@@ -48,6 +54,89 @@ it("keeps source numbers and newest nanosecond cursors across sockets and suppre
   codec.beginSocket({ previous: true });
   codec.event({ ...status, sources: [{ ...source, id: 99, instance: "run2" }] });
   expect(codec.decode(frame(99, 4))).toHaveLength(1);
+});
+
+it("maps exact sorted gap totals from socket-local to stable source IDs", () => {
+  const codec = new LogCodec();
+  const other = { ...source, id: 9, podUid: "uid-2", pod: "web-b", container: "sidecar" };
+  const mapped = codec.event({
+    ...status,
+    sources: [other, source],
+    pods: 2,
+    followed: 2,
+    loaded: 2,
+  });
+  expect(mapped.sources.map(({ id }) => id)).toEqual([0, 1]);
+  expect(
+    codec.gap({
+      bytes: 100,
+      records: 5,
+      sources: [
+        { id: 7, records: 2 },
+        { id: 9, records: 3 },
+      ],
+    }),
+  ).toEqual({
+    bytes: 100,
+    records: 5,
+    sources: [
+      { id: 0, records: 3 },
+      { id: 1, records: 2 },
+    ],
+  });
+  codec.beginSocket();
+  codec.event({
+    ...status,
+    sources: [
+      { ...other, id: 3, instance: "run-2" },
+      { ...source, id: 4, instance: "run-2" },
+    ],
+    pods: 2,
+    followed: 2,
+    loaded: 2,
+  });
+  expect(codec.gap({ bytes: 2, records: 2, sources: [{ id: 4, records: 2 }] }).sources).toEqual([
+    { id: 1, records: 2 },
+  ]);
+});
+
+it("rejects absent, duplicate, unknown, unsafe, non-positive, and mismatched Log gap totals", () => {
+  expect(() => codecWithStatus().gap({ bytes: 1, records: 1 })).toThrow("no source totals");
+  expect(() =>
+    codecWithStatus().gap({
+      bytes: 1,
+      records: 2,
+      sources: [
+        { id: 7, records: 1 },
+        { id: 7, records: 1 },
+      ],
+    }),
+  ).toThrow("duplicate or invalid source ID");
+  expect(() =>
+    codecWithStatus().gap({ bytes: 1, records: 1, sources: [{ id: 99, records: 1 }] }),
+  ).toThrow("unknown source");
+  expect(() =>
+    codecWithStatus().gap({ bytes: 1, records: 0, sources: [{ id: 7, records: 1 }] }),
+  ).toThrow("record count");
+  expect(() =>
+    codecWithStatus().gap({ bytes: 1, records: 1, sources: [{ id: 7, records: 0 }] }),
+  ).toThrow("invalid source total");
+  expect(() =>
+    codecWithStatus().gap({
+      bytes: 1,
+      records: Number.MAX_SAFE_INTEGER + 1,
+      sources: [{ id: 7, records: Number.MAX_SAFE_INTEGER + 1 }],
+    }),
+  ).toThrow("record count");
+  expect(() =>
+    codecWithStatus().gap({ bytes: 1, records: 2, sources: [{ id: 7, records: 1 }] }),
+  ).toThrow("do not match records");
+
+  const pruned = codecWithStatus();
+  pruned.event({ ...status, sources: [], pods: 0, followed: 0, loaded: 0 });
+  expect(() => pruned.gap({ bytes: 1, records: 1, sources: [{ id: 7, records: 1 }] })).toThrow(
+    "unknown source",
+  );
 });
 it("stops resuming a container once a ready status no longer lists it", () => {
   const codec = new LogCodec();

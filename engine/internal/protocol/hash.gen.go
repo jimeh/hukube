@@ -4,4 +4,4 @@ package protocol
 
 // Hash identifies the protocol definition. The Engine sends it in Hello; a UI
 // with another value is of another build.
-const Hash = "cfa1d2aec227b000"
+const Hash = "6562996c1e4027fb"

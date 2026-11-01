@@ -9,6 +9,8 @@ import {
   type LogSource,
   type LogStreamParams,
   type LogStreamStatus,
+  type StreamGap,
+  type StreamGapSource,
 } from "./protocol.gen.ts";
 
 export interface LogLine {
@@ -69,6 +71,34 @@ export class LogCodec {
 
   params(params: LogStreamParams): LogStreamParams {
     return { ...params, resume: [...this.#cursors.values()] };
+  }
+
+  gap(gap: StreamGap): StreamGap {
+    if (!Number.isSafeInteger(gap.records) || gap.records <= 0)
+      throw new Error("Invalid Log Stream gap record count");
+    if (!Array.isArray(gap.sources) || gap.sources.length === 0)
+      throw new Error("Log Stream gap has no source totals");
+    const engineIds = new Set<number>();
+    const stableIds = new Set<number>();
+    const sources: StreamGapSource[] = [];
+    let total = 0;
+    for (const source of gap.sources) {
+      if (!Number.isSafeInteger(source.id) || source.id < 0 || engineIds.has(source.id))
+        throw new Error("Log Stream gap has a duplicate or invalid source ID");
+      if (!Number.isSafeInteger(source.records) || source.records <= 0)
+        throw new Error("Log Stream gap has an invalid source total");
+      const current = this.#sources.get(source.id);
+      if (!current) throw new Error("Log Stream gap has an unknown source");
+      if (stableIds.has(current.id)) throw new Error("Log Stream gap maps duplicate sources");
+      engineIds.add(source.id);
+      stableIds.add(current.id);
+      total += source.records;
+      if (!Number.isSafeInteger(total)) throw new Error("Log Stream gap source total is unsafe");
+      sources.push({ id: current.id, records: source.records });
+    }
+    if (total !== gap.records) throw new Error("Log Stream gap source totals do not match records");
+    sources.sort((a, b) => a.id - b.id);
+    return { ...gap, sources };
   }
 
   decode(buffer: ArrayBuffer): LogLine[] {

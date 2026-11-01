@@ -99,6 +99,28 @@ it("acknowledges stream bytes after the main-thread data listener returns", () =
   expect(worker.sent.at(-1)).toEqual({ kind: "stream-close", id: message.id });
 });
 
+it("forwards mapped gap metadata unchanged on the main thread", () => {
+  const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
+  const worker = FakeWorker.latest;
+  const gap = vi.fn<() => void>();
+  const stream = client.openStream(
+    "resource.logs",
+    { cluster: "c", type: "pods", name: "p", uid: "u" },
+    {
+      data: vi.fn<() => void>(),
+      event: vi.fn<() => void>(),
+      gap,
+      end: vi.fn<() => void>(),
+    },
+  );
+  const message = worker.sent[1]!;
+  if (message.kind !== "stream-open") throw new Error("missing stream-open");
+  const mapped = { bytes: 10, records: 2, sources: [{ id: 4, records: 2 }] };
+  worker.receive({ kind: "stream-gap", id: message.id, gap: mapped });
+  expect(gap).toHaveBeenCalledWith(mapped);
+  stream.close();
+});
+
 it("exposes structured errors and client-only disconnected errors", async () => {
   const client = new WorkerEngineClient({ url: "http://localhost", token: "t" });
   const worker = FakeWorker.latest;
