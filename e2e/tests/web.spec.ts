@@ -1,3 +1,4 @@
+import { assertLogFiltering } from "./logs.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -1730,6 +1731,7 @@ logTest(
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toContain("counter 0 from");
     await expect(newest).toBeVisible();
+    await assertLogFiltering(pod);
     await pod.getByRole("tab", { name: "YAML", exact: true }).click();
     await assertEditorKeys(page, pod, pod.locator(".monaco-editor:visible"));
     expect(await unexpectedEditorKeyBindings(page)).toEqual([]);

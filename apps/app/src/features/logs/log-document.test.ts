@@ -304,3 +304,138 @@ it("validates every preference before mutating formatting, budgets, rows or noti
     expect(doc.budgets).toEqual({ lines: 50000, characters: 32000000, decorations: 200000 });
   }
 });
+
+it("projects literal payload text with include AND exclude, Unicode case and literal whitespace", () => {
+  const doc = new LogDocument("pods");
+  doc.append(
+    ["Error Café", "error debug", " ERROR ", "   ", "[.*]"].map((text) => ({
+      source: 7,
+      time: 1,
+      text,
+    })),
+  );
+  const originals = [...doc.rows];
+  const show = (include = "", exclude = "", matchCase = false) => {
+    doc.filter({ include, exclude, matchCase });
+    return doc.visibleRows.map((row) => row.text);
+  };
+  expect(show("error", "debug")).toEqual(["Error Café", " ERROR "]);
+  expect(doc.retainedLines).toBe(5);
+  expect(doc.matchingLines).toBe(2);
+  expect(doc.projectedRows).toBe(2);
+  expect(show("CAFÉ")).toEqual(["Error Café"]);
+  expect(show("error", "", true)).toEqual(["error debug"]);
+  expect(show(" ")).toEqual(["Error Café", "error debug", " ERROR ", "   "]);
+  expect(show("[.*]")).toEqual(["[.*]"]);
+  expect(show("missing")).toEqual([]);
+  expect(doc.matchingLines).toBe(0);
+  expect(show()).toEqual(originals.map((row) => row.text));
+  expect(doc.visibleRows.every((row, i) => row === originals[i])).toBe(true);
+  expect(doc.rows).toEqual(originals);
+  expect(doc.nextSequence).toBe(5);
+  const revision = doc.filterRevision;
+  show();
+  expect(doc.filterRevision).toBe(revision);
+});
+
+it("never matches generated origin, time or cut suffix and always retains ordered notices and hidden cut counts", () => {
+  const doc = new LogDocument("pods");
+  doc.status({ ...status, sources: [source, { ...source, id: 8, container: "other" }] });
+  doc.timestamps(true);
+  doc.append([
+    { source: 7, time: 1, text: "red payload", cut: true, spans: [[0, 3, 1, -1, 0]] },
+    { source: 7, time: 1, text: "", gap: true },
+    { source: 7, time: 1, text: "Error", exited: true },
+    { source: 8, time: 1, text: "keep" },
+  ]);
+  doc.marker("overflow notice");
+  for (const include of ["constructor", ".001", "64 KiB", "log-fg-1", "not retained suffix"]) {
+    doc.filter({ include, exclude: "notice", matchCase: false });
+    expect(doc.visibleRows.map((row) => row.sequence)).toEqual([1, 2, 4]);
+    expect(doc.retainedLines).toBe(2);
+    expect(doc.retainedCutLines).toBe(1);
+    expect(doc.matchingLines).toBe(0);
+  }
+  doc.filter({ include: "payload", exclude: "", matchCase: false });
+  expect(doc.visibleRows.map((row) => row.sequence)).toEqual([0, 1, 2, 4]);
+  expect(doc.visibleRows[0]!.spans.some((span) => span.className === "log-fg-1")).toBe(true);
+  expect(doc.matchingLines).toBe(1);
+  doc.filter({ include: "", exclude: "", matchCase: false });
+  expect(doc.projectedRows).toBe(5);
+  expect(doc.matchingLines).toBe(2);
+});
+
+it.each(["lines", "characters", "decorations"] as const)(
+  "evicts hidden original rows under the %s budget and prunes only after their last retained reference",
+  (budget) => {
+    const doc = new LogDocument("pods");
+    doc.status(status);
+    doc.append(
+      ["one", "two", "six"].map((text) => ({
+        source: 7,
+        time: 0,
+        text,
+        spans: [[0, 1, 1, -1, 0]],
+      })),
+    );
+    doc.filter({ include: "one", exclude: "", matchCase: false });
+    doc.status({ ...status, sources: [{ ...source, id: 8, container: "new" }] });
+    doc.end();
+    expect(doc.retainedSources()).toEqual([7]);
+    expect(doc.sources.has(7)).toBe(true);
+    // Origin prefixes and decorations count even when every payload is hidden.
+    doc.updateBudgets({
+      lines: budget === "lines" ? 2 : 100,
+      characters: budget === "characters" ? 8 : 1000,
+      decorations: budget === "decorations" ? 2 : 100,
+    });
+    expect(doc.rows.map((row) => row.sequence)).toEqual([1, 2]);
+    expect(doc.visibleRows).toEqual([]);
+    expect(doc.retainedLines).toBe(2);
+    expect(doc.evictedLines).toBe(1);
+    expect(doc.retainedSources()).toEqual([7]);
+    doc.filter({ include: "", exclude: "", matchCase: false });
+    expect(doc.visibleRows.map((row) => row.text)).toEqual(["two", "six"]);
+    doc.clear();
+    expect(doc.retainedSources()).toEqual([]);
+    expect(doc.metadataSnapshot()).toEqual({ sources: 0, colors: 0, retained: 0 });
+    expect(doc.retainedLines).toBe(0);
+    expect(doc.retainedCutLines).toBe(0);
+    doc.append([{ source: 8, time: 0, text: "new" }]);
+    expect(doc.rows[0]!.sequence).toBe(3);
+  },
+);
+
+it("projects new batches and status/origin/timestamp rewrites without altering the predicate or retained identities", () => {
+  const doc = new LogDocument("deployments.apps", undefined, {
+    include: "keep",
+    exclude: "",
+    matchCase: false,
+  });
+  doc.status({ ...status, sources: [{ ...source, pod: "web-aaa" }] });
+  doc.append([
+    { source: 7, time: 1, text: "keep first" },
+    { source: 7, time: 1, text: "hidden", cut: true },
+  ]);
+  expect(doc.visibleRows.map((row) => row.sequence)).toEqual([0]);
+  doc.status({
+    ...status,
+    sources: [source, { ...source, id: 8, pod: "other-bbb", podUid: "new", container: "sidecar" }],
+  });
+  doc.timestamps(true);
+  expect(doc.visibleRows[0]!.text).toContain(".001 web-a/constructor keep first");
+  doc.append([{ source: 8, time: 1, text: "keep next" }]);
+  expect(doc.visibleRows.map((row) => row.sequence)).toEqual([0, 2]);
+  expect(doc.retainedLines).toBe(3);
+  expect(doc.matchingLines).toBe(2);
+  expect(doc.retainedCutLines).toBe(1);
+  const revision = doc.filterRevision;
+  doc.timestamps(false);
+  expect(doc.filterRevision).toBe(revision);
+  expect(doc.visibleRows.map((row) => row.sequence)).toEqual([0, 2]);
+  doc.updateBudgets({ ...doc.budgets, lines: 1 });
+  expect(doc.retainedCutLines).toBe(0);
+  expect(doc.retainedSources().toSorted((a, b) => a - b)).toEqual([7, 8]);
+  doc.end();
+  expect(doc.retainedSources()).toEqual([8]);
+});

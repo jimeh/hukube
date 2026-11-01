@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import { _electron as electron } from "@playwright/test";
 import { expect, test } from "../fixtures.ts";
 
+import { assertLogFiltering } from "./logs.ts";
+
 import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
 import { clusterId, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
@@ -233,6 +235,69 @@ test("runs an Exec Session and interrupts a foreground command with Ctrl+C", asy
       });
       await app.close();
     }
+    kubectl("delete", "namespace", namespace, "--wait=false");
+  }
+});
+
+test("filters retained Log Stream lines and searches the projection in the desktop Host", async () => {
+  test.setTimeout(90_000);
+  const namespace = `e2e-logs-desktop-${Date.now().toString(36)}`;
+  kubectl("create", "namespace", namespace);
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  try {
+    kubectlCreate({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { name: "e2e-logs-desktop", namespace },
+      spec: {
+        containers: [
+          {
+            name: "app",
+            image: "busybox:1.36",
+            command: [
+              "sh",
+              "-c",
+              "printf 'counter 0 from desktop\\ncounter 1 from desktop\\ncounter 2 from desktop\\n'; sleep 3600",
+            ],
+          },
+        ],
+      },
+    });
+    kubectl(
+      "-n",
+      namespace,
+      "wait",
+      "--for=condition=Ready",
+      "pod/e2e-logs-desktop",
+      "--timeout=60s",
+    );
+    app = await electron.launch({
+      executablePath: electronBinary,
+      args: [desktopDir, "--no-sandbox"],
+      env: {
+        ...process.env,
+        KUBECONFIG: kubeconfig,
+        HUKUBE_USER_DATA_DIR: mkdtempSync(join(tmpdir(), "hukube-e2e-logs-")),
+      },
+    });
+    const window = await app.firstWindow();
+    await window.getByRole("button", { name: new RegExp(clusterId) }).click();
+    await expect(window.getByText(/Kubernetes v\d/)).toBeVisible();
+    await openGoToResource(window);
+    await window
+      .getByRole("combobox", { name: "Go to Resource" })
+      .fill(`${namespace}/pods/e2e-logs-desktop`);
+    await window
+      .getByRole("option", { name: new RegExp(`^Pod e2e-logs-desktop ${namespace}$`) })
+      .click();
+    const panel = window.getByRole("tabpanel", { name: "e2e-logs-desktop", exact: true });
+    await panel.getByRole("tab", { name: "Logs", exact: true }).click();
+    await expect(panel.locator(".monaco-editor .view-lines")).toContainText(
+      "counter 2 from desktop",
+    );
+    await assertLogFiltering(panel);
+  } finally {
+    await app?.close();
     kubectl("delete", "namespace", namespace, "--wait=false");
   }
 });

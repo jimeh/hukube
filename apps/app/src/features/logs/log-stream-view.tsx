@@ -10,10 +10,20 @@ import { useEngine } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
 import { Button } from "@hukube/ui/components/button";
 import { cn } from "@hukube/ui/lib/utils";
-import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Notice } from "../resource/notice.tsx";
 import { LogDocument } from "./log-document.ts";
 import LogEditor, { type LogEditorHandle } from "./log-editor.tsx";
+import { emptyLogFilter, hasLogFilter } from "./log-filter.ts";
+import { LogFilters, useLogFilters, type LogFiltersState } from "./log-filters.tsx";
 import { LogLoading } from "./log-loading.tsx";
 import { useLogSettings } from "./log-settings.ts";
 import { LogToolbar } from "./log-toolbar.tsx";
@@ -33,6 +43,7 @@ export interface LogStreamViewProps {
 
 /** A Log Stream with no dependency on Resource tabs or Facets. */
 export default function LogStreamView({ target, uid, exists, kind, visible }: LogStreamViewProps) {
+  const filters = useLogFilters();
   const [container, setContainer] = useState("");
   const [previous, setPrevious] = useState(false);
   const [run, setRun] = useState(0);
@@ -56,6 +67,7 @@ export default function LogStreamView({ target, uid, exists, kind, visible }: Lo
   return (
     <LogRun
       key={JSON.stringify([container, previous, run])}
+      filters={filters}
       focus={focus}
       known={known}
       setKnown={setKnown}
@@ -95,7 +107,9 @@ function LogRun({
   focus,
   known,
   setKnown,
+  filters,
 }: LogStreamViewProps & {
+  filters: LogFiltersState;
   initialUid?: string;
   focus?: "container" | "previous";
   known: KnownContainers;
@@ -116,6 +130,14 @@ function LogRun({
   const hiddenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const editor = useRef<LogEditorHandle>(null);
   const toolbar = useRef<HTMLDivElement>(null);
+  const filterButton = useRef<HTMLButtonElement>(null);
+  const includeInput = useRef<HTMLInputElement>(null);
+  const filterId = useId();
+  const clearFilters = (returnFocus = false) => {
+    document.filter(emptyLogFilter);
+    filters.clear();
+    if (returnFocus) (filters.expanded ? includeInput : filterButton).current?.focus();
+  };
   const [acknowledgedLoss, setAcknowledgedLoss] = useState<{
     document: symbol;
     generation: number;
@@ -123,10 +145,14 @@ function LogRun({
   const { wrap } = useLogSettings();
   const { cluster, type, namespace, name } = target;
   const [document, documentIdentity] = useMemo(
-    () => [new LogDocument(type), Symbol()] as const,
+    // A new run must project its first batch with the already applied criteria.
+    () => [new LogDocument(type, undefined, filters.applied), Symbol()] as const,
+    // Filter edits update this document in place, never replace its editor or stream.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
     [type],
   );
   useSyncExternalStore(document.subscribe, document.snapshot);
+  useEffect(() => document.filter(filters.applied), [document, filters.applied]);
   useEffect(() => {
     const apply = () => {
       const settings = useLogSettings.getState();
@@ -234,6 +260,9 @@ function LogRun({
   const count = sources.length;
   const one = count === 1;
   const hasLines = document.rows.length > 0;
+  const hasProjection = document.projectedRows > 0;
+  const activeFilter = hasLogFilter(filters.applied);
+  const noMatches = document.retainedLines > 0 && document.matchingLines === 0;
   const [hadLines, setHadLines] = useState(false);
   if (hasLines && !hadLines) setHadLines(true);
   const waiting = sources.filter((source) => source.state === "waiting");
@@ -390,8 +419,49 @@ function LogRun({
         focus={focus}
         select={setContainer}
         setPrevious={setPrevious}
+        searchDisabled={!hasProjection}
         search={() => editor.current?.search()}
-      />
+        filterButton={
+          <Button
+            ref={filterButton}
+            variant="ghost"
+            aria-label="Filter"
+            aria-expanded={filters.expanded}
+            aria-controls={filterId}
+            onClick={() => {
+              if (filters.expanded) filterButton.current?.focus();
+              filters.setExpanded(!filters.expanded);
+            }}
+          >
+            Filter{activeFilter ? " · on" : ""}
+          </Button>
+        }
+      >
+        <LogFilters
+          filters={filters}
+          id={filterId}
+          includeRef={includeInput}
+          clear={() => clearFilters()}
+        />
+        {(activeFilter || filters.pending) && (
+          <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 border-t px-3 py-1 text-xs text-muted-foreground">
+            {activeFilter && (
+              <span>
+                {document.matchingLines.toLocaleString()} of{" "}
+                {document.retainedLines.toLocaleString()} retained lines match
+              </span>
+            )}
+            {filters.pending && <span>Applying filters…</span>}
+            {activeFilter && document.retainedCutLines > 0 && (
+              <span>
+                {document.retainedCutLines.toLocaleString()} retained{" "}
+                {document.retainedCutLines === 1 ? "line was" : "lines were"} cut. Removed text is
+                unavailable.
+              </span>
+            )}
+          </div>
+        )}
+      </LogToolbar>
       {notices.map((notice, index) => (
         <output
           key={index}
@@ -423,9 +493,22 @@ function LogRun({
             }}
           />
         )}
+      {noMatches && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+          <div className="min-w-0 flex-[1_1_12rem]">
+            <p>No matching lines</p>
+            <p className="text-xs text-muted-foreground">
+              Filters inspect retained line text. Stream notices stay visible.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => clearFilters(true)}>
+            Clear filters
+          </Button>
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         {hadLines && (
-          <div className="h-full" hidden={!hasLines}>
+          <div className="h-full" hidden={!hasProjection}>
             <LogEditor
               ref={editor}
               document={document}
