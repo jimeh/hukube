@@ -182,13 +182,15 @@ export function SettingsPage({
           </nav>
 
           <div className="min-w-0">
-            {category === "appearance" ? (
+            <div hidden={category !== "appearance"}>
               <AppearanceSettings />
-            ) : category === "logs" ? (
+            </div>
+            <div hidden={category !== "logs"}>
               <LogStreamSettings />
-            ) : (
+            </div>
+            <div hidden={category !== "overview"}>
               <OverviewSettings />
-            )}
+            </div>
           </div>
         </div>
       </div>
@@ -439,7 +441,14 @@ function LogStreamSettings() {
                   aria-invalid={!!error}
                   aria-describedby={`${helpId}${error ? ` ${errorId}` : ""}`}
                   onChange={(event) => {
-                    setDrafts((current) => ({ ...current, [name]: event.target.value }));
+                    const draft = event.target.value;
+                    setDrafts((current) => {
+                      const next = { ...current };
+                      const parsed = parseDecimalDraft(draft, range);
+                      if (!parsed.error && parsed.value === confirmed[name]) delete next[name];
+                      else next[name] = draft;
+                      return next;
+                    });
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
@@ -482,15 +491,21 @@ function LogStreamSettings() {
           >
             Reset section
           </Button>
-          <SaveStatus
-            scope="retention"
-            save={snapshot.saves.retention}
-            onRetry={(overwrite) => void store.retry("retention", overwrite)}
-            onUseCurrent={() => {
-              store.acceptCurrent("retention");
-              resetDrafts();
-            }}
-          />
+          {anyDirty &&
+          (snapshot.saves.retention.phase === "idle" ||
+            snapshot.saves.retention.phase === "saved") ? (
+            !invalid && <output className="text-xs text-muted-foreground">Unsaved changes</output>
+          ) : (
+            <SaveStatus
+              scope="retention"
+              save={snapshot.saves.retention}
+              onRetry={(overwrite) => void store.retry("retention", overwrite)}
+              onUseCurrent={() => {
+                store.acceptCurrent("retention");
+                resetDrafts();
+              }}
+            />
+          )}
         </div>
       </form>
 

@@ -12,6 +12,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import { useOpenClusters } from "@/features/clusters/open-clusters.ts";
@@ -97,12 +98,17 @@ async function mountPage(
   connection: ConnectionState = "open",
 ) {
   const harness = preferenceHarness(initial, connection);
+  let showCategory: ((category: SettingsCategory) => void) | undefined;
   const root = createRootRoute({ component: Outlet });
   const index = createRoute({ getParentRoute: () => root, path: "/", component: () => null });
   const settings = createRoute({
     getParentRoute: () => root,
     path: "/settings",
-    component: () => <SettingsPage category={category} fromCluster={fromCluster} />,
+    component: function SettingsHarness() {
+      const [activeCategory, setActiveCategory] = useState(category);
+      showCategory = setActiveCategory;
+      return <SettingsPage category={activeCategory} fromCluster={fromCluster} />;
+    },
   });
   const router = createRouter({
     routeTree: root.addChildren([index, settings]),
@@ -115,7 +121,12 @@ async function mountPage(
     </EngineProvider>,
   );
   await act(async () => {});
-  return harness;
+  return {
+    ...harness,
+    showCategory: async (next: SettingsCategory) => {
+      await act(async () => showCategory?.(next));
+    },
+  };
 }
 
 beforeEach(() => {
@@ -186,9 +197,37 @@ it("preserves invalid numeric drafts, sends no request, confirms reductions, and
   expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 10 } });
   expect(screen.getByText("Retained lines: Saved")).toBeDefined();
 
+  fireEvent.change(lines, { target: { value: "0" } });
+  expect(screen.queryByText("Retained lines: Saved")).toBeNull();
+  expect(screen.queryByText("Unsaved changes")).toBeNull();
+  expect(apply.hasAttribute("disabled")).toBe(true);
+
+  fireEvent.change(lines, { target: { value: "10" } });
+  expect(screen.getByText("Retained lines: Saved")).toBeDefined();
+  expect(apply.hasAttribute("disabled")).toBe(true);
+
   fireEvent.change(lines, { target: { value: "20" } });
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
   fireEvent.keyDown(lines, { key: "Escape" });
   expect(lines.getAttribute("value")).toBe("10");
+});
+
+it("keeps unapplied retention drafts while switching Settings categories", async () => {
+  const h = await mountPage("logs");
+  fireEvent.change(screen.getByRole("textbox", { name: /Retained lines/ }), {
+    target: { value: "60000" },
+  });
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
+
+  await h.showCategory("appearance");
+  expect(screen.getByRole("heading", { level: 2, name: "Appearance" })).toBeDefined();
+  await h.showCategory("logs");
+
+  expect(screen.getByRole("textbox", { name: /Retained lines/ }).getAttribute("value")).toBe(
+    "60000",
+  );
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
+  expect(h.puts).toHaveLength(0);
 });
 
 it("uses labelled display controls and persists their shared defaults", async () => {
