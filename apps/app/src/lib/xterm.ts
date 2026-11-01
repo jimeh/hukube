@@ -8,6 +8,7 @@ import { execKey } from "@/features/exec/keys.ts";
 import { copyText } from "@/features/edit/clipboard.ts";
 import { cssColor } from "@/features/resource/editor-theme.ts";
 import { isMac as mac } from "@/lib/platform.ts";
+import { fitWithSelection } from "@/lib/terminal-selection.ts";
 
 const channel = (color: string, at: number) => Number.parseInt(color.slice(at, at + 2), 16);
 
@@ -322,7 +323,7 @@ export function createExecTerminal(): ExecTerminal {
             return;
           const size = fit.proposeDimensions();
           if (!size || size.cols < 2 || size.rows < 2) return;
-          fit.fit();
+          fitWithSelection(terminal, () => fit.fit());
           sized = true;
           fitted?.();
         } catch {

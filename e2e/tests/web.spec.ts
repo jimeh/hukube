@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { resolve as resolvePath } from "node:path";
 
@@ -20,6 +20,7 @@ import {
   observePaneZoom,
   paneZoomExecScenario,
   paneZoomResourceScenario,
+  terminalSelectionScenario,
 } from "./pane-zoom.ts";
 
 const namespace = `e2e-${Date.now().toString(36)}`;
@@ -45,12 +46,19 @@ test.afterAll(() => {
 // setting keeps the DOM renderer, whose rows are text.
 const domRenderer = () => localStorage.setItem("hukube.terminal.renderer", "dom");
 
+test("Terminal selection survives real xterm fitting and rejects stale ranges", async ({
+  page,
+}) => {
+  await terminalSelectionScenario(page);
+});
+
 for (const scenario of ["Resources", "Exec and Logs"] as const) {
   test(`Pane zoom preserves ${scenario} across native layout saves`, async ({ page }) => {
     test.setTimeout(180_000);
     const ownNamespace = `e2e-zoom-${Date.now().toString(36)}`;
     kubectl("create", "namespace", ownNamespace);
     let engine: ChildProcess | undefined;
+    let dataDir: string | undefined;
     try {
       createPaneZoomResources(ownNamespace);
       // An isolated Engine owns this test's layout; earlier suite Tabs cannot alter Pane counts.
@@ -62,7 +70,7 @@ for (const scenario of ["Resources", "Exec and Logs"] as const) {
         portServer.close((error) => (error ? reject(error) : done())),
       );
       const root = resolvePath(import.meta.dirname, "../..");
-      const dataDir = mkdtempSync(resolvePath(root, ".data/e2e/pane-zoom-"));
+      dataDir = mkdtempSync(resolvePath(root, ".data/e2e/pane-zoom-"));
       const url = `http://127.0.0.1:${port}`;
       let logs = "";
       engine = spawn(
@@ -122,6 +130,7 @@ for (const scenario of ["Resources", "Exec and Logs"] as const) {
         await exited;
       }
       kubectl("delete", "namespace", ownNamespace, "--wait=false");
+      if (dataDir) rmSync(dataDir, { recursive: true, force: true });
     }
   });
 }

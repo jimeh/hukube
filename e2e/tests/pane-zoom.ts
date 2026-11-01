@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import type { fitWithSelection as FitWithSelection } from "../../apps/app/src/lib/terminal-selection.ts";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { clusterId, kubectl, kubectlCreate } from "./env.ts";
 import { openGoToResource } from "./exec.ts";
@@ -8,6 +12,391 @@ const resourceNames = [
   "zoom-long-title-with-many-characters",
 ] as const;
 export const zoomPod = "zoom-session";
+
+/** Real installed xterm: jsdom cannot exercise its browser selection service. */
+export async function terminalSelectionScenario(page: Page) {
+  const root = resolve(import.meta.dirname, "../..");
+  const appRequire = createRequire(resolve(root, "apps/app/package.json"));
+  const helper = execFileSync(
+    "bun",
+    ["build", "apps/app/src/lib/terminal-selection.ts", "--target=browser", "--format=esm"],
+    { cwd: root, encoding: "utf8" },
+  );
+  await page.setContent('<input id="focus"><div id="terminal"></div>');
+  await page.addScriptTag({ path: appRequire.resolve("@xterm/xterm") });
+  const results = await page.evaluate(
+    async (moduleUrl) => {
+      type Fit = typeof FitWithSelection;
+      type Terminal = Parameters<Fit>[0];
+      const { fitWithSelection } = (await import(moduleUrl)) as { fitWithSelection: Fit };
+      const { Terminal } = globalThis as unknown as {
+        Terminal: new (options: {
+          cols: number;
+          rows: number;
+          scrollback: number;
+          allowProposedApi: boolean;
+        }) => Terminal;
+      };
+      const currentLine = Array.from(
+        { length: 50 },
+        (_, i) => `token${String(i).padStart(3, "0")}|`,
+      ).join("");
+      const cases = [
+        {
+          name: "short",
+          text: "zero\r\nONE-selection\r\ntail",
+          x: 4,
+          y: 1,
+          length: 9,
+          expected: "selection",
+        },
+        {
+          name: "multiline",
+          text: "zero\r\nFIRST-line\r\nSECOND-line\r\ntail",
+          x: 2,
+          y: 1,
+          length: 25,
+          expected: "RST-line\nSECOND-",
+        },
+        {
+          name: "soft wraps",
+          text: "zero\r\n0123456789abcdefghijKLMNOPQRSTuvwxyz\r\ntail",
+          x: 5,
+          y: 1,
+          length: 27,
+          expected: "56789abcdefghijKLMNOPQRSTuv",
+        },
+        {
+          name: "Unicode and combining",
+          text: "zero\r\naé😀e\u0301界語-0123456789-WRAPPED-界-fin\r\ntail",
+          x: 1,
+          y: 1,
+          length: 32,
+          expected: "é😀e\u0301界語-0123456789-WRAPPED-界-fi",
+        },
+        {
+          name: "wide wrap padding",
+          text: "zero\r\n1234567890123456789界語-abc\r\ntail",
+          x: 15,
+          y: 1,
+          length: 10,
+          expected: "6789界語-",
+        },
+        {
+          name: "wide endpoint",
+          text: "zero\r\nabc界def\r\ntail",
+          x: 0,
+          y: 1,
+          length: 5,
+          expected: "abc界",
+        },
+        {
+          name: "retained scrollback",
+          text: Array.from({ length: 20 }, (_, i) => `history-${i}`).join("\r\n"),
+          x: 2,
+          y: 2,
+          length: 6,
+          expected: "story-",
+        },
+        {
+          name: "trimmed wrapped prefix",
+          text: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop\r\ntail\r\nlast",
+          x: 3,
+          y: 3,
+          length: 6,
+          expected: "BCDEFG",
+          scrollback: 5,
+          narrow: true,
+        },
+        {
+          name: "removed selection",
+          text: Array.from({ length: 20 }, (_, i) => `history-${i}`).join("\r\n"),
+          x: 2,
+          y: 0,
+          length: 6,
+          expected: "story-",
+          scrollback: 15,
+          removed: true,
+        },
+        {
+          name: "alternate buffer",
+          text: "\x1b[?1049hzero\r\nONE-selection\r\ntail",
+          x: 4,
+          y: 1,
+          length: 9,
+          expected: "selection",
+          heightOnly: true,
+        },
+        {
+          name: "retained cursor-line prefix",
+          text: "zero\r\nKEEP-retained-longtail",
+          x: 0,
+          y: 1,
+          length: 4,
+          expected: "KEEP",
+          crop: true,
+        },
+        {
+          name: "retained alternate prefix",
+          text: "\x1b[?1049hzero\r\nKEEP-retained-longtail",
+          x: 0,
+          y: 1,
+          length: 4,
+          expected: "KEEP",
+          crop: true,
+        },
+        {
+          name: "alternate row shifts",
+          text: "\x1b[?1049hzero\r\none\r\ntwo\r\nKEEP-me\r\nfour\r\nfive",
+          x: 0,
+          y: 3,
+          length: 4,
+          expected: "KEEP",
+          shift: true,
+        },
+        {
+          name: "spaces at wrap boundary",
+          text: "one two three four  next-word\r\ntail",
+          x: 0,
+          y: 0,
+          length: 29,
+          expected: "one two three four  next-word",
+        },
+        {
+          name: "reset during fit",
+          text: "zero\r\nONE-selection\r\ntail",
+          x: 4,
+          y: 1,
+          length: 9,
+          expected: "selection",
+          reset: true,
+          removed: true,
+        },
+        {
+          name: "buffer switch",
+          text: "zero\r\nONE-selection\r\ntail",
+          x: 4,
+          y: 1,
+          length: 9,
+          expected: "selection",
+          switchBuffer: true,
+          removed: true,
+        },
+        {
+          name: "intentional clear",
+          text: "zero\r\nONE-selection\r\ntail",
+          x: 4,
+          y: 1,
+          length: 9,
+          expected: "selection",
+          clear: true,
+          removed: true,
+        },
+        {
+          name: "no selection",
+          text: "zero\r\nONE-selection\r\ntail",
+          x: 4,
+          y: 1,
+          length: 0,
+          expected: "",
+          removed: true,
+        },
+        {
+          name: "current-line retained physical row",
+          text: currentLine,
+          x: 0,
+          y: 8,
+          length: 9,
+          expected: "n044|toke",
+          scrollback: 5,
+          crop: true,
+        },
+        {
+          name: "current-line retained text with cropped empty cells",
+          text: "zero\r\nKEEP",
+          x: 0,
+          y: 1,
+          length: 20,
+          expected: "KEEP",
+          crop: true,
+        },
+        {
+          name: "current-line cropped endpoint",
+          text: currentLine,
+          x: 3,
+          y: 8,
+          length: 10,
+          expected: "4|token045",
+          scrollback: 5,
+          crop: true,
+          removed: true,
+        },
+        {
+          name: "current-line cropped across physical rows",
+          text: "1234567890abcdefghij".repeat(20),
+          x: 9,
+          y: 7,
+          length: 21,
+          expected: "0abcdefghij1234567890",
+          scrollback: 5,
+          crop: true,
+          removed: true,
+        },
+        {
+          name: "current-line duplicate retained row",
+          text: "12345678901234567890".repeat(20),
+          x: 0,
+          y: 8,
+          length: 9,
+          expected: "123456789",
+          scrollback: 5,
+          crop: true,
+        },
+        {
+          name: "current-line cropped duplicate",
+          text: "a".repeat(400),
+          x: 3,
+          y: 2,
+          length: 10,
+          expected: "aaaaaaaaaa",
+          scrollback: 5,
+          crop: true,
+          removed: true,
+        },
+        {
+          name: "alternate retained multiline rows",
+          text: "\x1b[?1049hzero\r\nFIRST-line\r\nSECOND-line\r\ntail",
+          x: 2,
+          y: 1,
+          length: 25,
+          expected: "RST-line\nSECOND-",
+          crop: true,
+        },
+        {
+          name: "current-line Unicode physical endpoints",
+          text: "é界e\u0301-0123456789ABCDE".repeat(20),
+          x: 0,
+          y: 8,
+          length: 4,
+          expected: "é界e\u0301",
+          scrollback: 5,
+          crop: true,
+        },
+        {
+          name: "current-line cropped wide endpoint",
+          text: "123456789界-01234567".repeat(20),
+          x: 9,
+          y: 8,
+          length: 2,
+          expected: "界",
+          scrollback: 5,
+          crop: true,
+          removed: true,
+        },
+      ];
+      const casesRead = [];
+      for (const scenario of cases) {
+        const terminal = new Terminal({
+          cols: 20,
+          rows: 6,
+          scrollback: scenario.scrollback ?? 100,
+          allowProposedApi: true,
+        });
+        terminal.open(document.getElementById("terminal")!);
+        const write = (text: string) => new Promise<void>((done) => terminal.write(text, done));
+        await write(scenario.text);
+        terminal.select(scenario.x, scenario.y, scenario.length);
+        const before = terminal.getSelection();
+        const range = terminal.getSelectionPosition();
+        if (scenario.clear) terminal.clearSelection();
+        if (scenario.switchBuffer) await write("\x1b[?1049hOTHER-BUFFER");
+        document.getElementById("focus")!.focus();
+        const input: string[] = [];
+        terminal.onData((data) => input.push(data));
+        const states = [];
+        const sizes = scenario.shift
+          ? [
+              [20, 3],
+              [20, 6],
+            ]
+          : scenario.crop
+            ? [
+                [10, 6],
+                [20, 6],
+              ]
+            : scenario.removed
+              ? [
+                  [5, 3],
+                  [20, 6],
+                ]
+              : scenario.narrow
+                ? [
+                    [10, 6],
+                    [20, 6],
+                  ]
+                : scenario.heightOnly
+                  ? [
+                      [30, 8],
+                      [20, 6],
+                    ]
+                  : [
+                      [31, 8],
+                      [13, 5],
+                      [40, 9],
+                      [20, 6],
+                    ];
+        for (const [cols, rows] of sizes) {
+          fitWithSelection(terminal, () => {
+            if (scenario.reset) terminal.reset();
+            terminal.resize(cols!, rows!);
+          });
+          if (scenario.name === "current-line duplicate retained row") {
+            const retainedRange = terminal.getSelectionPosition();
+            if (retainedRange?.start.y !== scenario.y || retainedRange.start.x !== scenario.x)
+              throw new Error("Duplicate text moved the selection to another row");
+          }
+          const clipboardData = new DataTransfer();
+          terminal.textarea!.dispatchEvent(
+            new ClipboardEvent("copy", { bubbles: true, clipboardData }),
+          );
+          states.push({
+            text: terminal.getSelection(),
+            copied: clipboardData.getData("text/plain"),
+            markers: terminal.markers.length,
+            focus: document.activeElement?.id,
+          });
+        }
+        casesRead.push({
+          name: scenario.name,
+          before,
+          range,
+          expected: scenario.expected,
+          after: scenario.removed ? "" : before,
+          states,
+          input,
+        });
+        terminal.dispose();
+      }
+      return casesRead;
+    },
+    `data:text/javascript;base64,${Buffer.from(helper).toString("base64")}`,
+  );
+  expect(results).toHaveLength(27);
+  for (const result of results) {
+    expect(result.before, result.name).toBe(result.expected);
+    expect(result.input, result.name).toEqual([]);
+    for (const state of result.states) {
+      expect(state, result.name).toEqual({
+        text: result.after,
+        copied: result.after,
+        markers: 0,
+        focus: "focus",
+      });
+    }
+  }
+  expect(results[0]!.range).toEqual({ start: { x: 4, y: 1 }, end: { x: 13, y: 1 } });
+  return results;
+}
 
 /** Called only inside leased E2E tests, never by collection or static checks. */
 export function createPaneZoomResources(namespace: string) {
@@ -445,6 +834,7 @@ export async function paneZoomExecScenario(
   await tab(page, title).click();
   await go(page, namespace, "configmaps", resourceNames[1]);
   await tab(page, title).click();
+  await paneZoomTerminalSelection(page, session, input, title, wire);
   const logEditor = pod.locator(".monaco-editor:visible");
   const logSelection = await captureDraft(page, logEditor);
   const selectedLogText = () =>
@@ -643,4 +1033,110 @@ export async function paneZoomExecScenario(
   );
   expect(await logModel.evaluate(({ editor, model }) => editor.getModel() === model)).toBe(true);
   await logModel.dispose();
+}
+
+async function paneZoomTerminalSelection(
+  page: Page,
+  session: Locator,
+  input: Locator,
+  title: string,
+  wire: ReturnType<typeof observePaneZoom>,
+) {
+  const screen = session.locator(".xterm-rows");
+  const selected = "ZOOM_SELECTION_abcdefghijk";
+  await expect(async () => {
+    await input.focus();
+    await input.pressSequentially("stty -echo; printf '\\nZOOM_SELECTION_%s\\n' abcdefghijk");
+    await input.press("Enter");
+    await expect(screen).toContainText(selected, { timeout: 3000 });
+  }).toPass();
+  const line = screen.locator(":scope > div").filter({ hasText: selected }).last();
+  const box = (await line.boundingBox())!;
+  const ownStream = wire.streams.find(
+    (stream) => stream.method === "pod.exec" && stream.params?.["pod"] === zoomPod,
+  )!;
+  const sizes = () => ownStream.sent.filter((frame) => frame.type === "resize");
+  const cols = (sizes().at(-1)?.cols ?? ownStream.params?.["cols"]) as number;
+  const cellWidth = box.width / cols;
+  await page.mouse.move(box.x + 1, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + selected.length * cellWidth + 1, box.y + box.height / 2, {
+    steps: 15,
+  });
+  await page.mouse.up();
+  // A fresh native copy event uses xterm's real selection and cannot read or
+  // change the user's clipboard. A stale copied value cannot pass this check.
+  const copy = () =>
+    input.evaluate((element) => {
+      const clipboardData = new DataTransfer();
+      element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, clipboardData }));
+      return clipboardData.getData("text/plain");
+    });
+  await expect.poll(copy).toBe(selected);
+  const terminal = await session.locator(".xterm").elementHandle();
+  const streams = wire.streams.filter((stream) => stream.method === "pod.exec").length;
+  const ends = wire.control.filter((frame) => frame.method === "exec.end").length;
+  const own = pane(page, title);
+  const viewport = page.viewportSize();
+  for (const operation of [
+    "save",
+    "zoom",
+    "zoomed save",
+    "restore",
+    "hide/reveal",
+    "viewport",
+  ] as const) {
+    const save = wire.saved.length;
+    const resized = sizes().length;
+    if (operation === "save" || operation === "zoomed save") {
+      await tab(page, resourceNames[1]).click();
+      await page
+        .getByRole("tabpanel", { name: resourceNames[1], exact: true })
+        .getByRole("tab", { name: operation === "save" ? "YAML" : "Overview", exact: true })
+        .click();
+      await tab(page, title).click();
+    } else if (operation === "hide/reveal") {
+      await pane(page, "pods").getByRole("button", { name: "Zoom Pane" }).click();
+      await expect(session).toBeHidden();
+      await page.getByRole("button", { name: "Restore Panes" }).click();
+      await expect(input).toBeVisible();
+    } else if (operation === "viewport") {
+      await page.setViewportSize({ width: 1300, height: 800 });
+    } else {
+      await own
+        .getByRole("button", { name: operation === "zoom" ? "Zoom Pane" : "Restore Panes" })
+        .click();
+    }
+    if (operation === "zoom" || operation === "restore" || operation === "viewport") {
+      await expect.poll(() => sizes().length).toBeGreaterThan(resized);
+      expect(sizes().slice(resized)).toHaveLength(1);
+    }
+    if (operation === "zoom" || operation === "restore") {
+      await expect(
+        own.getByRole("button", {
+          name: operation === "zoom" ? "Restore Panes" : "Zoom Pane",
+        }),
+      ).toBeFocused();
+    }
+    if (operation === "save" || operation === "zoomed save") await wire.nextSave(save);
+    await expect.poll(copy, { message: `terminal selection after ${operation}` }).toBe(selected);
+    if (operation === "save" || operation === "zoomed save" || operation === "hide/reveal") {
+      expect(sizes()).toHaveLength(resized);
+    }
+    expect(await terminal.evaluate((element) => element.isConnected)).toBe(true);
+    expect(wire.streams.filter((stream) => stream.method === "pod.exec")).toHaveLength(streams);
+    expect(ownStream.closed).toBe(false);
+    expect(wire.control.filter((frame) => frame.method === "exec.end")).toHaveLength(ends);
+  }
+  if (viewport) {
+    const resized = sizes().length;
+    await page.setViewportSize(viewport);
+    await expect.poll(() => sizes().length).toBeGreaterThan(resized);
+    await expect.poll(copy).toBe(selected);
+  }
+  await terminal.dispose();
+  // Typing intentionally clears selection. Later fitting must not resurrect it.
+  await input.focus();
+  await input.press("ArrowLeft");
+  await expect.poll(copy).toBe("");
 }

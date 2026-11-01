@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -27,6 +27,7 @@ for (const scenario of ["Resources", "Exec and Logs"] as const) {
     const namespace = `e2e-zoom-desktop-${Date.now().toString(36)}`;
     kubectl("create", "namespace", namespace);
     let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+    const profile = mkdtempSync(join(tmpdir(), "hukube-zoom-e2e-"));
     try {
       createPaneZoomResources(namespace);
       app = await electron.launch({
@@ -35,7 +36,7 @@ for (const scenario of ["Resources", "Exec and Logs"] as const) {
         env: {
           ...process.env,
           KUBECONFIG: kubeconfig,
-          HUKUBE_USER_DATA_DIR: mkdtempSync(join(tmpdir(), "hukube-zoom-e2e-")),
+          HUKUBE_USER_DATA_DIR: profile,
         },
       });
       const window = await app.firstWindow();
@@ -61,10 +62,11 @@ for (const scenario of ["Resources", "Exec and Logs"] as const) {
       const child = app?.process();
       if (child && child.exitCode === null && child.signalCode === null) {
         const exited = once(child, "exit");
-        child.kill("SIGTERM");
+        child.kill("SIGKILL");
         await exited;
       }
       kubectl("delete", "namespace", namespace, "--wait=false");
+      rmSync(profile, { recursive: true, force: true });
     }
   });
 }
