@@ -1,5 +1,6 @@
 import { useConnectionState } from "@hukube/engine-client/react";
 
+import { clusterStatusPresentation } from "./cluster-status.ts";
 import { useWorkspace } from "./workspace-context.tsx";
 
 const connectionLabels = {
@@ -17,9 +18,7 @@ export function StatusBar() {
   const clusterText =
     status?.phase === "ready"
       ? `Kubernetes ${status.serverVersion ?? ""}`.trim()
-      : status?.phase === "failed"
-        ? `Cannot reach the cluster: ${status.message ?? "unknown error"}`
-        : "Connecting to the cluster";
+      : (clusterStatusPresentation(status)?.statusText ?? "Connecting to the Cluster");
 
   return (
     <footer className="flex h-6 shrink-0 items-center gap-3 bg-cluster px-3 text-xs text-cluster-foreground">

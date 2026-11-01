@@ -330,10 +330,10 @@ function LogStreamSettings() {
   const prefix = useId();
   const confirmed = snapshot.effective.logStreams;
   const [drafts, setDrafts] = useState<Partial<Record<BudgetName, string>>>({});
-  const [reduction, setReduction] = useState<{
-    changes: readonly PreferenceChange[];
-    clearDrafts: boolean;
-  }>();
+  const [reduction, setReduction] = useState<
+    | { kind: "save"; changes: readonly PreferenceChange[]; clearDrafts: boolean }
+    | { kind: "retry"; paths: readonly PreferencePath[]; overwrite: boolean }
+  >();
   const values = {
     maxLines: drafts.maxLines ?? String(confirmed.maxLines),
     maxCharacters: drafts.maxCharacters ?? String(confirmed.maxCharacters),
@@ -354,6 +354,23 @@ function LogStreamSettings() {
     setDrafts({});
   };
 
+  const reconcileConfirmedDrafts = (paths: readonly PreferencePath[]) => {
+    setDrafts((current) => {
+      const next = { ...current };
+      const latest = store.getSnapshot().effective.logStreams;
+      for (const path of paths) {
+        const name = path.split(".")[1] as BudgetName;
+        const draft = current[name];
+        if (
+          draft !== undefined &&
+          parseDecimalDraft(draft, logPreferenceRanges[name]).value === latest[name]
+        )
+          delete next[name];
+      }
+      return next;
+    });
+  };
+
   const persist = (changes: readonly PreferenceChange[], clearDrafts = false) => {
     void store.save("retention", changes).then(() => {
       if (store.getSnapshot().saves.retention.phase !== "saved") return;
@@ -361,20 +378,7 @@ function LogStreamSettings() {
         resetDrafts();
         return;
       }
-      setDrafts((current) => {
-        const next = { ...current };
-        const latest = store.getSnapshot().effective.logStreams;
-        for (const { path } of changes) {
-          const name = path.split(".")[1] as BudgetName;
-          const draft = current[name];
-          if (
-            draft !== undefined &&
-            parseDecimalDraft(draft, logPreferenceRanges[name]).value === latest[name]
-          )
-            delete next[name];
-        }
-        return next;
-      });
+      reconcileConfirmedDrafts(changes.map(({ path }) => path));
     });
   };
   const saveChanges = (changes: readonly PreferenceChange[], clearDrafts = false) => {
@@ -383,8 +387,25 @@ function LogStreamSettings() {
       const effectiveValue = typeof value === "number" ? value : logPreferenceDefaults[name];
       return effectiveValue < confirmed[name];
     });
-    if (isReduction) setReduction({ changes, clearDrafts });
+    if (isReduction) setReduction({ kind: "save", changes, clearDrafts });
     else persist(changes, clearDrafts);
+  };
+  const retry = (paths: readonly PreferencePath[], overwrite: boolean) => {
+    void store.retry("retention", overwrite).then(() => {
+      if (store.getSnapshot().saves.retention.phase === "saved") reconcileConfirmedDrafts(paths);
+    });
+  };
+  const retryChanges = (overwrite: boolean) => {
+    const paths = snapshot.saves.retention.paths ?? [];
+    const isReduction = paths.some((path) => {
+      const name = path.split(".")[1] as BudgetName;
+      const draft = drafts[name];
+      const intended =
+        draft === undefined ? undefined : parseDecimalDraft(draft, logPreferenceRanges[name]).value;
+      return intended !== undefined && intended < confirmed[name];
+    });
+    if (isReduction) setReduction({ kind: "retry", paths, overwrite });
+    else retry(paths, overwrite);
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -499,7 +520,7 @@ function LogStreamSettings() {
             <SaveStatus
               scope="retention"
               save={snapshot.saves.retention}
-              onRetry={(overwrite) => void store.retry("retention", overwrite)}
+              onRetry={retryChanges}
               onUseCurrent={() => {
                 store.acceptCurrent("retention");
                 resetDrafts();
@@ -590,7 +611,8 @@ function LogStreamSettings() {
               onClick={() => {
                 const pending = reduction;
                 setReduction(undefined);
-                if (pending) persist(pending.changes, pending.clearDrafts);
+                if (pending?.kind === "save") persist(pending.changes, pending.clearDrafts);
+                else if (pending) retry(pending.paths, pending.overwrite);
               }}
             >
               Apply lower limits

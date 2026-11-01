@@ -23,6 +23,7 @@ interface PreferenceHarness {
   client: EngineClient;
   puts: SettingPut[];
   value(): unknown;
+  conflictNextPut(value: unknown): void;
 }
 
 function preferenceHarness(
@@ -32,6 +33,8 @@ function preferenceHarness(
   let value = initial;
   let revisionNumber = 1;
   let revision = "r1";
+  let conflictingValue: unknown;
+  let hasConflictingValue = false;
   const puts: SettingPut[] = [];
   const watches: {
     closed: boolean;
@@ -76,6 +79,11 @@ function preferenceHarness(
     },
     request: async (_method: string, params: SettingPut) => {
       puts.push(params);
+      if (hasConflictingValue) {
+        const next = conflictingValue;
+        hasConflictingValue = false;
+        publish(params.key, next);
+      }
       if (params.ifRevision !== revision)
         throw new EngineRequestError({ code: "conflict", message: "changed" });
       publish(params.key, params.value);
@@ -88,7 +96,15 @@ function preferenceHarness(
     },
     close: () => {},
   } as unknown as EngineClient;
-  return { client, puts, value: () => value };
+  return {
+    client,
+    puts,
+    value: () => value,
+    conflictNextPut: (next) => {
+      conflictingValue = next;
+      hasConflictingValue = true;
+    },
+  };
 }
 
 async function mountPage(
@@ -228,6 +244,44 @@ it("keeps unapplied retention drafts while switching Settings categories", async
   );
   expect(screen.getByText("Unsaved changes")).toBeDefined();
   expect(h.puts).toHaveLength(0);
+});
+
+it("finishes a stale retention retry as Saved without leaving confirmed drafts dirty", async () => {
+  const h = await mountPage("logs");
+  const lines = screen.getByRole("textbox", { name: /Retained lines/ });
+  const apply = screen.getByRole("button", { name: /^Apply$/ });
+  fireEvent.change(lines, { target: { value: "60000" } });
+  h.conflictNextPut({ version: 1, logStreams: { maxLines: 55_000 } });
+
+  fireEvent.click(apply);
+  await screen.findByText(/Not saved: changed in another window/);
+  expect(lines.getAttribute("value")).toBe("60000");
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
+  await screen.findByText("Retained lines: Saved");
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 60_000 } });
+  expect(lines.getAttribute("value")).toBe("60000");
+  expect(apply.hasAttribute("disabled")).toBe(true);
+  expect(screen.queryByText("Unsaved changes")).toBeNull();
+});
+
+it("confirms a stale retry that would reduce the current retention budget", async () => {
+  const h = await mountPage("logs");
+  const lines = screen.getByRole("textbox", { name: /Retained lines/ });
+  fireEvent.change(lines, { target: { value: "60000" } });
+  h.conflictNextPut({ version: 1, logStreams: { maxLines: 65_000 } });
+
+  fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
+  await screen.findByText(/Not saved: changed in another window/);
+  fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
+
+  const dialog = screen.getByRole("alertdialog", {
+    name: "Reduce retained Log Stream entries?",
+  });
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 65_000 } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  await screen.findByText("Retained lines: Saved");
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 60_000 } });
 });
 
 it("uses labelled display controls and persists their shared defaults", async () => {

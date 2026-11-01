@@ -144,6 +144,7 @@ const (
 type ClusterStatus struct {
 	Phase         ClusterPhase `json:"phase"`
 	Message       string       `json:"message,omitempty"`
+	Error         *ErrorDetail `json:"error,omitempty"`
 	ServerVersion string       `json:"serverVersion,omitempty"`
 }
 
