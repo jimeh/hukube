@@ -56,6 +56,83 @@ function fieldHarness() {
   };
 }
 
+it.each<NumericField>(["maxLines", "maxCharacters", "maxDecorations"])(
+  "leaves composing Enter uncancelled and unsent for %s, then commits ordinary Enter once",
+  async (field) => {
+    const h = fieldHarness();
+    const view = render(
+      <EngineProvider client={h.engine}>
+        <PreferenceField field={field} />
+      </EngineProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+      const input = view.container.querySelector("input")!;
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: "1" } });
+      const composing = new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      fireEvent(input, composing);
+      expect(h.put).not.toHaveBeenCalled();
+      expect(composing.defaultPrevented).toBe(false);
+      expect(h.store.getSnapshot().drafts[field]?.status).toBe("Not saved");
+      fireEvent.compositionEnd(input);
+      expect(h.put).not.toHaveBeenCalled();
+      const enter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: false,
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => fireEvent(input, enter));
+      expect(enter.defaultPrevented).toBe(true);
+      expect(h.put).toHaveBeenCalledTimes(1);
+      expect(h.put.mock.calls[0]![1].value.logStreams?.[field]).toBe(1);
+      await vi.waitFor(() => expect(h.store.getSnapshot().values[field]).toBe(1));
+      expect(h.put).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      h.store.dispose();
+    }
+  },
+);
+
+it("does not expand numeric syntax while allowing composition confirmation", async () => {
+  const h = fieldHarness();
+  const view = render(
+    <EngineProvider client={h.engine}>
+      <PreferenceField field="maxLines" />
+    </EngineProvider>,
+  );
+  try {
+    await vi.waitFor(() => expect(h.store.getSnapshot().loaded).toBe(true));
+    const input = screen.getByLabelText("Maximum retained lines") as HTMLInputElement;
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: "１" } });
+    const composing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(input, composing);
+    expect(composing.defaultPrevented).toBe(false);
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("１");
+    expect(h.store.getSnapshot().drafts.maxLines?.error).toContain("Enter a whole number");
+    expect(h.put).not.toHaveBeenCalled();
+    expect(h.store.getSnapshot().values.maxLines).toBe(80);
+  } finally {
+    view.unmount();
+    h.store.dispose();
+  }
+});
+
 it.each(
   (["maxLines", "maxCharacters", "maxDecorations"] as const).flatMap((field) =>
     (["forward", "reverse", "external"] as const).map((departure) => ({ field, departure })),

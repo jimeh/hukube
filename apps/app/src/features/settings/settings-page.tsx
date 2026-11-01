@@ -299,7 +299,7 @@ export function PreferenceField({ field }: { field: Field }) {
             aria-describedby={`${help ? `${id}-help ` : ""}${id}-status`}
             onChange={(event) => store.edit(field, event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 store.commit([field]);
               }
