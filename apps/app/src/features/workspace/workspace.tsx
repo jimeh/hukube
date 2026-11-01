@@ -31,11 +31,12 @@ import {
 
 import { rememberSessionTab, restoreSessionTabs } from "../exec/window-tabs.ts";
 
+import { clusterStatusPresentation } from "./cluster-status.ts";
 import { openPanel, pinPanel, type ListPanelParams, type ResourcePanelParams } from "./dock.ts";
 import { PanelTab } from "./panel-tab.tsx";
 import { StatusBar } from "./status-bar.tsx";
 import { useLayoutPersistence } from "./use-layout-persistence.ts";
-import { WorkspaceContext, type WorkspaceValue } from "./workspace-context.tsx";
+import { useWorkspace, WorkspaceContext, type WorkspaceValue } from "./workspace-context.tsx";
 
 const components = {
   exec: ({ api, params }: IDockviewPanelProps<ExecSessionParams>) => (
@@ -210,7 +211,7 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
             theme={theme}
             components={components}
             tabComponents={tabComponents}
-            watermarkComponent={Watermark}
+            watermarkComponent={WorkspaceWatermark}
             onReady={(e) => setApi(e.api)}
           />
         </div>
@@ -221,14 +222,22 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   );
 }
 
-function Watermark() {
+export function WorkspaceWatermark() {
+  const { status, types } = useWorkspace();
+  const emptyStatus = types.size === 0 ? clusterStatusPresentation(status) : undefined;
   return (
     <Empty className="h-full">
       <EmptyHeader>
-        <EmptyTitle>Nothing open</EmptyTitle>
+        <EmptyTitle>{emptyStatus?.title ?? "Nothing open"}</EmptyTitle>
         <EmptyDescription>
-          Choose a resource type in the sidebar to list its resources.
+          {emptyStatus?.description ??
+            "Choose a resource type in the sidebar to list its resources."}
         </EmptyDescription>
+        {emptyStatus?.detail && (
+          <p className="mt-2 max-w-sm text-xs/relaxed text-muted-foreground">
+            {emptyStatus.detail}
+          </p>
+        )}
       </EmptyHeader>
     </Empty>
   );

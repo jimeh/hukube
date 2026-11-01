@@ -11,6 +11,7 @@ import {
   StreamSubprotocol,
   TokenSubprotocolPrefix,
   type StreamEnd,
+  type StreamGap,
   type StreamServerMessage,
 } from "./protocol.gen.ts";
 
@@ -27,6 +28,8 @@ export interface StreamCodec<M extends StreamMethod> {
   /** The params to open a socket with, including what resumes the stream. */
   params(params: Streams[M]["params"]): Streams[M]["params"];
   event(event: Streams[M]["event"]): Streams[M]["event"];
+  /** Maps and validates a transport gap before it reaches a listener. */
+  gap?(gap: StreamGap): StreamGap;
   decode(frame: ArrayBuffer): StreamData[M];
 }
 
@@ -337,8 +340,13 @@ class SocketStream implements EngineStream {
       } else if (message?.type === "event") {
         if (this.#codec.input) this.#attached = true;
         this.listener.event(this.#codec.event(message.event as Streams[StreamMethod]["event"]));
-      } else if (message?.type === "gap" && message.gap) this.listener.gap(message.gap);
-      else if (message?.type === "end" && message.end) this.#end(message.end);
+      } else if (message?.type === "gap" && message.gap) {
+        try {
+          this.listener.gap(this.#codec.gap?.(message.gap) ?? message.gap);
+        } catch (error) {
+          this.#end({ reason: "error", error: { code: "internal", message: String(error) } });
+        }
+      } else if (message?.type === "end" && message.end) this.#end(message.end);
     };
     socket.onclose = () => {
       if (this.#socket !== socket) return;

@@ -1562,6 +1562,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
     .split(/\s+/);
   expect(podNames).toHaveLength(2);
   await page.goto(`/#token=${engineToken}`);
+  await resetLogStreamPreferences(page);
   await page.getByRole("button", { name: new RegExp(clusterId) }).click();
   await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
   const open = async (query: string) => {
@@ -1595,6 +1596,49 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   expect(first).toBeTruthy();
   await expect(newest).toHaveText(/Newest · [1-9][\d,]* new/);
   expect(await firstVisible()).toBe(first);
+
+  // Select a row that survives a head trim, then prove its viewport anchor,
+  // selection, find result, and copied text survive the retention update.
+  const retainedLine = `counter 250 from ${podNames[0]}`;
+  await pod.getByRole("button", { name: "Search" }).click();
+  const retentionFind = editor.getByRole("textbox", { name: /^Find$/ });
+  await retentionFind.fill(retainedLine);
+  await page.keyboard.press("Enter");
+  await expect(editor.locator(".matchesCount")).toHaveText("1 of 1");
+  await page.keyboard.press("Escape");
+  const retainedAnchor = await firstVisible();
+  expect(retainedAnchor).toBeTruthy();
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.keyboard.press("ControlOrMeta+C");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(retainedLine);
+
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+  await page.getByRole("textbox", { name: /^Retained lines/ }).fill("300");
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  const reduction = page.getByRole("alertdialog", {
+    name: "Reduce retained Log Stream entries?",
+  });
+  await expect(reduction).toBeVisible();
+  await reduction.getByRole("button", { name: "Apply lower limits" }).click();
+  await expect(page.getByText("Retained lines: Saved")).toBeVisible();
+  await page.getByRole("link", { name: `Back to ${clusterId}` }).click();
+  await expect(pod).toBeVisible();
+  await expect(
+    pod.getByText(
+      "Older log entries were discarded to stay within retention limits and cannot be restored.",
+    ),
+  ).toBeVisible();
+  await expect.poll(firstVisible).toBe(retainedAnchor);
+  await editor.getByRole("textbox", { name: `Logs of Pod ${podNames[0]}` }).focus();
+  await page.keyboard.press("ControlOrMeta+C");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(retainedLine);
+  await pod.getByRole("button", { name: "Search" }).click();
+  await editor.getByRole("textbox", { name: /^Find$/ }).fill(retainedLine);
+  await page.keyboard.press("Enter");
+  await expect(editor.locator(".matchesCount")).toHaveText("1 of 1");
+  await page.keyboard.press("Escape");
+  await expect(newest).toBeVisible();
   await newest.click();
   await expect(newest).toBeHidden();
   await expect(editor.locator(".view-lines")).not.toContainText("counter 0 from");
@@ -1615,13 +1659,12 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await page.keyboard.press("Enter");
   await expect(editor.locator(".matchesCount")).not.toHaveText(/^(\d+) of \1$/);
   await page.keyboard.press("Escape");
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("ControlOrMeta+C");
   await expect
     .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-    .toContain("counter 0 from");
+    .toContain(`from ${podNames[0]}`);
   await expect(newest).toBeVisible();
   await pod.getByRole("tab", { name: "YAML", exact: true }).click();
   await assertEditorKeys(page, pod, pod.locator(".monaco-editor:visible"));
@@ -1637,6 +1680,56 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
     );
   }
 });
+
+/** Keeps the persistent E2E Engine's shared Log Stream preferences test-local. */
+async function resetLogStreamPreferences(page: Page): Promise<void> {
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+  const retention = page.locator("form").filter({
+    has: page.getByRole("heading", { name: "Retention", exact: true }),
+  });
+  const budgets = [
+    ["Retained lines", 50_000],
+    ["Retained characters", 32_000_000],
+    ["Styled ranges", 200_000],
+  ] as const;
+  const changes: string[] = [];
+  let reduces = false;
+  for (const [label, value] of budgets) {
+    const input = retention.getByRole("textbox", { name: new RegExp(`^${label}`) });
+    const current = await input.inputValue();
+    if (current !== String(value)) changes.push(label);
+    reduces ||= Number(current) > value;
+    await input.fill(String(value));
+  }
+  if (changes.length) {
+    const apply = retention.getByRole("button", { name: "Apply", exact: true });
+    await apply.click();
+    if (reduces) {
+      const dialog = page.getByRole("alertdialog", {
+        name: "Reduce retained Log Stream entries?",
+      });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("button", { name: "Apply lower limits" }).click();
+    }
+    await expect(apply).toBeDisabled();
+    await expect(
+      retention.getByText(`${changes.join(", ")}: Saved`, { exact: true }),
+    ).toBeVisible();
+  }
+
+  const wrap = page.getByRole("checkbox", { name: "Wrap long lines" });
+  if ((await wrap.getAttribute("aria-checked")) !== "true") {
+    await wrap.click();
+    await expect(page.getByText("Wrap: Saved")).toBeVisible();
+  }
+  const timestamps = page.getByRole("checkbox", { name: "Show timestamps" });
+  if ((await timestamps.getAttribute("aria-checked")) === "true") {
+    await timestamps.click();
+    await expect(page.getByText("Timestamps: Saved")).toBeVisible();
+  }
+  await page.getByRole("link", { name: "Back to clusters" }).click();
+}
 
 async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Promise<void> {
   await editor.click();

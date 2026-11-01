@@ -75,9 +75,13 @@ afterEach(() => {
 it("checks hello, opens with params, and delivers events gaps and end in order", async () => {
   const conn = connect();
   const seen: string[] = [];
+  const gaps: unknown[] = [];
   const observe = listener();
   observe.event = () => seen.push("event");
-  observe.gap = () => seen.push("gap");
+  observe.gap = (gap) => {
+    gaps.push(gap);
+    seen.push("gap");
+  };
   observe.end = () => seen.push("end");
   conn.openStream("resource.logs", params, observe);
   await Promise.resolve();
@@ -92,11 +96,66 @@ it("checks hello, opens with params, and delivers events gaps and end in order",
     params: { ...params, resume: [] },
   });
   socket.receive({ type: "event", event: status });
-  socket.receive({ type: "gap", gap: { bytes: 4, records: 2 } });
+  socket.receive({
+    type: "gap",
+    gap: { bytes: 4, records: 2, sources: [{ id: 7, records: 2 }] },
+  });
   socket.receive({ type: "end", end: { reason: "complete" } });
   expect(seen).toEqual(["event", "gap", "end"]);
+  expect(gaps).toEqual([
+    {
+      bytes: 4,
+      records: 2,
+      sources: [{ id: 0, records: 2 }],
+    },
+  ]);
   await vi.advanceTimersByTimeAsync(500);
   expect(sockets).toHaveLength(2);
+  conn.close();
+});
+it("ends a Log Stream on invalid source gap metadata", async () => {
+  const conn = connect();
+  const observe = listener();
+  conn.openStream("resource.logs", params, observe);
+  await Promise.resolve();
+  const socket = sockets[1]!;
+  socket.hello();
+  socket.receive({ type: "event", event: status });
+  socket.receive({ type: "gap", gap: { bytes: 4, records: 2 } });
+  expect(observe.gap).not.toHaveBeenCalled();
+  expect(observe.end).toHaveBeenCalledWith({
+    reason: "error",
+    error: expect.objectContaining({ message: expect.stringContaining("no source totals") }),
+  });
+  conn.close();
+});
+
+it("delivers a generic Exec gap without source metadata", async () => {
+  const conn = connect();
+  const gap = vi.fn<() => void>();
+  conn.openStream(
+    "pod.exec",
+    {
+      cluster: "c",
+      namespace: "default",
+      pod: "p",
+      uid: "u",
+      container: "main",
+      session: "s",
+      window: "w",
+    },
+    {
+      data: vi.fn<() => void>(),
+      event: vi.fn<() => void>(),
+      gap,
+      end: vi.fn<() => void>(),
+    },
+  );
+  await Promise.resolve();
+  const socket = sockets[1]!;
+  socket.hello();
+  socket.receive({ type: "gap", gap: { bytes: 4, records: 0 } });
+  expect(gap).toHaveBeenCalledWith({ bytes: 4, records: 0 });
   conn.close();
 });
 it("ends a wrong hash or missing hello without retry", async () => {

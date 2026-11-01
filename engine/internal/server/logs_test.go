@@ -54,6 +54,20 @@ func logParams(p *corev1.Pod) protocol.LogStreamParams {
 	return protocol.LogStreamParams{Cluster: testenv.ClusterID, Type: "pods", Namespace: p.Namespace, Name: p.Name, UID: string(p.UID)}
 }
 
+func TestLogConsumerPreservesFrameSources(t *testing.T) {
+	var got []protocol.StreamGapSource
+	consumer := logConsumer{streamOutput: streamOutput[protocol.LogStreamStatus]{
+		sourceFrame: func(_ []byte, _ int, sources []protocol.StreamGapSource) {
+			got = append(got, sources...)
+		},
+	}}
+	want := []protocol.StreamGapSource{{ID: 1, Records: 2}, {ID: 4, Records: 3}}
+	consumer.Frame([]byte{protocol.StreamChannelStdout}, 5, want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("adapter source totals = %+v, want %+v", got, want)
+	}
+}
+
 type wireLog struct {
 	source  int
 	flags   byte

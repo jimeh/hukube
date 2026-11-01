@@ -93,6 +93,15 @@ type StreamGap struct {
 	// Records counts what the frames held, as the method defines it: lines
 	// for a Log Stream.
 	Records uint64 `json:"records"`
+	// Sources counts dropped Log Stream records by their socket-local source.
+	// Other stream methods omit it.
+	Sources []StreamGapSource `json:"sources,omitempty"`
+}
+
+// StreamGapSource counts dropped records from one Log Stream source.
+type StreamGapSource struct {
+	ID      int    `json:"id"`
+	Records uint64 `json:"records"`
 }
 
 // StreamEndReason says why a stream ended.

@@ -40,18 +40,21 @@ Every request asks for timestamps. For each container the Engine keeps a
 cursor: the instance it read and the newest timestamp it sent. The client
 keeps the same cursors and passes them when it opens the stream again, so a
 lost socket, a restarted Engine, and a Facet that was hidden all resume the
-same way as a follow request that broke.
+same way as a follow request that broke. This also applies while reading a
+previous run: the first socket uses the bounded tail, while a later socket
+with a matching instance cursor uses `sinceTime` instead of replaying a new
+tail window.
 
 The Pod log API's `sinceTime` has whole-second precision and is inclusive, so
 a resumed request repeats up to a second of lines:
 
 - **No duplicates.** Lines at or before the cursor are skipped, until the
   first line after it.
-- **No silent loss.** A resumed request for the same instance must begin with
-  a line at or before the cursor, which proves the cursor's line is still in
-  the log file and nothing after it is missing. When it does not, the log
-  was rotated or cut, and the Engine sends a gap marker for that container
-  before the lines.
+- **No silent loss while timestamps strictly increase.** A resumed request
+  for the same instance must begin with a line at or before the cursor,
+  which proves the cursor's line is still in the log file. When it does not,
+  the log was rotated or cut, and the Engine sends a gap marker for that
+  container before the lines.
 - **A restart while disconnected.** When the cursor's instance is now the
   container's previous run, the Engine first reads the rest of that run with
   `previous`, by the same rule, and then reads the current run from its
@@ -59,9 +62,9 @@ a resumed request repeats up to a second of lines:
 
 One case is not detected: two lines with the same nanosecond timestamp, or
 written out of timestamp order by the container runtime, with the connection
-lost between them. The second is skipped. The runtime stamps each line with
-its own clock reading, so this needs a coincidence at the moment of a
-disconnect.
+lost between them. The second is skipped. This limitation applies to both
+follow and previous-run reconnects. The runtime stamps each line with its own
+clock reading, so this needs a coincidence at the moment of a disconnect.
 
 ## Order
 

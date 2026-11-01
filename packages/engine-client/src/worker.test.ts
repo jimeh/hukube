@@ -124,6 +124,34 @@ describe("connection Worker", () => {
     expect(acks()).toEqual([{ type: "ack", bytes }]);
   });
 
+  it("maps Log gap sources before forwarding them across the Worker boundary", async () => {
+    send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+    FakeSocket.latest.open();
+    send({
+      kind: "stream-open",
+      id: 11,
+      method: "resource.logs",
+      params: { cluster: "c", type: "pods", name: "web", uid: "uid" },
+    });
+    await Promise.resolve();
+    const socket = FakeSocket.latest;
+    const receive = (data: unknown) => socket.onmessage?.(new MessageEvent("message", { data }));
+    socket.onopen?.(new Event("open"));
+    receive(JSON.stringify({ type: "hello", hello: { protocol: Hash } }));
+    receive(JSON.stringify({ type: "event", event: status }));
+    receive(
+      JSON.stringify({
+        type: "gap",
+        gap: { bytes: 10, records: 2, sources: [{ id: 7, records: 2 }] },
+      }),
+    );
+    expect(scope.postMessage).toHaveBeenLastCalledWith({
+      kind: "stream-gap",
+      id: 11,
+      gap: { bytes: 10, records: 2, sources: [{ id: 0, records: 2 }] },
+    });
+  });
+
   it("does not post socket data or errors for a superseded revision", () => {
     const socket = subscribe();
     send({ kind: "update", id: 7, count: 3, params: { key: "b" } });

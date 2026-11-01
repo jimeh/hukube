@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { PanelTab } from "./panel-tab.tsx";
 import { WorkspaceContext } from "./workspace-context.tsx";
 import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
-import { Workspace } from "./workspace.tsx";
+import { Workspace, WorkspaceWatermark } from "./workspace.tsx";
 import { detachClusterSessions, startSession, useExecSessions } from "../exec/sessions.ts";
 import { readSessionTabs, rememberSessionTab } from "../exec/window-tabs.ts";
 import { fakeTerminal } from "../exec/test-terminal.ts";
@@ -135,6 +135,45 @@ afterEach(() => {
   mocks.request.mockClear();
   sessionStorage.clear();
 });
+
+it.each([
+  {
+    name: "permission denial",
+    status: {
+      phase: "failed",
+      message: "discovery: unknown",
+      error: { code: "forbidden", reason: "Forbidden", message: "unknown" },
+    },
+    title: "Not permitted",
+    description: "Your Kubernetes credentials cannot discover Resource Types for this Cluster.",
+    detail: "Kubernetes reported Forbidden.",
+  },
+  {
+    name: "unreachable Cluster",
+    status: {
+      phase: "failed",
+      message: "server version: connection refused",
+      error: { code: "unavailable", message: "connection refused" },
+    },
+    title: "Cluster unavailable",
+    description:
+      "hukube could not discover Resource Types because it could not reach this Cluster.",
+    detail: "Technical detail: server version: connection refused",
+  },
+] as const)(
+  "presents an initial $name in the empty Workspace",
+  ({ status, title, description, detail }) => {
+    render(
+      <WorkspaceContext value={{ cluster: "c", status, types: new Map() } as never}>
+        <WorkspaceWatermark />
+      </WorkspaceContext>,
+    );
+    expect(screen.getByText(title)).toBeDefined();
+    expect(screen.getByText(description)).toBeDefined();
+    expect(screen.getByText(detail)).toBeDefined();
+    expect(screen.queryByText("Nothing open")).toBeNull();
+  },
+);
 
 it("attaches every restored Tab including a hidden panel, without starting or attaching twice", async () => {
   // A newly opened Tab already has an entry before dockview adds it.

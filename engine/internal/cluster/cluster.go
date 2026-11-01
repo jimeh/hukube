@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/jimeh/hukube/engine/internal/apierror"
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/kubeconfig"
 	"github.com/jimeh/hukube/engine/internal/notify"
@@ -297,7 +298,11 @@ func (c *Cluster) run(ctx context.Context) {
 			return
 		}
 		c.log.Warn("connect failed", "err", err, "retry", delay)
-		c.setStatus(protocol.ClusterStatus{Phase: protocol.ClusterPhaseFailed, Message: err.Error()})
+		c.setStatus(protocol.ClusterStatus{
+			Phase:   protocol.ClusterPhaseFailed,
+			Message: err.Error(),
+			Error:   apierror.Detail(err),
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -360,6 +365,7 @@ func (c *Cluster) checkHealth() {
 		c.setStatus(protocol.ClusterStatus{
 			Phase:         protocol.ClusterPhaseFailed,
 			Message:       "Lost connection: " + err.Error(),
+			Error:         apierror.Detail(err),
 			ServerVersion: status.ServerVersion,
 		})
 	case err == nil && status.Phase != protocol.ClusterPhaseReady:

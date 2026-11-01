@@ -11,8 +11,8 @@ import { refusalLines } from "../edit/field-paths.ts";
 import { useRegistry } from "../overview/registry.ts";
 import { semanticEqual } from "../overview/draft.ts";
 import { matches } from "../overview/definition.ts";
-import { useDefinitionManager } from "../overview/definition-manager.tsx";
 import { createPortal } from "react-dom";
+import { Link } from "@tanstack/react-router";
 import { useResourceAccess } from "../edit/use-access.ts";
 import { DeleteDialog } from "../edit/delete-dialog.tsx";
 import { metadata } from "../edit/yaml.ts";
@@ -271,7 +271,13 @@ export function ResourcePanel({
           <Button
             size="sm"
             variant="link"
-            onClick={() => useDefinitionManager.getState().setOpen(true)}
+            nativeButton={false}
+            render={
+              <Link
+                to="/settings"
+                search={{ category: "overview", fromCluster: address.cluster }}
+              />
+            }
           >
             Manage Overview definitions
           </Button>

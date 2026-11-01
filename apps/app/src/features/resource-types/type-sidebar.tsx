@@ -14,12 +14,13 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useDeferredValue, useMemo, useState } from "react";
 
 import { useWorkspace } from "@/features/workspace/workspace-context.tsx";
+import { clusterStatusPresentation } from "@/features/workspace/cluster-status.ts";
 
 import { groupTypes } from "./group-types.ts";
 
 /** The Workspace sidebar listing every Resource Type the Cluster serves. */
 export function TypeSidebar() {
-  const { types, openList, activeListType } = useWorkspace();
+  const { types, status, openList, activeListType } = useWorkspace();
   const [filter, setFilter] = useState("");
   const [showEmpty, setShowEmpty] = useState(false);
   const deferredFilter = useDeferredValue(filter);
@@ -28,6 +29,7 @@ export function TypeSidebar() {
     [types, deferredFilter, showEmpty],
   );
   const syncing = [...types.values()].filter((t) => t.state === "syncing").length;
+  const emptyStatus = types.size === 0 ? clusterStatusPresentation(status) : undefined;
 
   return (
     <aside aria-label="Resource types" className="flex min-h-0 flex-col border-r bg-sidebar">
@@ -84,7 +86,16 @@ export function TypeSidebar() {
             </section>
           ))}
           {groups.length === 0 && syncing === 0 && (
-            <p className="px-2 text-muted-foreground">No resource types match.</p>
+            <div className="flex flex-col gap-1 px-2 text-muted-foreground">
+              {emptyStatus ? (
+                <>
+                  <p className="font-medium text-foreground">{emptyStatus.title}</p>
+                  <p className="text-xs/relaxed">{emptyStatus.description}</p>
+                </>
+              ) : (
+                <p>No resource types match.</p>
+              )}
+            </div>
           )}
         </nav>
       </ScrollArea>

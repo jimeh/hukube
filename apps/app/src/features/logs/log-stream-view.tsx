@@ -10,7 +10,7 @@ import { useEngine } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
 import { Button } from "@hukube/ui/components/button";
 import { cn } from "@hukube/ui/lib/utils";
-import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react";
 import { Notice } from "../resource/notice.tsx";
 import { LogDocument } from "./log-document.ts";
 import LogEditor, { type LogEditorHandle } from "./log-editor.tsx";
@@ -21,6 +21,55 @@ import { LogToolbar } from "./log-toolbar.tsx";
 interface KnownContainers {
   containers: LogContainer[];
   hasPrevious: boolean;
+}
+
+interface ReplayFingerprint {
+  value: string;
+  epochs: Set<string>;
+  sources: Map<number, { previous: boolean; instance: string }>;
+}
+
+interface PreviousEpoch {
+  source: number;
+  instance: string;
+  owner: "committed" | "staged";
+  complete: boolean;
+  unresolved: boolean;
+  untimed: boolean;
+}
+
+interface PreviousHandle {
+  staged: LogDocument;
+  fingerprint?: ReplayFingerprint;
+  socketEpochs: Map<number, string>;
+  epochs: Map<string, PreviousEpoch>;
+  stagedBySource: Map<number, string>;
+  pendingChange: boolean;
+}
+
+const sourceEpoch = (id: number, instance: string): string => JSON.stringify([id, instance]);
+
+function replayFingerprint(status: LogStreamStatus | undefined): ReplayFingerprint | undefined {
+  if (!status?.ready || status.loaded < status.followed) return undefined;
+  if (status.sources.some((source) => source.previous && !source.instance)) return undefined;
+  const sources = new Map<number, { previous: boolean; instance: string }>();
+  const epochs = new Set<string>();
+  const canonical = status.sources
+    .toSorted((a, b) => a.id - b.id)
+    .map((source) => {
+      const instance = source.previous ? (source.instance ?? "") : "";
+      sources.set(source.id, { previous: source.previous ?? false, instance });
+      if (source.previous) epochs.add(sourceEpoch(source.id, instance));
+      return [source.id, source.previous ?? false, instance] as const;
+    });
+  return { value: JSON.stringify(canonical), epochs, sources };
+}
+
+function integrityEnd(
+  reason: "ProtocolViolation" | "ReplayIncomplete",
+  message: string,
+): StreamEnd {
+  return { reason: "error", error: { code: "internal", reason, message } };
 }
 
 export interface LogStreamViewProps {
@@ -55,7 +104,15 @@ export default function LogStreamView({ target, uid, exists, kind, visible }: Lo
   };
   return (
     <LogRun
-      key={JSON.stringify([container, previous, run])}
+      key={JSON.stringify([
+        target.cluster,
+        target.type,
+        target.namespace,
+        target.name,
+        container,
+        previous,
+        run,
+      ])}
       focus={focus}
       known={known}
       setKnown={setKnown}
@@ -107,7 +164,6 @@ function LogRun({
   restart: () => void;
 }) {
   const engine = useEngine();
-  const [status, setStatus] = useState<LogStreamStatus>();
   const { containers } = known;
   const [state, setState] = useState<StreamState>("connecting");
   const [end, setEnd] = useState<StreamEnd>();
@@ -115,9 +171,10 @@ function LogRun({
   const stream = useRef<EngineStream | undefined>(undefined);
   const hiddenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const editor = useRef<LogEditorHandle>(null);
-  const { timestamps, wrap } = useLogSettings();
+  const { timestamps, wrap, budgets } = useLogSettings();
   const { cluster, type, namespace, name } = target;
-  const document = useMemo(() => new LogDocument(type), [type]);
+  const [document] = useState(() => new LogDocument(type, budgets));
+  const replayCandidate = useRef<PreviousHandle | undefined>(undefined);
   useSyncExternalStore(document.subscribe, document.snapshot);
   const current = useEffectEvent(() => visible);
   const remember = useEffectEvent(setKnown);
@@ -125,31 +182,99 @@ function LogRun({
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
-    // A previous run is sent whole on every socket, so a second socket's
-    // lines replace the first's. They are cleared when the new socket
-    // delivers something, not when it is ready, which comes after its lines.
-    let delivered = false;
-    let replaying = false;
-    const replace = () => {
-      delivered = true;
-      if (!replaying) return;
-      replaying = false;
-      document.clear();
-    };
+    let handle: EngineStream | undefined;
     let pods: Map<string, string> | undefined;
-    const handle = engine.openStream(
+    let replay: PreviousHandle | undefined = previous
+      ? {
+          staged: document.emptyFork(),
+          socketEpochs: new Map(),
+          epochs: new Map(),
+          stagedBySource: new Map(),
+          pendingChange: false,
+        }
+      : undefined;
+    replayCandidate.current = replay;
+    const releaseReplay = () => {
+      replay?.staged.release();
+      replay?.socketEpochs.clear();
+      replay?.epochs.clear();
+      replay?.stagedBySource.clear();
+      if (replayCandidate.current === replay) replayCandidate.current = undefined;
+      replay = undefined;
+    };
+    const failIntegrity = (reason: "ProtocolViolation" | "ReplayIncomplete", message: string) => {
+      if (!active) return;
+      releaseReplay();
+      active = false;
+      handle?.close();
+      if (stream.current === handle) stream.current = undefined;
+      setState("ended");
+      setEnd(integrityEnd(reason, message));
+    };
+    const droppedMarker = (targetDocument: LogDocument, records: number) => {
+      targetDocument.marker(
+        `··· ${records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
+      );
+    };
+    const replayUnsafe = () =>
+      !!replay &&
+      [...replay.epochs.values()].some(
+        (epoch) => !epoch.complete && (epoch.unresolved || epoch.untimed),
+      );
+    const classifySource = (source: LogStreamStatus["sources"][number], definitive: boolean) => {
+      const candidate = replay!;
+      const superseded = candidate.stagedBySource.get(source.id);
+      if (!source.previous) {
+        if (definitive && superseded) {
+          candidate.staged.discardSources(new Set([source.id]));
+          candidate.epochs.delete(superseded);
+          candidate.stagedBySource.delete(source.id);
+        }
+        return;
+      }
+      if (!source.instance) return;
+      const key = sourceEpoch(source.id, source.instance);
+      const owner = candidate.fingerprint?.epochs.has(key) ? "committed" : "staged";
+      if (superseded && superseded !== key) {
+        candidate.staged.discardSources(new Set([source.id]));
+        candidate.epochs.delete(superseded);
+        candidate.stagedBySource.delete(source.id);
+      }
+      if (owner === "staged") {
+        candidate.stagedBySource.set(source.id, key);
+      } else candidate.stagedBySource.delete(source.id);
+      const prior = candidate.epochs.get(key);
+      candidate.epochs.set(
+        key,
+        prior ?? {
+          source: source.id,
+          instance: source.instance,
+          owner,
+          complete: false,
+          unresolved: false,
+          untimed: false,
+        },
+      );
+      candidate.socketEpochs.set(source.id, key);
+    };
+    handle = engine.openStream(
       "resource.logs",
       { cluster, type, namespace, name, uid: incarnation, container, previous },
       {
         state: (value) => {
           if (!active) return;
+          if ((value === "reconnecting" || value === "paused") && replayUnsafe()) {
+            failIntegrity(
+              "ReplayIncomplete",
+              "The previous-run replay could not resume safely after an incomplete source boundary.",
+            );
+            return;
+          }
           setState(value);
-          if (value === "connecting" || value === "reconnecting") replaying = previous && delivered;
         },
         event: (value) => {
           if (!active) return;
-          if (value.sources.length) replace();
-          document.status(value);
+          if (!previous) document.status(value);
           const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
           // A status can be ready before a slow Pod's containers are known.
           // Only one whose Pods are all loaded says who joined and who left.
@@ -162,36 +287,184 @@ function LogRun({
             }
             pods = next;
           }
-          setStatus(value);
           // The last status of a deleted Resource lists none, and the names stay.
           if (value.containers.length)
             remember({
               containers: value.containers,
               hasPrevious: value.sources.some((source) => source.previous),
             });
+          if (!previous) {
+            return;
+          }
+          const candidate = replay;
+          if (!candidate) {
+            failIntegrity(
+              "ProtocolViolation",
+              "The previous-run handle sent status without an owner.",
+            );
+            return;
+          }
+          candidate.socketEpochs.clear();
+          candidate.staged.status(value);
+          const definitive = value.ready && value.loaded >= value.followed;
+          for (const source of value.sources) {
+            const committed = candidate.fingerprint?.sources.get(source.id);
+            const resolved = source.previous ? !!source.instance : definitive;
+            if (
+              candidate.fingerprint &&
+              resolved &&
+              (!committed ||
+                committed.previous !== (source.previous ?? false) ||
+                (committed.previous && committed.instance !== source.instance))
+            )
+              candidate.pendingChange = true;
+            classifySource(source, definitive);
+          }
+          const fingerprint = replayFingerprint(value);
+          if (!fingerprint) return;
+          for (const [source, epoch] of candidate.stagedBySource)
+            if (!fingerprint.epochs.has(epoch)) {
+              candidate.staged.discardSources(new Set([source]));
+              candidate.stagedBySource.delete(source);
+              candidate.epochs.delete(epoch);
+            }
+          if (candidate.fingerprint?.value === fingerprint.value) {
+            document.status(value);
+            candidate.pendingChange = false;
+            return;
+          }
+          const changed = new Set<number>();
+          for (const [source, oldEpoch] of candidate.fingerprint?.sources ?? []) {
+            const nextEpoch = fingerprint.sources.get(source);
+            if (
+              !nextEpoch ||
+              oldEpoch.previous !== nextEpoch.previous ||
+              oldEpoch.instance !== nextEpoch.instance
+            )
+              changed.add(source);
+          }
+          document.reconcile(candidate.staged, changed, value);
+          candidate.staged = document.emptyFork();
+          candidate.stagedBySource.clear();
+          candidate.pendingChange = false;
+          for (const [key, epoch] of candidate.epochs) {
+            if (fingerprint.epochs.has(key)) epoch.owner = "committed";
+            else candidate.epochs.delete(key);
+          }
+          candidate.fingerprint = fingerprint;
         },
         data: (lines) => {
           if (!active) return;
-          replace();
-          document.append(lines);
+          if (!previous) {
+            if (lines.length) document.append(lines);
+            return;
+          }
+          const candidate = replay;
+          if (!candidate) {
+            failIntegrity(
+              "ProtocolViolation",
+              "The previous-run handle sent data without an owner.",
+            );
+            return;
+          }
+          for (const line of lines) {
+            const key = candidate.socketEpochs.get(line.source);
+            const epoch = key ? candidate.epochs.get(key) : undefined;
+            if (!epoch) {
+              failIntegrity(
+                "ProtocolViolation",
+                "The previous-run socket sent a line before its source instance.",
+              );
+              return;
+            }
+            if (epoch.complete) continue;
+            (epoch.owner === "committed" ? document : candidate.staged).append([line]);
+            if (line.exited) {
+              epoch.complete = true;
+              epoch.unresolved = false;
+              epoch.untimed = false;
+            } else if (line.gap) {
+              epoch.unresolved = true;
+            } else if (line.time) {
+              epoch.unresolved = false;
+              epoch.untimed = false;
+            } else epoch.untimed = true;
+          }
         },
         gap: (gap) => {
-          if (active)
-            document.marker(
-              `··· ${gap.records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
+          if (!active) return;
+          if (!previous) {
+            droppedMarker(document, gap.records);
+            return;
+          }
+          const candidate = replay;
+          if (!candidate || !gap.sources?.length) {
+            failIntegrity(
+              "ProtocolViolation",
+              "The previous-run socket sent a gap without source totals.",
             );
+            return;
+          }
+          const committedLoss = [] as {
+            source: number;
+            instance: string;
+            records: number;
+          }[];
+          const stagedLoss = [] as typeof committedLoss;
+          for (const source of gap.sources) {
+            const key = candidate.socketEpochs.get(source.id);
+            const epoch = key ? candidate.epochs.get(key) : undefined;
+            if (!epoch) {
+              failIntegrity(
+                "ProtocolViolation",
+                "The previous-run socket sent a gap before its source instance.",
+              );
+              return;
+            }
+            if (!epoch.complete) epoch.unresolved = true;
+            (epoch.owner === "committed" ? committedLoss : stagedLoss).push({
+              source: epoch.source,
+              instance: epoch.instance,
+              records: source.records,
+            });
+          }
+          if (committedLoss.length) document.lossMarker(committedLoss);
+          if (stagedLoss.length) candidate.staged.lossMarker(stagedLoss);
         },
         end: (value) => {
-          if (active) setEnd(value);
+          if (!active) return;
+          if (!previous || value.reason === "error") {
+            releaseReplay();
+            setEnd(value);
+            return;
+          }
+          const classified = replay?.fingerprint;
+          const staged = replay?.staged.diagnostics().entries ?? 0;
+          const pendingChange = replay?.pendingChange || !!replay?.stagedBySource.size;
+          releaseReplay();
+          setEnd(
+            classified && staged === 0 && !pendingChange
+              ? value
+              : classified
+                ? integrityEnd(
+                    "ReplayIncomplete",
+                    "The previous-run replay ended before its changed source set was definitive.",
+                  )
+                : integrityEnd(
+                    "ProtocolViolation",
+                    "The previous-run replay ended before its source instances were complete.",
+                  ),
+          );
         },
       },
     );
     stream.current = handle;
-    if (!current()) hiddenTimer.current = setTimeout(() => handle.pause(), 10_000);
+    if (!current()) hiddenTimer.current = setTimeout(() => handle?.pause(), 10_000);
     return () => {
       active = false;
+      releaseReplay();
       clearTimeout(hiddenTimer.current);
-      handle.close();
+      handle?.close();
       stream.current = undefined;
     };
   }, [engine, cluster, type, namespace, name, initialUid, container, previous, document]);
@@ -201,8 +474,16 @@ function LogRun({
     else hiddenTimer.current = setTimeout(() => stream.current?.pause(), 10_000);
     return () => clearTimeout(hiddenTimer.current);
   }, [visible]);
-  useEffect(() => document.timestamps(timestamps), [document, timestamps]);
+  useEffect(() => {
+    document.updateBudgets(budgets);
+    replayCandidate.current?.staged.updateBudgets(budgets);
+  }, [document, budgets]);
+  useEffect(() => {
+    document.timestamps(timestamps);
+    replayCandidate.current?.staged.timestamps(timestamps);
+  }, [document, timestamps]);
 
+  const status = document.displayedStatus;
   const sources = status?.sources ?? [];
   const count = sources.length;
   const one = count === 1;
@@ -210,7 +491,7 @@ function LogRun({
   const waiting = sources.filter((source) => source.state === "waiting");
   // An init container that completed is where it should be, not a problem to report.
   const initContainers = new Set(
-    containers.filter((item) => item.kind === "init").map((item) => item.name),
+    (status?.containers ?? []).filter((item) => item.kind === "init").map((item) => item.name),
   );
   const notRunning = sources.filter(
     (source) =>
@@ -261,6 +542,12 @@ function LogRun({
     loading = false;
     if (end.error?.code === "forbidden")
       empty = { title: "Not permitted", description: end.error.message, action: action() };
+    else if (end.error?.reason === "ReplayIncomplete" || end.error?.reason === "ProtocolViolation")
+      notices.push({
+        text: `${end.error.reason}: ${end.error.message}`,
+        destructive: true,
+        action: action(),
+      });
     else
       notices.push({
         text: `The Log Stream stopped: ${end.error?.message ?? "Unknown error"}.`,
@@ -362,6 +649,16 @@ function LogRun({
         setPrevious={setPrevious}
         search={() => editor.current?.search()}
       />
+      {document.retentionLoss && (
+        <output className="flex shrink-0 flex-wrap items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <span className="min-w-0 flex-1 break-words">
+            Older log entries were discarded to stay within retention limits and cannot be restored.
+          </span>
+          <Button size="sm" variant="ghost" onClick={() => document.dismissRetentionLoss()}>
+            Dismiss
+          </Button>
+        </output>
+      )}
       {notices.map((notice, index) => (
         <output
           key={index}

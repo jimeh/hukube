@@ -146,12 +146,13 @@ func newFake(pods ...*corev1.Pod) (*fakeCluster, *fakeGraph) {
 }
 
 type capture struct {
-	mu          sync.Mutex
-	records     []record
-	statuses    []protocol.LogStreamStatus
-	statusTimes []time.Time
-	frames      [][]byte
-	changed     chan struct{}
+	mu           sync.Mutex
+	records      []record
+	statuses     []protocol.LogStreamStatus
+	statusTimes  []time.Time
+	frames       [][]byte
+	frameSources [][]protocol.StreamGapSource
+	changed      chan struct{}
 }
 
 func newCapture() *capture { return &capture{changed: make(chan struct{}, 1)} }
@@ -177,16 +178,44 @@ func decodeFrame(frame []byte) []record {
 	}
 	return out
 }
-func (c *capture) Frame(frame []byte, count int) {
+func (c *capture) Frame(frame []byte, count int, sources []protocol.StreamGapSource) {
 	records := decodeFrame(frame)
 	if len(records) != count {
 		panic("incorrect frame record count")
 	}
 	c.mu.Lock()
 	c.frames = append(c.frames, append([]byte(nil), frame...))
+	c.frameSources = append(c.frameSources, slices.Clone(sources))
 	c.records = append(c.records, records...)
 	c.mu.Unlock()
 	c.notify()
+}
+
+func TestLogFrameSourceTotals(t *testing.T) {
+	out := newCapture()
+	s := &stream{
+		out: out,
+		t:   Timing{FrameBytes: 33},
+		sources: map[int]*sourceEntry{
+			7: {source: protocol.LogSource{ID: 7}},
+			9: {source: protocol.LogSource{ID: 9}},
+		},
+		batch: []record{
+			{source: 9, time: 1, content: []byte("a")},
+			{source: 7, time: 2, content: []byte("b")},
+			{source: 9, time: 3, content: []byte("c")},
+		},
+	}
+	s.flushLocked()
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	want := [][]protocol.StreamGapSource{
+		{{ID: 7, Records: 1}, {ID: 9, Records: 1}},
+		{{ID: 9, Records: 1}},
+	}
+	if !reflect.DeepEqual(out.frameSources, want) {
+		t.Fatalf("frame source totals = %+v, want %+v", out.frameSources, want)
+	}
 }
 func (c *capture) snapshot() ([]record, protocol.LogStreamStatus) {
 	c.mu.Lock()
@@ -377,26 +406,231 @@ func TestLogStatusCountsLoadedPods(t *testing.T) {
 }
 
 func TestLogPrevious(t *testing.T) {
-	pod := pod("pod", "yes", "none")
-	pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "yes-0", Reason: "Error", ExitCode: 1}
-	f, g := newFake(pod)
-	f.open = func(_ context.Context, _ string, o *corev1.PodLogOptions) (io.ReadCloser, error) {
-		if !o.Previous || o.Follow || o.TailLines == nil {
-			t.Errorf("previous options=%+v", o)
-		}
-		if o.Container == "none" {
-			return nil, apierrors.NewBadRequest("no previous")
-		}
-		return textBody(line(1, "previous")), nil
+	for _, tt := range []struct {
+		name, cursorInstance string
+		wantResume           bool
+	}{
+		{name: "first read"},
+		{name: "matching cursor", cursorInstance: "yes-0", wantResume: true},
+		{name: "mismatched cursor", cursorInstance: "older"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := pod("pod", "yes", "none")
+			pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "yes-0", Reason: "Error", ExitCode: 1}
+			f, g := newFake(pod)
+			f.open = func(_ context.Context, _ string, o *corev1.PodLogOptions) (io.ReadCloser, error) {
+				if !o.Previous || o.Follow {
+					t.Errorf("previous options=%+v", o)
+				}
+				if tt.wantResume && o.Container == "yes" {
+					if o.SinceTime == nil || o.TailLines != nil {
+						t.Errorf("matching Previous cursor options=%+v", o)
+					}
+				} else if o.SinceTime != nil || o.TailLines == nil {
+					t.Errorf("first or mismatched Previous cursor options=%+v", o)
+				}
+				if o.Container == "none" {
+					return nil, apierrors.NewBadRequest("no previous")
+				}
+				body := line(1, "previous")
+				if tt.wantResume {
+					body = line(2, "cursor") + line(3, "resumed")
+				}
+				return textBody(body), nil
+			}
+			p := targetParams()
+			p.Previous = true
+			if tt.cursorInstance != "" {
+				p.Resume = []protocol.LogCursor{{PodUID: "pod", Container: "yes", Instance: tt.cursorInstance, Time: "1767225600000000002"}}
+			}
+			out, end, _ := start(t, f, g, p)
+			e := awaitEnd(t, end)
+			r, _ := out.snapshot()
+			want := "previous"
+			if tt.wantResume {
+				want = "resumed"
+			}
+			if e.Reason != protocol.StreamEndReasonComplete || len(r) != 2 || string(r[0].content) != want || r[1].flags != protocol.LogRecordFlagExited || string(r[1].content) != "Error, exit code 1" {
+				t.Fatalf("previous run: end=%+v records=%s", e, describe(r))
+			}
+		})
 	}
-	p := targetParams()
-	p.Previous = true
-	out, end, _ := start(t, f, g, p)
-	e := awaitEnd(t, end)
-	r, _ := out.snapshot()
-	if e.Reason != protocol.StreamEndReasonComplete || len(r) != 2 || string(r[0].content) != "previous" || r[1].flags != protocol.LogRecordFlagExited || string(r[1].content) != "Error, exit code 1" {
-		t.Fatalf("previous run: end=%+v records=%s", e, describe(r))
+}
+
+func TestLogPreviousResumeIgnoresInitialTailWindow(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		latePod  bool
+		wantTail int64
+	}{
+		{name: "initial closes after all readers load", wantTail: 666},
+		{name: "initial closes at timeout before late reader loads", latePod: true, wantTail: 1000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := pod("a", "one", "two")
+			b := pod("b", "three")
+			for _, pod := range []*corev1.Pod{a, b} {
+				for i := range pod.Status.ContainerStatuses {
+					status := &pod.Status.ContainerStatuses[i]
+					status.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
+						ContainerID: status.Name + "-0",
+					}
+				}
+			}
+			f, g := newFake(a, b)
+			if tt.latePod {
+				f.mu.Lock()
+				delete(f.pods, b.Name)
+				f.mu.Unlock()
+			}
+			f.open = func(_ context.Context, _ string, o *corev1.PodLogOptions) (io.ReadCloser, error) {
+				if o.SinceTime != nil {
+					return textBody(line(2, "cursor") + line(3, "resumed")), nil
+				}
+				return textBody(line(1, "first")), nil
+			}
+
+			params := targetParams()
+			params.Previous = true
+			params.Resume = []protocol.LogCursor{
+				{PodUID: "a", Container: "one", Instance: "one-0", Time: "1767225600000000002"},
+				{PodUID: "a", Container: "two", Instance: "two-0", Time: "1767225600000000002"},
+			}
+			_, end, _ := start(t, f, g, params)
+			requests := make([]logRequest, 0, 3)
+			if tt.latePod {
+				// The first request proves the initial timeout opened the readers;
+				// the late manifest is delivered only after that observable boundary.
+				requests = append(requests, awaitRequest(t, f))
+				f.update(b)
+			}
+			for len(requests) < 3 {
+				requests = append(requests, awaitRequest(t, f))
+			}
+			awaitEnd(t, end)
+
+			for _, request := range requests {
+				if request.options.Container == "three" {
+					if request.options.SinceTime != nil || request.options.TailLines == nil || *request.options.TailLines != tt.wantTail {
+						t.Errorf("first Previous read after the initial window=%+v, want tail %d", request.options, tt.wantTail)
+					}
+				} else if request.options.SinceTime == nil || request.options.TailLines != nil {
+					t.Errorf("matching Previous cursor depended on the initial tail window: %+v", request.options)
+				}
+			}
+		})
 	}
+}
+
+func TestLogPreviousResumeUntimedRuns(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		body    string
+		want    string
+		wantCut bool
+	}{
+		{
+			name: "prefix before cursor is suppressed",
+			body: "old untimed\n" + line(1, "old") + line(2, "cursor") + line(5, "new"),
+			want: "new|exited",
+		},
+		{
+			name: "cut prefix before cursor is suppressed",
+			body: strings.Repeat("x", maxLine+1) + "\n" + line(1, "old") + line(2, "cursor") + line(5, "new"),
+			want: "new|exited",
+		},
+		{
+			name: "post-cursor run precedes a later timestamp",
+			body: line(2, "cursor") + "untimed new\n" + line(5, "later"),
+			want: "untimed new|later|exited",
+		},
+		{
+			name:    "cut post-cursor run precedes a later timestamp",
+			body:    line(2, "cursor") + strings.Repeat("x", maxLine+1) + "\n" + line(5, "later"),
+			want:    "cut|later|exited",
+			wantCut: true,
+		},
+		{
+			name: "post-cursor run reaches EOF",
+			body: line(2, "cursor") + "untimed eof\n",
+			want: "untimed eof|exited",
+		},
+		{
+			name: "missing cursor emits a source gap before the retained run",
+			body: "untimed after loss\n" + line(5, "later"),
+			want: "gap|untimed after loss|later|exited",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := pod("pod", "main")
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "main-0", Reason: "Error", ExitCode: 1}
+			f, g := newFake(p)
+			f.open = func(_ context.Context, _ string, o *corev1.PodLogOptions) (io.ReadCloser, error) {
+				if !o.Previous || o.SinceTime == nil || o.TailLines != nil {
+					t.Errorf("Previous resume options=%+v", o)
+				}
+				return textBody(tt.body), nil
+			}
+			params := targetParams()
+			params.Previous = true
+			params.Resume = []protocol.LogCursor{{PodUID: "pod", Container: "main", Instance: "main-0", Time: "1767225600000000002"}}
+			out, end, _ := start(t, f, g, params)
+			if e := awaitEnd(t, end); e.Reason != protocol.StreamEndReasonComplete {
+				t.Fatalf("end=%+v", e)
+			}
+			records, _ := out.snapshot()
+			parts := make([]string, 0, len(records))
+			cut := 0
+			for _, record := range records {
+				switch record.flags {
+				case protocol.LogRecordFlagGap:
+					parts = append(parts, "gap")
+				case protocol.LogRecordFlagCut:
+					cut++
+					if len(record.content) != maxLine {
+						t.Fatalf("cut content length=%d want %d", len(record.content), maxLine)
+					}
+					parts = append(parts, "cut")
+				case protocol.LogRecordFlagExited:
+					parts = append(parts, "exited")
+				default:
+					parts = append(parts, string(record.content))
+				}
+			}
+			if got := strings.Join(parts, "|"); got != tt.want {
+				t.Fatalf("records=%s want %s", got, tt.want)
+			}
+			wantCut := 0
+			if tt.wantCut {
+				wantCut = 1
+			}
+			if cut != wantCut {
+				t.Fatalf("cut records=%d want %d", cut, wantCut)
+			}
+		})
+	}
+
+	t.Run("buffer overflow is visible and bounded", func(t *testing.T) {
+		p := pod("pod", "main")
+		p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "main-0"}
+		f, g := newFake(p)
+		f.open = func(context.Context, string, *corev1.PodLogOptions) (io.ReadCloser, error) {
+			return textBody(line(2, "cursor") + strings.Repeat("x", 80) + "\n" + line(5, "later")), nil
+		}
+		params := targetParams()
+		params.Previous = true
+		params.Resume = []protocol.LogCursor{{PodUID: "pod", Container: "main", Instance: "main-0", Time: "1767225600000000002"}}
+		timing := shortTiming
+		timing.BatchBytes = 32
+		out, end, _ := startTimed(t, f, g, params, timing)
+		if e := awaitEnd(t, end); e.Reason != protocol.StreamEndReasonComplete {
+			t.Fatalf("end=%+v", e)
+		}
+		records, _ := out.snapshot()
+		if len(records) != 3 || records[0].flags != protocol.LogRecordFlagGap || string(records[1].content) != "later" || records[2].flags != protocol.LogRecordFlagExited {
+			t.Fatalf("overflow records=%s", describe(records))
+		}
+	})
 }
 
 func TestLogPreviousRefusedIsNotComplete(t *testing.T) {

@@ -67,8 +67,7 @@ func connect(t *testing.T) *Cluster {
 	return connectAs(t, cfg, testTiming())
 }
 
-// connectAs connects to the API server at restCfg and waits until ready.
-func connectAs(t *testing.T, restCfg *rest.Config, timing Timing) *Cluster {
+func startAs(t *testing.T, restCfg *rest.Config, timing Timing) *Cluster {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -77,11 +76,75 @@ func connectAs(t *testing.T, restCfg *rest.Config, timing Timing) *Cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+// connectAs connects to the API server at restCfg and waits until ready.
+func connectAs(t *testing.T, restCfg *rest.Config, timing Timing) *Cluster {
+	t.Helper()
+	c := startAs(t, restCfg, timing)
 	eventually(t, func() (bool, string) {
 		s := c.Status()
 		return s.Phase == protocol.ClusterPhaseReady, fmt.Sprintf("%+v", s)
 	})
 	return c
+}
+
+func TestInitialConnectionFailureClassifiesUnavailable(t *testing.T) {
+	api := httptest.NewServer(http.NotFoundHandler())
+	host := api.URL
+	api.Close()
+	timing := testTiming()
+	timing.RetryMin = time.Hour
+	timing.RetryMax = time.Hour
+	c := startAs(t, &rest.Config{Host: host}, timing)
+
+	eventually(t, func() (bool, string) {
+		s := c.Status()
+		return s.Phase == protocol.ClusterPhaseFailed && s.Error != nil, fmt.Sprintf("%+v", s)
+	})
+	status := c.Status()
+	if status.Error.Code != protocol.ErrorCodeUnavailable {
+		t.Fatalf("error = %+v, want unavailable", status.Error)
+	}
+	if !strings.HasPrefix(status.Message, "server version: ") {
+		t.Fatalf("message = %q, want server version context", status.Message)
+	}
+}
+
+func TestInitialDiscoveryFailureClassifiesForbidden(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/version" {
+			_, _ = w.Write([]byte(`{"gitVersion":"v1.31.0"}`))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(metav1.Status{
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"},
+			Status:   metav1.StatusFailure,
+			Code:     http.StatusForbidden,
+			Reason:   metav1.StatusReasonForbidden,
+			Message:  "unknown",
+		})
+	}))
+	t.Cleanup(api.Close)
+	timing := testTiming()
+	timing.RetryMin = time.Hour
+	timing.RetryMax = time.Hour
+	c := startAs(t, &rest.Config{Host: api.URL}, timing)
+
+	eventually(t, func() (bool, string) {
+		s := c.Status()
+		return s.Phase == protocol.ClusterPhaseFailed && s.Error != nil, fmt.Sprintf("%+v", s)
+	})
+	status := c.Status()
+	if status.Error.Code != protocol.ErrorCodeForbidden || status.Error.Reason != "Forbidden" || status.Error.Message != "unknown" {
+		t.Fatalf("error = %+v, want forbidden Kubernetes detail", status.Error)
+	}
+	if status.Message != "discovery: unknown" {
+		t.Fatalf("message = %q, want discovery context", status.Message)
+	}
 }
 
 func typeState(c *Cluster, key protocol.TypeKey) (protocol.ResourceType, bool) {

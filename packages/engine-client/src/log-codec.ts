@@ -9,6 +9,8 @@ import {
   type LogSource,
   type LogStreamParams,
   type LogStreamStatus,
+  type StreamGap,
+  type StreamGapSource,
 } from "./protocol.gen.ts";
 
 export interface LogLine {
@@ -32,13 +34,13 @@ export class LogCodec {
   readonly #exited = new Map<number, string>();
   #nextId = 0;
 
-  beginSocket(params?: Pick<LogStreamParams, "previous">): void {
+  beginSocket(_params?: Pick<LogStreamParams, "previous">): void {
     this.#sources.clear();
-    // A previous run is sent again from its start, exited record included.
-    if (params?.previous) this.#exited.clear();
   }
 
   event(status: LogStreamStatus): LogStreamStatus {
+    const engineIds = new Set(status.sources.map((source) => source.id));
+    for (const id of this.#sources.keys()) if (!engineIds.has(id)) this.#sources.delete(id);
     const sources = status.sources.map((source) => {
       const key = JSON.stringify([source.podUid, source.container]);
       let id = this.#identities.get(key);
@@ -56,12 +58,45 @@ export class LogCodec {
     if (status.ready && status.loaded >= status.followed) {
       const current = new Set(sources.map((source) => source.id));
       for (const id of this.#cursors.keys()) if (!current.has(id)) this.#cursors.delete(id);
+      for (const [key, id] of this.#identities)
+        if (!current.has(id) && !this.#cursors.has(id)) {
+          this.#identities.delete(key);
+          this.#exited.delete(id);
+        }
     }
     return { ...status, sources };
   }
 
   params(params: LogStreamParams): LogStreamParams {
     return { ...params, resume: [...this.#cursors.values()] };
+  }
+
+  gap(gap: StreamGap): StreamGap {
+    if (!Number.isSafeInteger(gap.records) || gap.records <= 0)
+      throw new Error("Invalid Log Stream gap record count");
+    if (!Array.isArray(gap.sources) || gap.sources.length === 0)
+      throw new Error("Log Stream gap has no source totals");
+    const engineIds = new Set<number>();
+    const stableIds = new Set<number>();
+    const sources: StreamGapSource[] = [];
+    let total = 0;
+    for (const source of gap.sources) {
+      if (!Number.isSafeInteger(source.id) || source.id < 0 || engineIds.has(source.id))
+        throw new Error("Log Stream gap has a duplicate or invalid source ID");
+      if (!Number.isSafeInteger(source.records) || source.records <= 0)
+        throw new Error("Log Stream gap has an invalid source total");
+      const current = this.#sources.get(source.id);
+      if (!current) throw new Error("Log Stream gap has an unknown source");
+      if (stableIds.has(current.id)) throw new Error("Log Stream gap maps duplicate sources");
+      engineIds.add(source.id);
+      stableIds.add(current.id);
+      total += source.records;
+      if (!Number.isSafeInteger(total)) throw new Error("Log Stream gap source total is unsafe");
+      sources.push({ id: current.id, records: source.records });
+    }
+    if (total !== gap.records) throw new Error("Log Stream gap source totals do not match records");
+    sources.sort((a, b) => a.id - b.id);
+    return { ...gap, sources };
   }
 
   decode(buffer: ArrayBuffer): LogLine[] {
@@ -82,10 +117,10 @@ export class LogCodec {
       if (offset + length > view.byteLength) throw new Error("Incomplete log record content");
       const content = decoder.decode(new Uint8Array(buffer, offset, length));
       offset += length;
+      const instance = source.instance ?? "";
+      if (this.#exited.get(source.id) === instance) continue;
       if (flags & LogRecordFlagExited) {
-        if (this.#exited.has(source.id) && this.#exited.get(source.id) === (source.instance ?? ""))
-          continue;
-        this.#exited.set(source.id, source.instance ?? "");
+        this.#exited.set(source.id, instance);
       } else if (!(flags & LogRecordFlagGap) && time !== 0n && source.instance) {
         const cursor = this.#cursors.get(source.id);
         if (!cursor || cursor.instance !== source.instance || time > BigInt(cursor.time))
@@ -106,5 +141,22 @@ export class LogCodec {
       });
     }
     return lines;
+  }
+
+  /** Narrow diagnostics for source/cursor liveness tests; not sent to the main thread. */
+  diagnostics(): {
+    identities: number;
+    socketSources: number;
+    cursors: number;
+    exited: number;
+    nextStableId: number;
+  } {
+    return {
+      identities: this.#identities.size,
+      socketSources: this.#sources.size,
+      cursors: this.#cursors.size,
+      exited: this.#exited.size,
+      nextStableId: this.#nextId,
+    };
   }
 }

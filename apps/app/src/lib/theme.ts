@@ -5,20 +5,28 @@ export type Theme = "dark" | "light";
 const storageKey = "hukube.theme";
 const listeners = new Set<() => void>();
 
-function read(): Theme {
-  return localStorage.getItem(storageKey) === "light" ? "light" : "dark";
+export function readCachedTheme(): Theme | undefined {
+  const value = localStorage.getItem(storageKey);
+  return value === "light" || value === "dark" ? value : undefined;
 }
 
-/** Applies the stored theme to the document. Dark is the default. */
-export function applyStoredTheme() {
-  const theme = read();
+function read(): Theme {
+  return readCachedTheme() ?? "dark";
+}
+
+function applyTheme(theme: Theme): void {
   document.documentElement.classList.toggle("dark", theme === "dark");
   document.documentElement.style.colorScheme = theme;
 }
 
+/** Applies the stored theme to the document. Dark is the default. */
+export function applyStoredTheme() {
+  applyTheme(read());
+}
+
 export function setTheme(theme: Theme) {
   localStorage.setItem(storageKey, theme);
-  applyStoredTheme();
+  applyTheme(theme);
   for (const l of listeners) l();
 }
 

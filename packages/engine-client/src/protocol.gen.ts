@@ -107,7 +107,7 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "3338809e79c523b5";
+export const Hash = "6562996c1e4027fb";
 
 //////////
 // source: protocol.go
@@ -290,6 +290,7 @@ export type ClusterPhase = typeof ClusterPhaseConnecting | typeof ClusterPhaseRe
 export interface ClusterStatus {
   phase: ClusterPhase;
   message?: string;
+  error?: ErrorDetail;
   serverVersion?: string;
 }
 /**
@@ -805,6 +806,18 @@ export interface StreamGap {
    * Records counts what the frames held, as the method defines it: lines
    * for a Log Stream.
    */
+  records: number /* uint64 */;
+  /**
+   * Sources counts dropped Log Stream records by their socket-local source.
+   * Other stream methods omit it.
+   */
+  sources?: StreamGapSource[];
+}
+/**
+ * StreamGapSource counts dropped records from one Log Stream source.
+ */
+export interface StreamGapSource {
+  id: number /* int */;
   records: number /* uint64 */;
 }
 /**

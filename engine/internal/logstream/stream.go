@@ -39,7 +39,7 @@ type Graph interface {
 
 // Consumer accepts frames without waiting for their delivery to a client.
 type Consumer interface {
-	Frame([]byte, int)
+	Frame([]byte, int, []protocol.StreamGapSource)
 	Status(protocol.LogStreamStatus)
 }
 
@@ -484,22 +484,34 @@ func (s *stream) flushLocked() {
 	s.statusLocked(true)
 	frame := []byte{protocol.StreamChannelStdout}
 	count := 0
+	sources := map[int]uint64{}
 	for _, r := range merge(s.batch) {
 		size := protocol.LogRecordHeaderSize + len(r.content)
 		if count > 0 && len(frame)+size > s.t.FrameBytes {
-			s.out.Frame(frame, count)
+			s.out.Frame(frame, count, sourceTotals(sources))
 			frame = []byte{protocol.StreamChannelStdout}
 			count = 0
+			clear(sources)
 		}
 		frame = appendRecord(frame, r)
 		count++
+		sources[r.source]++
 	}
 	if count > 0 {
-		s.out.Frame(frame, count)
+		s.out.Frame(frame, count, sourceTotals(sources))
 	}
 	s.batch = nil
 	s.batchBytes = 0
 	s.first = false
+}
+
+func sourceTotals(totals map[int]uint64) []protocol.StreamGapSource {
+	sources := make([]protocol.StreamGapSource, 0, len(totals))
+	for id, records := range totals {
+		sources = append(sources, protocol.StreamGapSource{ID: id, Records: records})
+	}
+	slices.SortFunc(sources, func(a, b protocol.StreamGapSource) int { return cmp.Compare(a.ID, b.ID) })
+	return sources
 }
 
 func containerNames(pods map[string]*followedPod) []protocol.LogContainer {

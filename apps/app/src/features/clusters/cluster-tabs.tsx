@@ -5,20 +5,18 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@hukube/ui/components/context-menu";
-import { Button } from "@hukube/ui/components/button";
+import { Button, buttonVariants } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { cn } from "@hukube/ui/lib/utils";
-import { Add01Icon, Cancel01Icon, Moon02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Cancel01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import type { DragEvent } from "react";
 
-import { OverviewSettings } from "../overview/definition-manager.tsx";
-
 import { guardWorkspace } from "../edit/unsaved-edits.ts";
+import { settingsCategories, type SettingsCategory } from "../settings/settings-page.tsx";
 
 import { useHost } from "@/lib/host.tsx";
-import { setTheme, useTheme } from "@/lib/theme.ts";
 
 import { clusterScope } from "./cluster-color.ts";
 import { useOpenClusters } from "./open-clusters.ts";
@@ -29,6 +27,27 @@ export function ClusterTabs() {
   const active = useParams({ strict: false }).cluster;
   const close = useCloseCluster();
   const host = useHost();
+  const settingsLocation = useRouterState({
+    select: (state) =>
+      state.location.pathname === "/settings"
+        ? (state.location.search as Record<string, unknown>)
+        : undefined,
+  });
+  const settingsActive = !!settingsLocation;
+  const currentCategory = settingsLocation?.["category"];
+  const currentFromCluster = settingsLocation?.["fromCluster"];
+  const settingsSearch = settingsActive
+    ? {
+        category:
+          typeof currentCategory === "string" &&
+          settingsCategories.includes(currentCategory as SettingsCategory)
+            ? (currentCategory as SettingsCategory)
+            : "appearance",
+        ...(typeof currentFromCluster === "string" && currentFromCluster
+          ? { fromCluster: currentFromCluster }
+          : {}),
+      }
+    : { category: "appearance" as const, ...(active ? { fromCluster: active } : {}) };
 
   const moveToNewWindow = (id: string) => {
     guardWorkspace(id, () => {
@@ -117,32 +136,30 @@ export function ClusterTabs() {
         <TooltipContent>Open a cluster</TooltipContent>
       </Tooltip>
       <div className="ml-auto flex items-center pr-1">
-        <OverviewSettings />
-        <ThemeToggle />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Link
+                to="/settings"
+                search={settingsSearch}
+                replace={settingsActive}
+                aria-label="Settings"
+                aria-current={settingsActive ? "page" : undefined}
+                data-slot="button"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "icon",
+                  className: "aria-[current=page]:bg-accent aria-[current=page]:text-foreground",
+                })}
+              />
+            }
+          >
+            <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
+          </TooltipTrigger>
+          <TooltipContent>Settings</TooltipContent>
+        </Tooltip>
       </div>
     </nav>
-  );
-}
-
-function ThemeToggle() {
-  const theme = useTheme();
-  const next = theme === "dark" ? "light" : "dark";
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Switch to ${next} mode`}
-            onClick={() => setTheme(next)}
-          />
-        }
-      >
-        <HugeiconsIcon icon={theme === "dark" ? Sun03Icon : Moon02Icon} strokeWidth={2} />
-      </TooltipTrigger>
-      <TooltipContent>Switch to {next} mode</TooltipContent>
-    </Tooltip>
   );
 }
 

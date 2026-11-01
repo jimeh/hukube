@@ -59,8 +59,12 @@ export function LogToolbar({
   setPrevious: (value: boolean) => void;
   search: () => void;
 }) {
-  const { timestamps, wrap, setTimestamps, setWrap } = useLogSettings();
+  const { timestamps, wrap, save, setTimestamps, setWrap, retry, acceptCurrent } = useLogSettings();
   const single = containers.length === 1;
+  const savedFields = save.paths
+    ?.map((path) => (path === "logStreams.wrap" ? "Wrap" : "Timestamps"))
+    .join(", ");
+  const savedPrefix = savedFields ? `${savedFields}: ` : "";
   const containerTrigger = useRef<HTMLButtonElement>(null);
   const previousToggle = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -88,7 +92,7 @@ export function LogToolbar({
           ref={ref}
           aria-label={label}
           pressed={pressed}
-          onPressedChange={change}
+          onPressedChange={(value) => change(value)}
           disabled={disabled || unavailable}
           className="shrink-0 text-muted-foreground aria-pressed:bg-cluster-subtle aria-pressed:text-foreground @max-[34rem]/logs:w-7 @max-[34rem]/logs:p-0"
         >
@@ -160,6 +164,12 @@ export function LogToolbar({
         <div className="min-w-1 flex-1" />
         {toggle("Timestamps", Clock01Icon, timestamps, setTimestamps)}
         {toggle("Wrap", TextWrapIcon, wrap, setWrap)}
+        <span
+          className="hidden shrink-0 text-[0.625rem] text-muted-foreground @min-[44rem]/logs:inline"
+          title="Changes affect mounted Log Streams in every window connected to this Engine."
+        >
+          Engine-shared defaults
+        </span>
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Button
@@ -175,6 +185,29 @@ export function LogToolbar({
           <TooltipContent>Search</TooltipContent>
         </Tooltip>
       </div>
+      {(save.phase === "saving" || save.phase === "saved") && (
+        <output className="flex min-h-7 items-center border-t px-3 text-xs text-muted-foreground">
+          {savedPrefix}
+          {save.message ?? (save.phase === "saving" ? "Saving display defaults" : "Saved")}
+        </output>
+      )}
+      {(save.phase === "error" || save.phase === "conflict") && (
+        <div
+          role="alert"
+          className="flex min-h-8 flex-wrap items-center gap-2 border-t border-destructive/30 px-3 py-1 text-xs text-destructive"
+        >
+          <span className="min-w-0 flex-1 break-words">
+            {savedPrefix}
+            {save.message ?? "Not saved"}
+          </span>
+          <Button size="sm" variant="outline" onClick={() => void retry(save.phase === "conflict")}>
+            {save.phase === "conflict" ? "Retry with my value" : "Retry"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={acceptCurrent}>
+            Use current value
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
