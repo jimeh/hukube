@@ -5,20 +5,26 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@hukube/ui/components/context-menu";
-import { Button } from "@hukube/ui/components/button";
+import { Button, buttonVariants } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { cn } from "@hukube/ui/lib/utils";
-import { Add01Icon, Cancel01Icon, Moon02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
+import {
+  Add01Icon,
+  Cancel01Icon,
+  Moon02Icon,
+  Sun03Icon,
+  Settings01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import type { DragEvent } from "react";
 
-import { OverviewSettings } from "../overview/definition-manager.tsx";
+import { usePreferences } from "../settings/store.ts";
 
 import { guardWorkspace } from "../edit/unsaved-edits.ts";
 
 import { useHost } from "@/lib/host.tsx";
-import { setTheme, useTheme } from "@/lib/theme.ts";
+import { useTheme } from "@/lib/theme.ts";
 
 import { clusterScope } from "./cluster-color.ts";
 import { useOpenClusters } from "./open-clusters.ts";
@@ -117,7 +123,21 @@ export function ClusterTabs() {
         <TooltipContent>Open a cluster</TooltipContent>
       </Tooltip>
       <div className="ml-auto flex items-center pr-1">
-        <OverviewSettings />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Link
+                to="/settings/$section"
+                params={{ section: "appearance" }}
+                aria-label="Settings"
+                className={buttonVariants({ variant: "ghost", size: "icon" })}
+              />
+            }
+          >
+            <HugeiconsIcon icon={Settings01Icon} aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>Settings</TooltipContent>
+        </Tooltip>
         <ThemeToggle />
       </div>
     </nav>
@@ -126,23 +146,41 @@ export function ClusterTabs() {
 
 function ThemeToggle() {
   const theme = useTheme();
+  const { store, snapshot } = usePreferences();
+  const draft = snapshot.drafts.theme;
+  const checking = snapshot.unconfirmed.includes("theme") || (snapshot.loaded && !snapshot.fresh);
   const next = theme === "dark" ? "light" : "dark";
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Switch to ${next} mode`}
-            onClick={() => setTheme(next)}
-          />
-        }
-      >
-        <HugeiconsIcon icon={theme === "dark" ? Sun03Icon : Moon02Icon} strokeWidth={2} />
-      </TooltipTrigger>
-      <TooltipContent>Switch to {next} mode</TooltipContent>
-    </Tooltip>
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={!snapshot.loaded || !!snapshot.error}
+              aria-label={`Switch to ${next} mode`}
+              onClick={() => store.change("theme", next)}
+            />
+          }
+        >
+          <HugeiconsIcon icon={theme === "dark" ? Sun03Icon : Moon02Icon} strokeWidth={2} />
+        </TooltipTrigger>
+        <TooltipContent>Switch to {next} mode</TooltipContent>
+      </Tooltip>
+      {((draft && draft.status !== "Saved") || checking) && (
+        <output className="max-w-40 text-xs">
+          <Link to="/settings/$section" params={{ section: "appearance" }}>
+            {draft && draft.status !== "Saved" ? draft.status : "Checking preferences…"}
+          </Link>
+          {draft?.error && !draft.conflict && (
+            <Button size="sm" variant="ghost" onClick={() => store.commit(["theme"])}>
+              Retry
+            </Button>
+          )}
+        </output>
+      )}
+    </>
   );
 }
 

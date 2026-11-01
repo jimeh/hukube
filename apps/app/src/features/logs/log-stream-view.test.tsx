@@ -12,6 +12,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { LogDocument } from "./log-document.ts";
 import type { LogEditorHandle } from "./log-editor.tsx";
 import LogStreamView, { type LogStreamViewProps } from "./log-stream-view.tsx";
+import { PreferenceRuntime } from "../settings/preference-runtime.tsx";
+import { getPreferenceStore } from "../settings/store.ts";
 import { useLogSettings } from "./log-settings.ts";
 
 const search = vi.hoisted(() => vi.fn<() => void>());
@@ -91,7 +93,11 @@ const mount = (override: Partial<LogStreamViewProps> = {}) =>
     </EngineProvider>,
   );
 const latest = () => opened.at(-1)!;
-const event = (status = ready) => act(() => latest().listener.event(status));
+const event = (status = ready) => {
+  act(() => {
+    void latest().listener.event(status);
+  });
+};
 const line = (text = "hello") =>
   act(
     () =>
@@ -105,7 +111,16 @@ beforeEach(() => {
   // The fixture's lines are from this day. A line from another day shows its date.
   vi.setSystemTime(new Date(2026, 9, 13, 12));
   search.mockClear();
-  useLogSettings.setState({ timestamps: false, wrap: true });
+  useLogSettings.setState({
+    timestamps: false,
+    wrap: true,
+    maxLines: 50000,
+    maxCharacters: 32000000,
+    maxDecorations: 200000,
+    loaded: true,
+    saveStatus: "",
+    saveError: undefined,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -468,3 +483,247 @@ it("marks Pods that come and go in a stream narrowed to a container another Pod 
   expect(text).toContain("··· following Pod web-c ···");
   expect(text).toContain("··· Pod web is gone ···");
 });
+it("applies live budgets to visible and hidden documents without restarting and unsubscribes disposed runs", () => {
+  const view = mount();
+  event();
+  line("one");
+  line("two");
+  line("three");
+  const first = opened[0]!;
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  act(() => useLogSettings.setState({ maxLines: 1 }));
+  expect(screen.getByRole("textbox", { name: "Logs of Pod web", hidden: true }).textContent).toBe(
+    "three",
+  );
+  expect(opened).toHaveLength(1);
+  expect(first.close).not.toHaveBeenCalled();
+  expect(first.pause).not.toHaveBeenCalled();
+  line("four");
+  expect(screen.getByRole("textbox", { name: "Logs of Pod web", hidden: true }).textContent).toBe(
+    "four",
+  );
+  act(() => useLogSettings.setState({ maxLines: 100 }));
+  expect(screen.getByRole("textbox", { name: "Logs of Pod web", hidden: true }).textContent).toBe(
+    "four",
+  );
+  view.unmount();
+  expect(first.close).toHaveBeenCalledOnce();
+  act(() => useLogSettings.setState({ maxLines: 50000 }));
+});
+it("applies only confirmed Engine preferences to multiple documents, including a hidden one, after a failed save", async () => {
+  const original = useLogSettings.getState();
+  let value: unknown = { version: 1, logStreams: { maxLines: 3 } };
+  let emit!: () => void;
+  const client = {
+    ...engine,
+    getState: () => "open",
+    onStateChange: () => () => {},
+    subscribe: (_m: string, _p: unknown, listener: { data(value: unknown): void }) => {
+      emit = () => listener.data({ key: "app/preferences", revision: "r", value });
+      queueMicrotask(emit);
+      return { close() {}, update() {} };
+    },
+    request: async () => {
+      throw Object.assign(new Error("disk full"), { code: "internal" });
+    },
+  } as unknown as EngineClient;
+  const contents = (visible: boolean) => (
+    <EngineProvider client={client}>
+      <PreferenceRuntime />
+      <LogStreamView {...props} />
+      <LogStreamView {...props} target={{ ...props.target, name: "other" }} visible={visible} />
+    </EngineProvider>
+  );
+  const view = render(contents(true));
+  const store = getPreferenceStore(client);
+  try {
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(opened).toHaveLength(2);
+    act(() => {
+      for (const stream of opened) {
+        void stream.listener.event(ready);
+        void stream.listener.data(
+          ["one", "two", "three"].map((text) => ({ source: 0, time: 0, text })),
+        );
+      }
+    });
+    view.rerender(contents(false));
+    await act(async () => {
+      store.change("maxLines", "1");
+      await Promise.resolve();
+    });
+    for (const editor of screen.getAllByRole("textbox", { name: /Logs of Pod/, hidden: true }))
+      expect(editor.textContent).toBe("onetwothree");
+    act(() => {
+      value = { version: 1, logStreams: { maxLines: 1 } };
+      emit();
+    });
+    for (const editor of screen.getAllByRole("textbox", { name: /Logs of Pod/, hidden: true }))
+      expect(editor.textContent).toBe("three");
+    expect(opened).toHaveLength(2);
+    for (const stream of opened) {
+      expect(stream.pause).not.toHaveBeenCalled();
+      expect(stream.close).not.toHaveBeenCalled();
+    }
+  } finally {
+    view.unmount();
+    store.dispose();
+    useLogSettings.setState(original);
+  }
+});
+
+it("dismisses only the loss notice, coalesces routine losses and announces a new settings loss, including while hidden", () => {
+  useLogSettings.setState({ maxLines: 3 });
+  const view = mount();
+  event();
+  for (const text of ["one", "two", "three", "four"]) line(text);
+  const dismiss = screen.getByRole("button", { name: "Dismiss retention notice" });
+  const announcement = screen
+    .getAllByRole("status")
+    .find((node) => node.textContent?.includes("retention limits"))!;
+  expect(announcement.textContent).toContain("1 oldest retained lines");
+  line("five");
+  expect(announcement.textContent).toContain("1 oldest retained lines");
+  expect(screen.getByText("2 oldest retained lines removed by retention limits.")).toBeDefined();
+  dismiss.focus();
+  fireEvent.click(dismiss);
+  expect(document.activeElement).toBe(screen.getByRole("toolbar", { name: "Log Stream" }));
+  expect(screen.queryByRole("button", { name: "Dismiss retention notice" })).toBeNull();
+  expect(screen.getByRole("textbox").textContent).toBe("threefourfive");
+  line("six");
+  expect(screen.queryByText(/oldest retained lines/)).toBeNull();
+  act(() => useLogSettings.setState({ maxLines: 4 }));
+  act(() => useLogSettings.setState({ maxLines: 3, wrap: false }));
+  expect(screen.queryByText(/oldest retained lines/)).toBeNull();
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} visible={false} />
+    </EngineProvider>,
+  );
+  act(() => useLogSettings.setState({ maxLines: 1 }));
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView {...props} />
+    </EngineProvider>,
+  );
+  expect(screen.getAllByText("5 oldest retained lines removed by retention limits.")).toHaveLength(
+    2,
+  );
+  expect(screen.getByRole("textbox").textContent).toBe("six");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  act(() => useLogSettings.setState({ maxCharacters: 1 }));
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
+  expect(screen.getByText("No retained lines fit")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  expect(document.activeElement).toBe(screen.getByRole("toolbar", { name: "Log Stream" }));
+  expect(screen.getByText("No retained lines fit")).toBeDefined();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(opened).toHaveLength(1);
+  expect(latest().close).not.toHaveBeenCalled();
+  expect(latest().pause).not.toHaveBeenCalled();
+});
+
+it("shows the first new loss after replay clears a dismissed document", () => {
+  useLogSettings.setState({ maxLines: 1 });
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  const previousStatus = { ...ready, sources: [{ ...source, previous: true }] };
+  event(previousStatus);
+  line("old one");
+  line("old two");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  act(() => latest().listener.state?.("reconnecting"));
+  event(previousStatus);
+  line("replayed one");
+  expect(screen.queryByRole("button", { name: "Dismiss retention notice" })).toBeNull();
+  line("replayed two");
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
+  expect(screen.getByRole("textbox").textContent).toBe("replayed two");
+  expect(screen.getAllByText("1 oldest retained lines removed by retention limits.")).toHaveLength(
+    2,
+  );
+  expect(opened).toHaveLength(2);
+});
+
+it("does not carry a dismissed loss into a replacement document", () => {
+  useLogSettings.setState({ maxLines: 1 });
+  const view = mount();
+  event();
+  line("one");
+  line("two");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+  view.rerender(
+    <EngineProvider client={engine}>
+      <LogStreamView
+        {...props}
+        target={{ ...props.target, type: "deployments.apps" }}
+        kind="Deployment"
+      />
+    </EngineProvider>,
+  );
+  event();
+  line("replacement one");
+  line("replacement two");
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
+  expect(screen.getByRole("textbox").textContent).toBe("replacement two");
+});
+
+it.each([false, true])(
+  "applies a combined timestamp/budget snapshot atomically to visible and hidden documents (timestamps %s)",
+  (timestamps) => {
+    useLogSettings.setState({
+      timestamps: !timestamps,
+      maxLines: 10,
+      maxCharacters: timestamps ? 12 : 1000,
+      maxDecorations: timestamps ? 3 : 100,
+    });
+    // oxlint-disable-next-line unicorn/consistent-function-scoping -- Keep this fixture local to its owning regression.
+    const contents = (visible: boolean) => (
+      <EngineProvider client={engine}>
+        <LogStreamView {...props} />
+        <LogStreamView {...props} target={{ ...props.target, name: "other" }} visible={visible} />
+      </EngineProvider>
+    );
+    const view = render(contents(true));
+    act(() => {
+      for (const stream of opened) {
+        void stream.listener.event(ready);
+        void stream.listener.data(
+          ["one", "two", "six"].map((text) => ({
+            source: 0,
+            time: 1,
+            text,
+            spans: [[0, 1, 1, -1, 0]],
+          })),
+        );
+      }
+    });
+    view.rerender(contents(false));
+    act(() =>
+      useLogSettings.setState({
+        timestamps,
+        maxCharacters: timestamps ? 1000 : 12,
+        maxDecorations: timestamps ? 100 : 3,
+      }),
+    );
+    for (const editor of screen.getAllByRole("textbox", { name: /Logs of Pod/, hidden: true })) {
+      expect(editor.querySelectorAll("p")).toHaveLength(3);
+      expect(editor.textContent).toContain("six");
+      expect(editor.textContent?.includes(".001")).toBe(timestamps);
+    }
+    expect(screen.queryByText(/oldest retained lines/)).toBeNull();
+    expect(opened).toHaveLength(2);
+    for (const stream of opened) {
+      expect(stream.close).not.toHaveBeenCalled();
+      expect(stream.pause).not.toHaveBeenCalled();
+    }
+    view.unmount();
+  },
+);

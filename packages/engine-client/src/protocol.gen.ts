@@ -107,7 +107,66 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "3338809e79c523b5";
+export const Hash = "5c23777d57a9dca6";
+
+//////////
+// source: preferences.go
+
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceDefaultTheme = "dark";
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceDefaultWrap = true;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceDefaultTimestamps = false;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const AppPreferencesKey = "app/preferences";
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceMaxLines = 100000;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceMaxCharacters = 64000000;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceMaxDecorations = 400000;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceDefaultLines = 50000;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceDefaultCharacters = 32000000;
+/**
+ * App preferences are shared by all windows connected to this Engine.
+ */
+export const PreferenceDefaultDecorations = 200000;
+export interface AppPreferences {
+  version: number /* int */;
+  appearance?: AppearancePreferences;
+  logStreams?: LogStreamPreferences;
+}
+export interface AppearancePreferences {
+  theme?: string;
+}
+export interface LogStreamPreferences {
+  maxLines?: number /* int */;
+  maxCharacters?: number /* int */;
+  maxDecorations?: number /* int */;
+  wrap?: boolean;
+  timestamps?: boolean;
+}
 
 //////////
 // source: protocol.go

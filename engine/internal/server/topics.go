@@ -102,6 +102,14 @@ func init() {
 		return srv.cfg.Source.Clusters()
 	})
 	handleRequest(protocol.RequestSettingsPut, func(_ context.Context, srv *Server, p protocol.SettingPut) (protocol.None, error) {
+		if p.Key == protocol.AppPreferencesKey {
+			if p.IfRevision == nil {
+				return protocol.None{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeInvalid, Message: "App preferences require ifRevision"}
+			}
+			if err := settings.ValidatePreferences(p.Value); err != nil {
+				return protocol.None{}, err
+			}
+		}
 		err := srv.cfg.Settings.CompareAndPut(p.Key, p.Value, p.IfRevision)
 		if errors.Is(err, settings.ErrConflict) {
 			return protocol.None{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeConflict, Message: err.Error()}

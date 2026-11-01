@@ -76,7 +76,9 @@ it("checks hello, opens with params, and delivers events gaps and end in order",
   const conn = connect();
   const seen: string[] = [];
   const observe = listener();
-  observe.event = () => seen.push("event");
+  observe.event = () => {
+    seen.push("event");
+  };
   observe.gap = () => seen.push("gap");
   observe.end = () => seen.push("end");
   conn.openStream("resource.logs", params, observe);
@@ -433,5 +435,40 @@ it("shares the eight socket cap between sessions and Log Streams", async () => {
   expect(sockets).toHaveLength(9);
   sessions[0]!.close();
   expect(sockets).toHaveLength(10);
+  conn.close();
+});
+it("pins direct async deliveries through a new socket and collects released identities without reusing IDs", async () => {
+  const conn = connect();
+  const observe = listener();
+  let finish!: () => void;
+  const ids: number[] = [];
+  observe.data = () =>
+    new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  observe.event = (value) => {
+    ids.push(value.sources[0]?.id ?? -1);
+  };
+  const stream = conn.openStream("resource.logs", params, observe);
+  stream.retainSources?.([]);
+  await Promise.resolve();
+  let socket = sockets.at(-1)!;
+  socket.hello();
+  socket.receive({ type: "event", event: status });
+  socket.receive(frame());
+  const old = ids.at(-1)!;
+  socket.receive({ type: "event", event: { ...status, sources: [{ ...source, podUid: "new" }] } });
+  socket.close();
+  await vi.advanceTimersByTimeAsync(100);
+  socket = sockets.at(-1)!;
+  socket.hello();
+  socket.receive({ type: "event", event: status });
+  expect(ids.at(-1)).toBe(old);
+  socket.receive({ type: "event", event: { ...status, sources: [] } });
+  finish();
+  await Promise.resolve();
+  socket.receive({ type: "event", event: status });
+  expect(ids.at(-1)).toBeGreaterThan(old);
+  stream.close();
   conn.close();
 });

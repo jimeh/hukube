@@ -56,7 +56,12 @@ export class WorkerEngineClient implements EngineClient {
     const id = this.#nextId++;
     this.#streams.set(id, { listener: listener as StreamListener<StreamMethod>, bytes: 0 });
     this.#post({ kind: "stream-open", id, method, params });
+    let sequence = 0;
     return {
+      retainSources: (sources) => {
+        if (this.#streams.has(id))
+          this.#post({ kind: "stream-retain", id, sequence: ++sequence, sources: [...sources] });
+      },
       write: (data) => {
         if (method !== "pod.exec" || !this.#streams.has(id)) return;
         const bytes = data.buffer instanceof ArrayBuffer ? data : data.slice();
@@ -141,6 +146,7 @@ export class WorkerEngineClient implements EngineClient {
     this.#post({ kind: "close" });
     this.#worker.terminate();
     this.#streams.clear();
+    this.#listeners.clear();
     for (const pending of this.#pending.values()) {
       pending.cleanup();
       pending.reject(
@@ -150,6 +156,7 @@ export class WorkerEngineClient implements EngineClient {
     this.#pending.clear();
     this.#state = "closed";
     for (const fn of this.#stateListeners) fn();
+    this.#stateListeners.clear();
   }
 
   #receive(msg: FromWorker): void {
@@ -162,9 +169,20 @@ export class WorkerEngineClient implements EngineClient {
           if (msg.state === "connecting" || msg.state === "reconnecting") active.bytes = 0;
           active.listener.state?.(msg.state);
           break;
-        case "stream-event":
-          active.listener.event(msg.event as Streams[StreamMethod]["event"]);
+        case "stream-event": {
+          const acknowledge = () => {
+            if (msg.token !== undefined && this.#streams.get(msg.id) === active)
+              this.#post({ kind: "stream-ack", id: msg.id, token: msg.token, bytes: 0 });
+          };
+          try {
+            const result = active.listener.event(msg.event as Streams[StreamMethod]["event"]);
+            if (result) void Promise.resolve(result).then(acknowledge, acknowledge);
+            else acknowledge();
+          } catch {
+            acknowledge();
+          }
           break;
+        }
         case "stream-gap":
           active.listener.gap(msg.gap);
           break;

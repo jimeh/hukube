@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 
 import type { Dialog, Locator, Page } from "@playwright/test";
 import { expect, test } from "../fixtures.ts";
+import { withLogStreamDefaults } from "../log-preferences.ts";
 
 import { overviewTests } from "./overview.ts";
 
@@ -16,6 +17,16 @@ import { openGoToResource, savedLayout, savedSessionLayout } from "./exec.ts";
 import { clusterId, engineToken, kubeconfig, kubectl, kubectlCreate } from "./env.ts";
 
 const namespace = `e2e-${Date.now().toString(36)}`;
+
+const logTest = test.extend<{ logDefaults: void }>({
+  logDefaults: [
+    async ({ page }, use) => {
+      await page.goto(`/#token=${engineToken}`);
+      await withLogStreamDefaults(page, () => use());
+    },
+    { auto: true },
+  ],
+});
 
 test.beforeAll(() => {
   kubectl("create", "namespace", namespace);
@@ -1517,126 +1528,160 @@ test("walks live ownership from a Deployment to its Pod and follows scale-up", a
   ).toBeVisible();
 });
 
-test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shortcuts scoped", async ({
-  page,
-}) => {
-  test.setTimeout(90_000);
-  const name = "e2e-log-counter";
-  kubectlCreate({
-    apiVersion: "apps/v1",
-    kind: "Deployment",
-    metadata: { name, namespace },
-    spec: {
-      replicas: 2,
-      selector: { matchLabels: { app: name } },
-      template: {
-        metadata: { labels: { app: name } },
-        spec: {
-          containers: [
-            {
-              name: "counter",
-              image: "busybox:1.36",
-              command: [
-                "sh",
-                "-c",
-                'i=0; while [ "$i" -lt 400 ]; do echo "counter $i from $HOSTNAME"; i=$((i+1)); done; while true; do echo "counter $i from $HOSTNAME"; i=$((i+1)); sleep 1; done',
-              ],
-            },
-          ],
+logTest(
+  "tails Pod and workload Log Streams, holds scrolling, and keeps editor shortcuts scoped",
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const name = "e2e-log-counter";
+    kubectlCreate({
+      apiVersion: "apps/v1",
+      kind: "Deployment",
+      metadata: { name, namespace },
+      spec: {
+        replicas: 2,
+        selector: { matchLabels: { app: name } },
+        template: {
+          metadata: { labels: { app: name } },
+          spec: {
+            containers: [
+              {
+                name: "counter",
+                image: "busybox:1.36",
+                command: [
+                  "sh",
+                  "-c",
+                  'i=0; while [ "$i" -lt 400 ]; do echo "counter $i from $HOSTNAME"; i=$((i+1)); done; while true; do echo "counter $i from $HOSTNAME"; i=$((i+1)); sleep 1; done',
+                ],
+              },
+            ],
+          },
         },
       },
-    },
-  });
-  kubectl("-n", namespace, "rollout", "status", `deployment/${name}`, "--timeout=60s");
-  const podNames = kubectl(
-    "-n",
-    namespace,
-    "get",
-    "pods",
-    "-l",
-    `app=${name}`,
-    "-o",
-    "jsonpath={.items[*].metadata.name}",
-  )
-    .trim()
-    .split(/\s+/);
-  expect(podNames).toHaveLength(2);
-  await page.goto(`/#token=${engineToken}`);
-  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
-  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
-  const open = async (query: string) => {
-    await openGoToResource(page);
-    await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/${query}`);
-    await expect(
-      page.getByRole("option", { name: new RegExp(query.split("/").at(-1)!) }),
-    ).toBeVisible();
-    await page.keyboard.press("Enter");
-  };
-  await open(`pod/${podNames[0]}`);
-  const pod = page.getByRole("tabpanel", { name: podNames[0]!, exact: true });
-  await pod.getByRole("tab", { name: "Logs", exact: true }).click();
-  const editor = pod.locator(".monaco-editor:visible");
-  await expect(editor.locator(".view-lines")).toContainText(`from ${podNames[0]}`);
-  const newest = pod.getByRole("button", { name: /^Newest/ });
-  // Lines arriving, fonts loading, and the Pane settling are not the user scrolling away.
-  await expect(newest).toBeHidden();
-  await editor.hover();
-  await page.mouse.wheel(0, -100_000);
-  await expect(newest).toBeVisible();
-  const firstVisible = () =>
-    editor.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      return [...element.querySelectorAll(".view-line")].find((line) => {
-        const rect = line.getBoundingClientRect();
-        return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
-      })?.textContent;
     });
-  const first = await firstVisible();
-  expect(first).toBeTruthy();
-  await expect(newest).toHaveText(/Newest · [1-9][\d,]* new/);
-  expect(await firstVisible()).toBe(first);
-  await newest.click();
-  await expect(newest).toBeHidden();
-  await expect(editor.locator(".view-lines")).not.toContainText("counter 0 from");
+    kubectl("-n", namespace, "rollout", "status", `deployment/${name}`, "--timeout=60s");
+    const podNames = kubectl(
+      "-n",
+      namespace,
+      "get",
+      "pods",
+      "-l",
+      `app=${name}`,
+      "-o",
+      "jsonpath={.items[*].metadata.name}",
+    )
+      .trim()
+      .split(/\s+/);
+    expect(podNames).toHaveLength(2);
+    await page.goto(`/#token=${engineToken}`);
+    await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+    await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+    const open = async (query: string) => {
+      await openGoToResource(page);
+      await page.getByRole("combobox", { name: "Go to Resource" }).fill(`${namespace}/${query}`);
+      await expect(
+        page.getByRole("option", { name: new RegExp(query.split("/").at(-1)!) }),
+      ).toBeVisible();
+      await page.keyboard.press("Enter");
+    };
+    await open(`pod/${podNames[0]}`);
+    const pod = page.getByRole("tabpanel", { name: podNames[0]!, exact: true });
+    await pod.getByRole("tab", { name: "Logs", exact: true }).click();
+    const editor = pod.locator(".monaco-editor:visible");
+    await expect(editor.locator(".view-lines")).toContainText(`from ${podNames[0]}`);
+    const newest = pod.getByRole("button", { name: /^Newest/ });
+    // Lines arriving, fonts loading, and the Pane settling are not the user scrolling away.
+    await expect(newest).toBeHidden();
+    await editor.hover();
+    await page.mouse.wheel(0, -100_000);
+    await expect(newest).toBeVisible();
+    const firstVisible = () =>
+      editor.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return [...element.querySelectorAll(".view-line")].find((line) => {
+          const rect = line.getBoundingClientRect();
+          return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+        })?.textContent;
+      });
+    const first = await firstVisible();
+    expect(first).toBeTruthy();
+    await expect(newest).toHaveText(/Newest · [1-9][\d,]* new/);
+    expect(await firstVisible()).toBe(first);
+    await newest.click();
+    await expect(newest).toBeHidden();
+    await expect(editor.locator(".view-lines")).not.toContainText("counter 0 from");
 
-  await pod.getByRole("button", { name: "Timestamps" }).click();
-  await expect(editor.locator(".view-lines")).toContainText(/\d{2}:\d{2}:\d{2}\.\d{3}/);
-  await pod.getByRole("button", { name: "Wrap", exact: true }).click();
-  await expect(pod.getByRole("button", { name: "Wrap", exact: true })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
-  await assertEditorKeys(page, pod, editor);
-  // A log is searched from its newest line: Enter goes to the last match first.
-  await pod.getByRole("button", { name: "Search" }).click();
-  await editor.getByRole("textbox", { name: /^Find$/ }).fill("counter 1");
-  await page.keyboard.press("Enter");
-  await expect(editor.locator(".matchesCount")).toHaveText(/^(\d+) of \1$/);
-  await page.keyboard.press("Enter");
-  await expect(editor.locator(".matchesCount")).not.toHaveText(/^(\d+) of \1$/);
-  await page.keyboard.press("Escape");
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await editor.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.press("ControlOrMeta+C");
-  await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-    .toContain("counter 0 from");
-  await expect(newest).toBeVisible();
-  await pod.getByRole("tab", { name: "YAML", exact: true }).click();
-  await assertEditorKeys(page, pod, pod.locator(".monaco-editor:visible"));
-  expect(await unexpectedEditorKeyBindings(page)).toEqual([]);
-
-  await open(`deployment/${name}`);
-  const workload = page.getByRole("tabpanel", { name, exact: true });
-  await workload.getByRole("tab", { name: "Logs", exact: true }).click();
-  for (const podName of podNames) {
-    const origin = podName.slice(name.length + 1);
-    await expect(workload.locator(".monaco-editor:visible .view-lines")).toContainText(
-      new RegExp(`${origin}.*counter`),
+    await pod.getByRole("button", { name: "Timestamps" }).click();
+    await expect(editor.locator(".view-lines")).toContainText(/\d{2}:\d{2}:\d{2}\.\d{3}/);
+    await pod.getByRole("button", { name: "Wrap", exact: true }).click();
+    await expect(pod.getByRole("button", { name: "Wrap", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "false",
     );
-  }
-});
+    await assertEditorKeys(page, pod, editor);
+    // A log is searched from its newest line: Enter goes to the last match first.
+    await pod.getByRole("button", { name: "Search" }).click();
+    await editor.getByRole("textbox", { name: /^Find$/ }).fill("counter 1");
+    await page.keyboard.press("Enter");
+    await expect(editor.locator(".matchesCount")).toHaveText(/^(\d+) of \1$/);
+    await page.keyboard.press("Enter");
+    await expect(editor.locator(".matchesCount")).not.toHaveText(/^(\d+) of \1$/);
+    await page.keyboard.press("Escape");
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.press("ControlOrMeta+C");
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toContain("counter 0 from");
+    await expect(newest).toBeVisible();
+    await pod.getByRole("tab", { name: "YAML", exact: true }).click();
+    await assertEditorKeys(page, pod, pod.locator(".monaco-editor:visible"));
+    expect(await unexpectedEditorKeyBindings(page)).toEqual([]);
+
+    await open(`deployment/${name}`);
+    const workload = page.getByRole("tabpanel", { name, exact: true });
+    await workload.getByRole("tab", { name: "Logs", exact: true }).click();
+    for (const podName of podNames) {
+      const origin = podName.slice(name.length + 1);
+      await expect(workload.locator(".monaco-editor:visible .view-lines")).toContainText(
+        new RegExp(`${origin}.*counter`),
+      );
+    }
+    // A hidden Facet and the active workload keep their real Monaco instances.
+    const instances = await page.locator(".monaco-editor").count();
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+    const limit = page.getByLabel("Maximum retained lines", { exact: true });
+    await limit.fill("2");
+    await limit.press("Enter");
+    await expect(limit).toHaveValue("2");
+    await expect(
+      page.getByRole("region", { name: "Log Streams", exact: true }).locator(":scope > output"),
+    ).toHaveText("Saved");
+    await page.getByRole("button", { name: /^Back to / }).click();
+    await expect(
+      workload.getByRole("button", { name: "Dismiss retention notice", exact: true }),
+    ).toBeVisible();
+    expect(await page.locator(".monaco-editor").count()).toBe(instances);
+    const copied = async (panel: Locator) => {
+      await panel.locator(".monaco-editor:visible").click();
+      await page.keyboard.press("ControlOrMeta+A");
+      await page.keyboard.press("ControlOrMeta+C");
+      return page.evaluate(() => navigator.clipboard.readText());
+    };
+    await expect
+      .poll(async () => (await copied(workload)).trim().split("\n").length)
+      .toBeLessThanOrEqual(2);
+    await page.getByRole("tab", { name: podNames[0]!, exact: true }).click();
+    await pod.getByRole("tab", { name: "Logs", exact: true }).click();
+    await expect(
+      pod.getByRole("button", { name: "Dismiss retention notice", exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(async () => (await copied(pod)).trim().split("\n").length)
+      .toBeLessThanOrEqual(2);
+  },
+);
 
 async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Promise<void> {
   await editor.click();

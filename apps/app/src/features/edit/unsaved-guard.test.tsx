@@ -20,6 +20,7 @@ function UnsavedGuard() {
     </HostProvider>
   );
 }
+import { useSettingsOpenWork } from "../settings/open-work.ts";
 import { copyText } from "./clipboard.ts";
 import { useExecSessions, endSession, type ExecState } from "../exec/sessions.ts";
 // Imported here, not inside a test: loading the icon set takes seconds on a
@@ -29,6 +30,7 @@ vi.mock("../workspace/workspace-context.tsx", () => ({ useWorkspace: () => ({ cl
 
 afterEach(() => {
   cleanup();
+  useSettingsOpenWork.setState({ overview: false, preferences: false });
   for (const id of useExecSessions.getState().entries.keys()) endSession(id);
   useUnsavedEdits.setState({ entries: new Map(), guard: undefined });
   vi.unstubAllGlobals();
@@ -268,4 +270,25 @@ it("mutes unattached session icons without striking their titles, and strikes se
       `Exec Session, ${phase === "elsewhere" ? "open in another window" : phase}: web`,
     );
   }
+});
+
+it("reports app Settings drafts without a Cluster and protects unload until both preference and Overview drafts settle", () => {
+  render(<UnsavedGuard />);
+  act(() => useSettingsOpenWork.getState().setPreferences(true));
+  expect(reportOpenWork).toHaveBeenLastCalledWith({ edits: 1, sessions: 0 });
+  const pending = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(pending);
+  expect(pending.defaultPrevented).toBe(true);
+  act(() => {
+    useSettingsOpenWork.getState().setPreferences(false);
+    useSettingsOpenWork.getState().setOverview(true);
+  });
+  const overview = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(overview);
+  expect(overview.defaultPrevented).toBe(true);
+  act(() => useSettingsOpenWork.getState().setOverview(false));
+  const clean = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(clean);
+  expect(clean.defaultPrevented).toBe(false);
+  expect(reportOpenWork).toHaveBeenLastCalledWith({ edits: 0, sessions: 0 });
 });

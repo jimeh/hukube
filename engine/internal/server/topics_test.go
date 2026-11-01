@@ -1,7 +1,11 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/jimeh/hukube/engine/internal/settings"
 
 	"github.com/jimeh/hukube/engine/internal/index"
 	"github.com/jimeh/hukube/engine/internal/protocol"
@@ -82,5 +86,28 @@ func TestMethodHandlersMatchDeclarations(t *testing.T) {
 		if declared[name] != protocol.MethodKindTopic {
 			t.Errorf("topic handler %q has no declaration", name)
 		}
+	}
+}
+
+func TestAppPreferencesRefusalDoesNotNotify(t *testing.T) {
+	store, err := settings.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, stop := store.Watch(protocol.AppPreferencesKey)
+	defer stop()
+	empty := ""
+	_, err = requests[protocol.RequestSettingsPut.Name](context.Background(), &Server{cfg: Config{Settings: store}}, params(protocol.SettingPut{Key: protocol.AppPreferencesKey, Value: json.RawMessage(`{"version":1,"logStreams":{"maxLines":0}}`), IfRevision: &empty}))
+	if err == nil {
+		t.Fatal("invalid preference accepted")
+	}
+	select {
+	case <-changes:
+		t.Fatal("invalid preference notified watchers")
+	default:
+	}
+	value, revision, err := store.Snapshot(protocol.AppPreferencesKey)
+	if err != nil || value != nil || revision != "" {
+		t.Fatalf("invalid preference persisted: %s %q %v", value, revision, err)
 	}
 }

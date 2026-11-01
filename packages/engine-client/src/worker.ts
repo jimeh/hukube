@@ -16,6 +16,7 @@ const subscriptions = new Map<number, { sub: Subscription<unknown>; count: numbe
 const streams = new Map<number, EngineStream>();
 const acknowledgements = new Map<number, { id: number; acknowledge: () => void }>();
 let nextToken = 1;
+const referenceSequences = new Map<number, number>();
 scope.onmessage = ({ data: msg }) => {
   switch (msg.kind) {
     case "connect": {
@@ -30,7 +31,12 @@ scope.onmessage = ({ data: msg }) => {
         msg.params as never,
         {
           state: (state) => scope.postMessage({ kind: "stream-state", id: msg.id, state }),
-          event: (event) => scope.postMessage({ kind: "stream-event", id: msg.id, event }),
+          event: (event) =>
+            new Promise<void>((resolve) => {
+              const token = nextToken++;
+              acknowledgements.set(token, { id: msg.id, acknowledge: resolve });
+              scope.postMessage({ kind: "stream-event", id: msg.id, event, token });
+            }),
           data: () => {},
           gap: (gap) => scope.postMessage({ kind: "stream-gap", id: msg.id, gap }),
           inputDropped: (bytes) =>
@@ -48,6 +54,12 @@ scope.onmessage = ({ data: msg }) => {
       if (stream) streams.set(msg.id, stream);
       break;
     }
+    case "stream-retain":
+      if (msg.sequence > (referenceSequences.get(msg.id) ?? -1)) {
+        referenceSequences.set(msg.id, msg.sequence);
+        streams.get(msg.id)?.retainSources?.(msg.sources);
+      }
+      break;
     case "stream-write":
       streams.get(msg.id)?.write(msg.data);
       break;
@@ -71,8 +83,12 @@ scope.onmessage = ({ data: msg }) => {
     case "stream-close":
       streams.get(msg.id)?.close();
       streams.delete(msg.id);
+      referenceSequences.delete(msg.id);
       for (const [token, pending] of acknowledgements)
-        if (pending.id === msg.id) acknowledgements.delete(token);
+        if (pending.id === msg.id) {
+          pending.acknowledge();
+          acknowledgements.delete(token);
+        }
       break;
     case "cancel":
       requests.get(msg.id)?.abort();
@@ -124,6 +140,13 @@ scope.onmessage = ({ data: msg }) => {
       break;
     case "close":
       connection?.close();
+      for (const pending of acknowledgements.values()) pending.acknowledge();
+      acknowledgements.clear();
+      streams.clear();
+      referenceSequences.clear();
+      subscriptions.clear();
+      for (const request of requests.values()) request.abort();
+      requests.clear();
       break;
   }
 };

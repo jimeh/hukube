@@ -38,7 +38,7 @@ jobs:
           key: check-${{ runner.os }}-${{ hashFiles('engine/go.sum', 'mise.lock') }}
           restore-keys: check-${{ runner.os }}-
       - run: mise run install
-      - run: mise run check
+      - run: mise run --jobs=1 check
       - name: Save Go and envtest caches
         if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

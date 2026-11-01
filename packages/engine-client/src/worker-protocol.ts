@@ -12,6 +12,7 @@ export type ToWorker =
   | { kind: "unsubscribe"; id: number }
   | { kind: "stream-open"; id: number; method: StreamMethod; params: unknown }
   | { kind: "stream-pause" | "stream-resume" | "stream-close"; id: number }
+  | { kind: "stream-retain"; id: number; sequence: number; sources: number[] }
   | { kind: "stream-write"; id: number; data: Uint8Array }
   | { kind: "stream-resize"; id: number; cols: number; rows: number }
   | { kind: "stream-ack"; id: number; token: number; bytes: number }
@@ -20,7 +21,7 @@ export type ToWorker =
 /** Messages from the connection Worker to the main thread. */
 export type FromWorker =
   | { kind: "stream-state"; id: number; state: StreamState }
-  | { kind: "stream-event"; id: number; event: unknown }
+  | { kind: "stream-event"; id: number; event: unknown; token?: number }
   | { kind: "stream-data"; id: number; data: unknown; bytes: number; token: number }
   | { kind: "stream-gap"; id: number; gap: StreamGap }
   | { kind: "stream-input-dropped"; id: number; bytes: number }

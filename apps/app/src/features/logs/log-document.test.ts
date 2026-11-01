@@ -94,3 +94,213 @@ it("colors origins by container on a Pod's tab and by Pod on a workload's", () =
   expect(sameWorkloadPod).toBe(first);
   expect(second).not.toBe(first);
 });
+it("trims each budget immediately without rewriting survivors and never restores removed rows", () => {
+  for (const budgets of [
+    { lines: 2, characters: 1000, decorations: 1000 },
+    { lines: 100, characters: 12, decorations: 1000 },
+    { lines: 100, characters: 1000, decorations: 2 },
+  ]) {
+    const doc = new LogDocument("pods");
+    doc.status(status);
+    doc.append(
+      ["one", "two", "three"].map((text) => ({
+        source: 7,
+        time: 1,
+        text,
+        spans: [[0, 1, 1, -1, 0]],
+      })),
+    );
+    const survivor = doc.rows[2];
+    const rewrites = doc.rewrites;
+    let changes = 0;
+    doc.subscribe(() => changes++);
+    doc.updateBudgets(budgets);
+    expect(doc.rows.map((row) => row.text)).toEqual(["two", "three"]);
+    expect(doc.rows[1]).toBe(survivor);
+    expect(doc.rewrites).toBe(rewrites);
+    expect(changes).toBe(1);
+    expect(doc.evictedLines).toBe(1);
+    doc.updateBudgets({ lines: 100, characters: 1000, decorations: 1000 });
+    expect(doc.rows).toHaveLength(2);
+    doc.updateBudgets({ lines: 1, characters: 1, decorations: 1 });
+    expect(doc.rows).toEqual([]);
+    expect(doc.evictedLines).toBe(3);
+  }
+});
+it("collects retired descriptors and colors through repeated rollouts while preserving old-row formatting", () => {
+  const doc = new LogDocument("deployments.apps");
+  const first = { ...source, pod: "web-first", podUid: "old", id: 1 };
+  doc.status({
+    ...status,
+    sources: [first, { ...first, id: 2, pod: "web-other", podUid: "other" }],
+  });
+  doc.append([{ source: 1, time: 0, text: "old retained" }]);
+  const oldText = doc.rows[0]!.text,
+    oldColor = doc.rows[0]!.spans[0]!.className;
+  for (let i = 3; i < 200; i++) {
+    doc.status({
+      ...status,
+      sources: [{ ...first, id: i, pod: `web-next-${i}`, podUid: String(i) }],
+    });
+    expect(doc.metadataSnapshot()).toMatchObject({ sources: 2, colors: 2, retained: 1 });
+    doc.timestamps(true);
+    doc.timestamps(false);
+    // A shorter common prefix may legitimately reveal more of all names, but old source identity/color survives.
+    expect(doc.rows[0]!.text).toContain("first old retained");
+    expect(doc.rows[0]!.spans[0]!.className).toBe(oldColor);
+  }
+  expect(oldText).toBe("first old retained");
+  doc.clear();
+  expect(doc.metadataSnapshot()).toEqual({ sources: 1, colors: 1, retained: 0 });
+  doc.end();
+  expect(doc.metadataSnapshot()).toEqual({ sources: 0, colors: 0, retained: 0 });
+});
+
+it("generates notices for first loss, settings eviction and first loss after Clear, keeping cumulative counts and sequences", () => {
+  const doc = new LogDocument("pods", { lines: 3, characters: 100, decorations: 100 });
+  const append = (texts: string[]) =>
+    doc.append(texts.map((text) => ({ source: 7, time: 1, text })));
+  expect(doc.lossGeneration).toBe(0);
+  append(["one", "two", "three", "four"]);
+  expect(doc.lossGeneration).toBe(1);
+  append(["five", "six"]);
+  expect(doc.evictedLines).toBe(3);
+  expect(doc.lossGeneration).toBe(1);
+  doc.updateBudgets({ ...doc.budgets, lines: 4 });
+  doc.updateBudgets({ ...doc.budgets, lines: 3 });
+  expect(doc.lossGeneration).toBe(1);
+  doc.updateBudgets({ ...doc.budgets, lines: 2 });
+  expect(doc.evictedLines).toBe(4);
+  expect(doc.lossGeneration).toBe(2);
+  doc.timestamps(true);
+  // Formatted prefixes now exceed the character budget only after it is reduced.
+  doc.updateBudgets({ ...doc.budgets, characters: 1 });
+  expect(doc.evictedLines).toBe(6);
+  expect(doc.lossGeneration).toBe(3);
+  doc.clear();
+  expect(doc.evictedLines).toBe(0);
+  expect(doc.lossGeneration).toBe(3);
+  append(["seven"]);
+  expect(doc.rows).toEqual([]);
+  expect(doc.lossGeneration).toBe(4);
+  expect(doc.evictedLines).toBe(1);
+  doc.updateBudgets({ ...doc.budgets, characters: 100 });
+  append(["eight"]);
+  expect(doc.rows[0]!.sequence).toBe(7);
+  expect(doc.lossGeneration).toBe(4);
+});
+
+it("starts a new loss generation when confirmed timestamp formatting evicts more content", () => {
+  const doc = new LogDocument("pods", { lines: 2, characters: 30, decorations: 100 });
+  doc.append(["one", "two", "three"].map((text) => ({ source: 7, time: 1, text })));
+  expect(doc.lossGeneration).toBe(1);
+  doc.timestamps(true);
+  expect(doc.evictedLines).toBe(2);
+  expect(doc.lossGeneration).toBe(2);
+  doc.timestamps(true);
+  doc.timestamps(false);
+  expect(doc.lossGeneration).toBe(2);
+});
+
+it.each(["characters", "decorations"] as const)(
+  "applies formatting and %s capacity together in both directions, notifying once and preserving sequences/references",
+  (budget) => {
+    const doc = new LogDocument("pods", { lines: 10, characters: 1000, decorations: 100 });
+    doc.status(status);
+    doc.append(
+      ["one", "two", "six"].map((text) => ({
+        source: 7,
+        time: 1,
+        text,
+        spans: [[0, 1, 1, -1, 0]],
+      })),
+    );
+    doc.end();
+    const ids = doc.rows.map((row) => row.sequence);
+    const plain = doc.rows.map((row) => row.text);
+    const tight = budget === "characters" ? 12 : 3;
+    let notifications = 0;
+    doc.subscribe(() => notifications++);
+    // Enlarging capacity must happen before timestamps can add text/styles.
+    doc.applyPreferences({
+      lines: 3,
+      characters: budget === "characters" ? tight : 1000,
+      decorations: budget === "decorations" ? tight : 100,
+      timestamps: false,
+    });
+    doc.applyPreferences({ lines: 3, characters: 1000, decorations: 100, timestamps: true });
+    expect(doc.rows.map((row) => row.sequence)).toEqual(ids);
+    expect(doc.rows.every((row) => row.spans.length === 2)).toBe(true);
+    expect(doc.rows.every((row) => row.spans[1]!.className === "log-fg-1")).toBe(true);
+    const changes = notifications;
+    const rewrites = doc.rewrites;
+    // Reducing capacity must happen after removing timestamp text/styles.
+    const final = {
+      lines: 3,
+      characters: budget === "characters" ? tight : 1000,
+      decorations: budget === "decorations" ? tight : 100,
+      timestamps: false,
+    };
+    doc.applyPreferences(final);
+    expect(doc.rows.map((row) => row.text)).toEqual(plain);
+    expect(doc.rows.map((row) => row.sequence)).toEqual(ids);
+    expect(doc.evictedLines).toBe(0);
+    expect(doc.lossGeneration).toBe(0);
+    expect(doc.retainedSources()).toEqual([7]);
+    expect(doc.metadataSnapshot()).toEqual({ sources: 1, colors: 1, retained: 1 });
+    expect(notifications).toBe(changes + 1);
+    expect(doc.rewrites).toBe(rewrites + 1);
+    doc.applyPreferences(final);
+    expect(notifications).toBe(changes + 1);
+    expect(doc.rewrites).toBe(rewrites + 1);
+    doc.applyPreferences({ ...final, characters: 1 });
+    expect(doc.evictedLines).toBe(3);
+    expect(doc.lossGeneration).toBe(1);
+    expect(doc.metadataSnapshot()).toEqual({ sources: 0, colors: 0, retained: 0 });
+  },
+);
+
+it("resets the actual default budgets and timestamps without losing any of 50000 rows that fit the final snapshot", () => {
+  const doc = new LogDocument("pods", { lines: 100000, characters: 64000000, decorations: 400000 });
+  doc.timestamps(true);
+  doc.append(Array.from({ length: 50000 }, () => ({ source: 7, time: 1, text: "x".repeat(630) })));
+  expect(doc.rows).toHaveLength(50000);
+  const rewrites = doc.rewrites;
+  doc.applyPreferences({
+    lines: 50000,
+    characters: 32000000,
+    decorations: 200000,
+    timestamps: false,
+  });
+  expect(doc.rows).toHaveLength(50000);
+  expect(doc.rows[0]!.sequence).toBe(0);
+  expect(doc.rows.at(-1)!.sequence).toBe(49999);
+  expect(doc.rows.reduce((sum, row) => sum + row.text.length + 1, 0)).toBe(31550000);
+  expect(doc.rows.every((row) => row.text === "x".repeat(630))).toBe(true);
+  expect(doc.evictedLines).toBe(0);
+  expect(doc.rewrites).toBe(rewrites + 1);
+});
+
+it("validates every preference before mutating formatting, budgets, rows or notifications", () => {
+  const doc = new LogDocument("pods");
+  doc.append([{ source: 7, time: 1, text: "one" }]);
+  const rows = doc.rows,
+    revision = doc.revision,
+    rewrites = doc.rewrites;
+  const settings = { ...doc.budgets, timestamps: true };
+  for (const invalid of [
+    { lines: 0 },
+    { characters: 64000001 },
+    { decorations: 1.5 },
+    { timestamps: "yes" },
+  ]) {
+    expect(() => doc.applyPreferences({ ...settings, ...invalid } as typeof settings)).toThrow(
+      /Invalid/,
+    );
+    expect(doc.rows).toBe(rows);
+    expect(doc.rows[0]!.text).toBe("one");
+    expect(doc.revision).toBe(revision);
+    expect(doc.rewrites).toBe(rewrites);
+    expect(doc.budgets).toEqual({ lines: 50000, characters: 32000000, decorations: 200000 });
+  }
+});

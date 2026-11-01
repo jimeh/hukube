@@ -294,3 +294,74 @@ it("relays input and resize and transfers Exec bytes without copying the output 
   send({ kind: "stream-ack", id: 10, token: delivered.token, bytes: delivered.bytes });
   expect(socket.sent.at(-1)).toEqual({ type: "ack", bytes: 4 });
 });
+it("keeps posted old-socket statuses and frames until their tokens settle and ignores stale retention snapshots", async () => {
+  send({ kind: "connect", endpoint: { url: "http://localhost", token: "t" } });
+  FakeSocket.latest.open();
+  send({
+    kind: "stream-open",
+    id: 91,
+    method: "resource.logs",
+    params: { cluster: "c", type: "pods", name: "p", uid: "uid" },
+  });
+  send({ kind: "stream-retain", id: 91, sequence: 1, sources: [] });
+  await Promise.resolve();
+  let socket = FakeSocket.latest;
+  const receive = (data: unknown) =>
+    socket.onmessage?.(
+      new MessageEvent("message", {
+        data: data instanceof ArrayBuffer ? data : JSON.stringify(data),
+      }),
+    );
+  const calls = scope.postMessage.mock.calls;
+  const posted = () =>
+    calls
+      .map(([message]) => message)
+      .filter((message) => message.kind === "stream-event" || message.kind === "stream-data");
+  const eventId = () => {
+    const event = posted()
+      .filter((message) => message.kind === "stream-event")
+      .at(-1);
+    return event?.kind === "stream-event"
+      ? (event.event as typeof status).sources[0]?.id
+      : undefined;
+  };
+  receive({ type: "hello", hello: { protocol: Hash } });
+  receive({ type: "event", event: status });
+  receive(frame());
+  const pending = posted().slice();
+  const old = eventId()!;
+  for (let i = 0; i < 80; i++) {
+    receive({
+      type: "event",
+      event: { ...status, sources: [{ ...status.sources[0]!, podUid: `new-${i}` }] },
+    });
+    const message = posted().at(-1)!;
+    if (message.kind !== "stream-event" || message.token === undefined)
+      throw new Error("missing status pin");
+    send({ kind: "stream-ack", id: 91, token: message.token, bytes: 0 });
+    await Promise.resolve();
+  }
+  // A stale retained snapshot must not release the newer retained owner.
+  send({ kind: "stream-retain", id: 91, sequence: 3, sources: [old] });
+  send({ kind: "stream-retain", id: 91, sequence: 2, sources: [] });
+  socket.close();
+  send({ kind: "stream-pause", id: 91 });
+  send({ kind: "stream-resume", id: 91 });
+  socket = FakeSocket.latest;
+  receive({ type: "hello", hello: { protocol: Hash } });
+  receive({ type: "event", event: status });
+  expect(eventId()).toBe(old);
+  for (const message of [...pending, ...posted().slice(-1)])
+    if (
+      (message.kind === "stream-data" || message.kind === "stream-event") &&
+      message.token !== undefined
+    )
+      send({ kind: "stream-ack", id: 91, token: message.token, bytes: 0 });
+  await Promise.resolve();
+  receive({ type: "event", event: { ...status, sources: [] } });
+  send({ kind: "stream-retain", id: 91, sequence: 4, sources: [] });
+  await Promise.resolve();
+  receive({ type: "event", event: status });
+  expect(eventId()).toBeGreaterThan(old);
+  send({ kind: "stream-close", id: 91 });
+});

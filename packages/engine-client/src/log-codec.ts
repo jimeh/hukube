@@ -31,6 +31,66 @@ export class LogCodec {
   readonly #cursors = new Map<number, LogCursor>();
   readonly #exited = new Map<number, string>();
   #nextId = 0;
+  #current = new Set<number>();
+  #retained = new Set<number>();
+  #pins = new Map<number, number>();
+  #reporting = false;
+  retainSources(ids: readonly number[]): void {
+    this.#reporting = true;
+    this.#retained = new Set(ids);
+    this.#prune();
+  }
+  pin(ids: readonly number[]): () => void {
+    for (const id of new Set(ids)) this.#pins.set(id, (this.#pins.get(id) ?? 0) + 1);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      for (const id of new Set(ids)) {
+        const count = (this.#pins.get(id) ?? 1) - 1;
+        if (count) this.#pins.set(id, count);
+        else this.#pins.delete(id);
+      }
+      this.#prune();
+    };
+  }
+  #prune(): void {
+    if (!this.#reporting) return;
+    for (const [key, id] of this.#identities)
+      if (
+        !this.#current.has(id) &&
+        !this.#retained.has(id) &&
+        !this.#pins.has(id) &&
+        !this.#cursors.has(id)
+      ) {
+        this.#identities.delete(key);
+        this.#exited.delete(id);
+      }
+  }
+  end(): void {
+    this.#current.clear();
+    this.#cursors.clear();
+    this.#sources.clear();
+    this.#prune();
+  }
+  dispose(): void {
+    this.#identities.clear();
+    this.#sources.clear();
+    this.#cursors.clear();
+    this.#exited.clear();
+    this.#pins.clear();
+    this.#retained.clear();
+    this.#current.clear();
+  }
+  metadataSnapshot() {
+    return {
+      identities: this.#identities.size,
+      wireSources: this.#sources.size,
+      cursors: this.#cursors.size,
+      exited: this.#exited.size,
+      pins: this.#pins.size,
+    };
+  }
 
   beginSocket(params?: Pick<LogStreamParams, "previous">): void {
     this.#sources.clear();
@@ -55,8 +115,11 @@ export class LogCodec {
     // Nor does one that is ready before a slow Pod's containers are known.
     if (status.ready && status.loaded >= status.followed) {
       const current = new Set(sources.map((source) => source.id));
+      this.#current = current;
+      const wire = new Set(status.sources.map((source) => source.id));
+      for (const id of this.#sources.keys()) if (!wire.has(id)) this.#sources.delete(id);
       for (const id of this.#cursors.keys()) if (!current.has(id)) this.#cursors.delete(id);
-    }
+    } else for (const source of sources) this.#current.add(source.id);
     return { ...status, sources };
   }
 

@@ -85,6 +85,14 @@ export class LogDocument {
   #entries: Entry[] = [];
   rows: LogRow[] = [];
   #sequence = 0;
+  #current = new Set<number>();
+  #usage = new Map<number, number>();
+  #colorCursor = 0;
+  #prefixSample: string | undefined;
+  evictedLines = 0;
+  /** First loss since Clear, or a settings change that removes more retained rows. */
+  lossGeneration = 0;
+
   #characters = 0;
   #decorations = 0;
   #multipleSources = false;
@@ -96,7 +104,7 @@ export class LogDocument {
   rewrites = 0;
   constructor(
     readonly type: string,
-    readonly budgets = logBudgets,
+    public budgets = { ...logBudgets },
   ) {}
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
@@ -107,8 +115,70 @@ export class LogDocument {
     this.revision++;
     for (const listener of this.#listeners) listener();
   }
+  retainedSources(): number[] {
+    return [...new Set([...this.#current, ...this.#usage.keys()])];
+  }
+  metadataSnapshot() {
+    return {
+      sources: this.sources.size,
+      colors: this.#originColors.size,
+      retained: this.#usage.size,
+    };
+  }
+  updateBudgets(budgets: typeof logBudgets): void {
+    this.applyPreferences({ ...budgets, timestamps: this.#timestamps });
+  }
+  /** Apply one confirmed snapshot before formatting or enforcing any retention limit. */
+  applyPreferences(settings: typeof logBudgets & { timestamps: boolean }): void {
+    const { timestamps, ...budgets } = settings;
+    if (
+      typeof timestamps !== "boolean" ||
+      !Number.isInteger(budgets.lines) ||
+      budgets.lines < 1 ||
+      budgets.lines > 100000 ||
+      !Number.isInteger(budgets.characters) ||
+      budgets.characters < 1 ||
+      budgets.characters > 64000000 ||
+      !Number.isInteger(budgets.decorations) ||
+      budgets.decorations < 1 ||
+      budgets.decorations > 400000
+    )
+      throw new Error("Invalid log budgets");
+    if (
+      timestamps === this.#timestamps &&
+      budgets.lines === this.budgets.lines &&
+      budgets.characters === this.budgets.characters &&
+      budgets.decorations === this.budgets.decorations
+    )
+      return;
+    const reformat = timestamps !== this.#timestamps;
+    this.budgets = { ...budgets };
+    this.#timestamps = timestamps;
+    if (reformat) {
+      this.#rebuild(true);
+      return;
+    }
+    this.#trim(true);
+    this.#prune();
+    this.#changed();
+  }
+  end(): void {
+    this.#current.clear();
+    this.#prune();
+    this.#changed();
+  }
+  #prune(): void {
+    for (const id of this.sources.keys())
+      if (!this.#current.has(id) && !this.#usage.has(id)) this.sources.delete(id);
+    const colors = new Set([...this.sources.values()].map((source) => this.#colorKey(source)));
+    for (const key of this.#originColors.keys())
+      if (!colors.has(key)) this.#originColors.delete(key);
+  }
   clear(): void {
     this.#entries = [];
+    this.#usage.clear();
+    this.evictedLines = 0;
+    this.#prune();
     this.rows = [];
     this.#characters = 0;
     this.#decorations = 0;
@@ -116,13 +186,24 @@ export class LogDocument {
     this.#changed();
   }
   status(status: LogStreamStatus): void {
+    if (status.ready && status.loaded >= status.followed)
+      this.#current = new Set(status.sources.map((source) => source.id));
+    else for (const source of status.sources) this.#current.add(source.id);
     for (const source of status.sources) {
       this.sources.set(source.id, source);
       const key = this.#colorKey(source);
       if (!this.#originColors.has(key))
-        this.#originColors.set(key, originColors[this.#originColors.size % originColors.length]!);
+        this.#originColors.set(key, originColors[this.#colorCursor++ % originColors.length]!);
     }
-    const prefix = commonPodPrefix(new Set([...this.sources.values()].map((source) => source.pod)));
+    // A bounded common-prefix summary preserves historical origin formatting.
+    for (const source of status.sources) {
+      if (this.#prefixSample === undefined) this.#prefixSample = source.pod;
+      else {
+        const length = commonPodPrefix([this.#prefixSample, source.pod]);
+        this.#prefixSample = this.#prefixSample.slice(0, length) + "_";
+      }
+    }
+    const prefix = commonPodPrefix(this.#prefixSample === undefined ? [] : [this.#prefixSample]);
     const multipleSources = this.#multipleSources || status.sources.length > 1;
     const multipleContainers =
       this.#multipleContainers ||
@@ -137,15 +218,14 @@ export class LogDocument {
       this.#podPrefix = prefix;
       this.#rebuild();
     }
+    this.#prune();
+    this.#changed();
   }
   #colorKey(source: LogSource): string {
     return this.type === "pods" ? source.container : source.podUid;
   }
   timestamps(value: boolean): void {
-    if (value !== this.#timestamps) {
-      this.#timestamps = value;
-      this.#rebuild();
-    }
+    this.applyPreferences({ ...this.budgets, timestamps: value });
   }
   append(lines: LogLine[]): void {
     for (const line of lines) this.#add({ sequence: this.#sequence++, line });
@@ -158,13 +238,15 @@ export class LogDocument {
     this.#changed();
   }
   #add(entry: Entry): void {
+    if (entry.line)
+      this.#usage.set(entry.line.source, (this.#usage.get(entry.line.source) ?? 0) + 1);
     const row = this.#format(entry);
     this.#entries.push(entry);
     this.rows.push(row);
     this.#characters += row.text.length + 1;
     this.#decorations += row.spans.length;
   }
-  #trim(): void {
+  #trim(settingsChange = false): void {
     let count = 0;
     while (
       this.rows.length - count > this.budgets.lines ||
@@ -178,14 +260,22 @@ export class LogDocument {
     }
     if (count) {
       this.rows.splice(0, count);
-      this.#entries.splice(0, count);
+      for (const entry of this.#entries.splice(0, count))
+        if (entry.line) {
+          const uses = this.#usage.get(entry.line.source)! - 1;
+          if (uses) this.#usage.set(entry.line.source, uses);
+          else this.#usage.delete(entry.line.source);
+        }
+      if (!this.evictedLines || settingsChange) this.lossGeneration++;
+      this.evictedLines += count;
+      this.#prune();
     }
   }
-  #rebuild(): void {
+  #rebuild(settingsChange = false): void {
     this.rows = this.#entries.map((entry) => this.#format(entry));
     this.#characters = this.rows.reduce((sum, row) => sum + row.text.length + 1, 0);
     this.#decorations = this.rows.reduce((sum, row) => sum + row.spans.length, 0);
-    this.#trim();
+    this.#trim(settingsChange);
     this.rewrites++;
     this.#changed();
   }
