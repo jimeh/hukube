@@ -5,7 +5,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@hukube/ui/components/context-menu";
-import { Button } from "@hukube/ui/components/button";
+import { Button, buttonVariants } from "@hukube/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@hukube/ui/components/tooltip";
 import { cn } from "@hukube/ui/lib/utils";
 import { Add01Icon, Cancel01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
@@ -120,19 +120,17 @@ export function ClusterTabs() {
         <Tooltip>
           <TooltipTrigger
             render={
-              <Button
-                variant="ghost"
-                size="icon"
-                nativeButton={false}
-                render={
-                  <Link
-                    to="/settings"
-                    search={{ category: "appearance", ...(active ? { fromCluster: active } : {}) }}
-                  />
-                }
+              <Link
+                to="/settings"
+                search={{ category: "appearance", ...(active ? { fromCluster: active } : {}) }}
                 aria-label="Settings"
                 aria-current={settingsActive ? "page" : undefined}
-                className="aria-[current=page]:bg-accent aria-[current=page]:text-foreground"
+                data-slot="button"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "icon",
+                  className: "aria-[current=page]:bg-accent aria-[current=page]:text-foreground",
+                })}
               />
             }
           >

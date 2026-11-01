@@ -12,12 +12,12 @@ async function openResource(page: Page, namespace: string, type: string, name: s
   return page.getByRole("tabpanel", { name, exact: true });
 }
 async function manager(page: Page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByRole("link", { name: "Overview definitions", exact: true }).click();
   return page.getByRole("region", { name: "Overview definitions", exact: true });
 }
 async function leaveManager(page: Page) {
-  await page.getByRole("button", { name: /^Back to / }).click();
+  await page.getByRole("link", { name: /^Back to / }).click();
 }
 export function overviewTests(namespace: string) {
   test("Overview shares form and YAML edits, Undo, gutter, all-Facet review, and Engine apply", async ({

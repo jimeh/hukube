@@ -7,7 +7,7 @@ import {
   AlertDialogFooter,
   AlertDialogTitle,
 } from "@hukube/ui/components/alert-dialog";
-import { Button } from "@hukube/ui/components/button";
+import { Button, buttonVariants } from "@hukube/ui/components/button";
 import { Checkbox } from "@hukube/ui/components/checkbox";
 import { Input } from "@hukube/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@hukube/ui/components/native-select";
@@ -70,35 +70,35 @@ export function SettingsPage({
   const [replaceOpen, setReplaceOpen] = useState(false);
   const returnsToCluster = !!fromCluster && ids.includes(fromCluster);
   const search = fromCluster ? { fromCluster } : {};
+  const backClassName = buttonVariants({ variant: "ghost", size: "sm", className: "w-fit" });
 
   return (
     <div className="h-full overflow-auto">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
         <header className="flex flex-col gap-2">
-          <Button
-            className="w-fit"
-            variant="ghost"
-            size="sm"
-            nativeButton={false}
-            onClick={(event) => {
-              const sameWindow =
-                event.button === 0 &&
-                !event.altKey &&
-                !event.ctrlKey &&
-                !event.metaKey &&
-                !event.shiftKey;
-              if (sameWindow && returnsToCluster && fromCluster) requestFocusReturn?.(fromCluster);
-            }}
-            render={
-              returnsToCluster ? (
-                <Link to="/c/$cluster" params={{ cluster: fromCluster }} />
-              ) : (
-                <Link to="/" />
-              )
-            }
-          >
-            {returnsToCluster ? `Back to ${fromCluster}` : "Back to clusters"}
-          </Button>
+          {returnsToCluster && fromCluster ? (
+            <Link
+              to="/c/$cluster"
+              params={{ cluster: fromCluster }}
+              data-slot="button"
+              className={backClassName}
+              onClick={(event) => {
+                const sameWindow =
+                  event.button === 0 &&
+                  !event.altKey &&
+                  !event.ctrlKey &&
+                  !event.metaKey &&
+                  !event.shiftKey;
+                if (sameWindow) requestFocusReturn?.(fromCluster);
+              }}
+            >
+              Back to {fromCluster}
+            </Link>
+          ) : (
+            <Link to="/" data-slot="button" className={backClassName}>
+              Back to clusters
+            </Link>
+          )}
           <h1 className="text-xl font-semibold">Settings</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
             These preferences are shared by every window connected to this Engine.

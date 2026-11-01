@@ -167,7 +167,8 @@ it("works without a Cluster and saves and resets the Engine-shared theme after r
   const h = await mountPage("appearance");
   expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeDefined();
   expect(screen.getByRole("heading", { level: 2, name: "Appearance" })).toBeDefined();
-  expect(screen.getByRole("button", { name: "Back to clusters" })).toBeDefined();
+  const back = screen.getByRole("link", { name: "Back to clusters" });
+  expect(back.getAttribute("href")).toBe("/");
   expect(screen.getByRole("link", { name: "Appearance" }).getAttribute("aria-current")).toBe(
     "page",
   );
@@ -412,13 +413,19 @@ it("returns to the originating Workspace only while its Cluster tab remains open
   const requestFocusReturn = vi.fn<(cluster: string) => void>();
   useOpenClusters.setState({ ids: ["dev"] });
   await mountPage("appearance", { version: 1 }, "dev", "open", requestFocusReturn);
-  const back = screen.getByRole("button", { name: "Back to dev" });
+  const back = screen.getByRole("link", { name: "Back to dev" });
+  expect(back.getAttribute("href")).toBe("/c/dev");
+  back.addEventListener("click", (event) => event.preventDefault(), { once: true });
+  fireEvent.click(back, { metaKey: true });
+  expect(requestFocusReturn).not.toHaveBeenCalled();
   fireEvent.click(back);
   expect(requestFocusReturn).toHaveBeenCalledOnce();
   expect(requestFocusReturn).toHaveBeenCalledWith("dev");
   cleanup();
   useOpenClusters.setState({ ids: [] });
   await mountPage("appearance", { version: 1 }, "dev", "open", requestFocusReturn);
-  fireEvent.click(screen.getByRole("button", { name: "Back to clusters" }));
+  const pickerBack = screen.getByRole("link", { name: "Back to clusters" });
+  expect(pickerBack.getAttribute("href")).toBe("/");
+  fireEvent.click(pickerBack);
   expect(requestFocusReturn).toHaveBeenCalledOnce();
 });

@@ -1612,7 +1612,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await page.keyboard.press("ControlOrMeta+C");
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(retainedLine);
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByRole("link", { name: "Log Streams", exact: true }).click();
   await page.getByRole("textbox", { name: /^Retained lines/ }).fill("300");
   await page.getByRole("button", { name: "Apply", exact: true }).click();
@@ -1622,7 +1622,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await expect(reduction).toBeVisible();
   await reduction.getByRole("button", { name: "Apply lower limits" }).click();
   await expect(page.getByText("Retained lines: Saved")).toBeVisible();
-  await page.getByRole("button", { name: `Back to ${clusterId}` }).click();
+  await page.getByRole("link", { name: `Back to ${clusterId}` }).click();
   await expect(pod).toBeVisible();
   await expect(
     pod.getByText(
@@ -1683,7 +1683,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
 
 /** Keeps the persistent E2E Engine's shared Log Stream preferences test-local. */
 async function resetLogStreamPreferences(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByRole("link", { name: "Log Streams", exact: true }).click();
   const retention = page.locator("form").filter({
     has: page.getByRole("heading", { name: "Retention", exact: true }),
@@ -1728,7 +1728,7 @@ async function resetLogStreamPreferences(page: Page): Promise<void> {
     await timestamps.click();
     await expect(page.getByText("Timestamps: Saved")).toBeVisible();
   }
-  await page.getByRole("button", { name: "Back to clusters" }).click();
+  await page.getByRole("link", { name: "Back to clusters" }).click();
 }
 
 async function assertEditorKeys(page: Page, panel: Locator, editor: Locator): Promise<void> {
