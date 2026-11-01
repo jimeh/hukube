@@ -66,11 +66,11 @@ export interface PreferenceSaveState {
   phase: "idle" | "saving" | "saved" | "error" | "conflict";
   message?: string;
   paths?: readonly PreferencePath[];
+  changes?: readonly PreferenceChange[];
 }
 
 interface SaveStateInternal extends PreferenceSaveState {
   id?: number;
-  changes?: readonly PreferenceChange[];
   observed?: ReadonlyMap<PreferencePath, unknown>;
   migration?: boolean;
 }

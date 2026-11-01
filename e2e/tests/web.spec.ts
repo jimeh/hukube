@@ -1626,7 +1626,7 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
   await expect(pod).toBeVisible();
   await expect(
     pod.getByText(
-      "Older retained log entries were discarded after retention limits changed. This cannot be undone.",
+      "Older log entries were discarded to stay within retention limits and cannot be restored.",
     ),
   ).toBeVisible();
   await expect.poll(firstVisible).toBe(retainedAnchor);
@@ -1685,22 +1685,26 @@ test("tails Pod and workload Log Streams, holds scrolling, and keeps editor shor
 async function resetLogStreamPreferences(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+  const retention = page.locator("form").filter({
+    has: page.getByRole("heading", { name: "Retention", exact: true }),
+  });
   const budgets = [
     ["Retained lines", 50_000],
     ["Retained characters", 32_000_000],
     ["Styled ranges", 200_000],
   ] as const;
-  let changes = false;
+  const changes: string[] = [];
   let reduces = false;
   for (const [label, value] of budgets) {
-    const input = page.getByRole("textbox", { name: new RegExp(`^${label}`) });
+    const input = retention.getByRole("textbox", { name: new RegExp(`^${label}`) });
     const current = await input.inputValue();
-    changes ||= current !== String(value);
+    if (current !== String(value)) changes.push(label);
     reduces ||= Number(current) > value;
     await input.fill(String(value));
   }
-  if (changes) {
-    await page.getByRole("button", { name: "Apply", exact: true }).click();
+  if (changes.length) {
+    const apply = retention.getByRole("button", { name: "Apply", exact: true });
+    await apply.click();
     if (reduces) {
       const dialog = page.getByRole("alertdialog", {
         name: "Reduce retained Log Stream entries?",
@@ -1708,8 +1712,9 @@ async function resetLogStreamPreferences(page: Page): Promise<void> {
       await expect(dialog).toBeVisible();
       await dialog.getByRole("button", { name: "Apply lower limits" }).click();
     }
+    await expect(apply).toBeDisabled();
     await expect(
-      page.getByText("Retained lines, Retained characters, Styled ranges: Saved"),
+      retention.getByText(`${changes.join(", ")}: Saved`, { exact: true }),
     ).toBeVisible();
   }
 

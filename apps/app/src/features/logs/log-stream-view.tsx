@@ -133,17 +133,12 @@ function LogRun({
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
-    // A previous run is sent whole on every socket, so a second socket's
-    // lines replace the first's. They are cleared when the new socket
-    // delivers something, not when it is ready, which comes after its lines.
-    let delivered = false;
-    let replaying = false;
-    const replace = () => {
-      delivered = true;
-      if (!replaying) return;
-      replaying = false;
-      document.clear();
-    };
+    // A previous run is sent whole on every socket. Track every logical record
+    // crossed on this run, including records retention discarded or a gap
+    // dropped, so a later socket skips that replayed prefix and appends only a
+    // tail the earlier socket did not reach.
+    let delivered = 0;
+    let replayPrefix = 0;
     let pods: Map<string, string> | undefined;
     const handle = engine.openStream(
       "resource.logs",
@@ -152,11 +147,11 @@ function LogRun({
         state: (value) => {
           if (!active) return;
           setState(value);
-          if (value === "connecting" || value === "reconnecting") replaying = previous && delivered;
+          if (value === "connecting" || value === "reconnecting")
+            replayPrefix = previous ? delivered : 0;
         },
         event: (value) => {
           if (!active) return;
-          if (value.sources.length) replace();
           document.status(value);
           const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
           // A status can be ready before a slow Pod's containers are known.
@@ -180,13 +175,28 @@ function LogRun({
         },
         data: (lines) => {
           if (!active) return;
-          replace();
-          document.append(lines);
+          const skipped = Math.min(replayPrefix, lines.length);
+          replayPrefix -= skipped;
+          const next = skipped ? lines.slice(skipped) : lines;
+          delivered += next.length;
+          if (next.length) document.append(next);
         },
         gap: (gap) => {
-          if (active)
+          if (!active) return;
+          if (!previous) {
             document.marker(
               `··· ${gap.records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
+            );
+            return;
+          }
+          let records = gap.records;
+          const skipped = Math.min(replayPrefix, records);
+          replayPrefix -= skipped;
+          records -= skipped;
+          delivered += records;
+          if (records)
+            document.marker(
+              `··· ${records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
             );
         },
         end: (value) => {
@@ -378,8 +388,7 @@ function LogRun({
       {document.retentionLoss && (
         <output className="flex shrink-0 flex-wrap items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           <span className="min-w-0 flex-1 break-words">
-            Older retained log entries were discarded after retention limits changed. This cannot be
-            undone.
+            Older log entries were discarded to stay within retention limits and cannot be restored.
           </span>
           <Button size="sm" variant="ghost" onClick={() => document.dismissRetentionLoss()}>
             Dismiss

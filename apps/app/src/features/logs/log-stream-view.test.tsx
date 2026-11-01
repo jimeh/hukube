@@ -425,21 +425,154 @@ it("shares display toggles, enables previous only after a restart, searches, and
   // Timestamps are still on from the toggle above.
   expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   expect(screen.getByText("The previous run of constructor.")).toBeDefined();
-  // A second socket sends the run again, and its lines replace the first's
-  // once they arrive, not before.
+  // A second socket sends the run again. Its already-delivered prefix is
+  // ignored without clearing the retained document.
   act(() => latest().listener.state?.("reconnecting"));
   event({ ...ready, ready: false, sources: [] });
   expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   event({ ...restarted, ready: false });
-  line("old again");
+  line("old");
   event(restarted);
-  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old again");
+  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   act(() => latest().listener.end({ reason: "complete" }));
   act(() => {
     vi.advanceTimersByTime(60_000);
   });
   expect(opened).toHaveLength(3);
 });
+
+it("does not restore an evicted previous-run prefix after limits increase and the socket reconnects", async () => {
+  mount();
+  await act(async () => {});
+  act(() => publishPreference({ version: 1, logStreams: { maxLines: 3 } }));
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  const previousReady = { ...ready, sources: [{ ...source, previous: true }] };
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 0, text: "three" },
+      ]),
+  );
+  event(previousReady);
+
+  act(() => publishPreference({ version: 1, logStreams: { maxLines: 1 } }));
+  expect(screen.getByRole("textbox").textContent).toBe("three");
+  act(() => publishPreference({ version: 1, logStreams: { maxLines: 3 } }));
+  act(() => latest().listener.state?.("reconnecting"));
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 0, text: "three" },
+      ]),
+  );
+  event(previousReady);
+
+  expect(screen.getByRole("textbox").textContent).toBe("three");
+});
+
+it("keeps a partial previous-run replay and appends only the new tail from a full replay", () => {
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  const previousReady = { ...ready, sources: [{ ...source, previous: true }] };
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+      ]),
+  );
+  act(() => latest().listener.state?.("reconnecting"));
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 0, text: "three" },
+      ]),
+  );
+  event(previousReady);
+
+  expect(screen.getByRole("textbox").textContent).toBe("onetwothree");
+});
+
+it("counts an initial previous-run gap in the prefix skipped by a full replay", () => {
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  const previousReady = { ...ready, sources: [{ ...source, previous: true }] };
+  event({ ...previousReady, ready: false });
+  line("one");
+  act(() => latest().listener.gap({ bytes: 20, records: 2 }));
+  line("four");
+
+  act(() => latest().listener.state?.("reconnecting"));
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 0, text: "three" },
+        { source: 0, time: 0, text: "four" },
+        { source: 0, time: 0, text: "five" },
+      ]),
+  );
+  event(previousReady);
+
+  expect(screen.getByRole("textbox").textContent).toBe(
+    "one··· 2 lines dropped: they arrived faster than they could be shown ···fourfive",
+  );
+});
+
+it("counts only the unseen part of a replay gap that spans the old prefix", () => {
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  const previousReady = { ...ready, sources: [{ ...source, previous: true }] };
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+      ]),
+  );
+
+  act(() => latest().listener.state?.("reconnecting"));
+  event({ ...previousReady, ready: false });
+  line("one");
+  act(() => latest().listener.gap({ bytes: 30, records: 3 }));
+  line("five");
+
+  act(() => latest().listener.state?.("reconnecting"));
+  event({ ...previousReady, ready: false });
+  act(
+    () =>
+      void latest().listener.data([
+        { source: 0, time: 0, text: "one" },
+        { source: 0, time: 0, text: "two" },
+        { source: 0, time: 0, text: "three" },
+        { source: 0, time: 0, text: "four" },
+        { source: 0, time: 0, text: "five" },
+      ]),
+  );
+  event(previousReady);
+
+  expect(screen.getByRole("textbox").textContent).toBe(
+    "onetwo··· 2 lines dropped: they arrived faster than they could be shown ···five",
+  );
+});
+
 it("renders ordered drop, join, leave and record markers with merged origins", () => {
   mount({ target: { ...props.target, type: "deployments.apps" }, kind: "Deployment" });
   event();
@@ -557,7 +690,7 @@ it("trims a hidden mounted document on confirmed budget updates without reopenin
   expect(screen.getByRole("textbox").textContent).toBe("four");
   expect(
     screen.getByText(
-      "Older retained log entries were discarded after retention limits changed. This cannot be undone.",
+      "Older log entries were discarded to stay within retention limits and cannot be restored.",
     ),
   ).toBeDefined();
 

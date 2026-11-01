@@ -188,7 +188,7 @@ it("explains an unavailable Engine while keeping last-known preferences visible"
   expect(screen.getByRole("radio", { name: "Light" }).matches(":checked")).toBe(true);
 });
 
-it("preserves invalid numeric drafts, sends no request, confirms reductions, and restores on Escape", async () => {
+it("preserves invalid numeric drafts, sends no request, confirms reductions, and ignores Escape", async () => {
   const h = await mountPage("logs");
   const lines = screen.getByRole("textbox", { name: /Retained lines/ });
   const apply = screen.getByRole("button", { name: /^Apply$/ });
@@ -225,7 +225,13 @@ it("preserves invalid numeric drafts, sends no request, confirms reductions, and
   fireEvent.change(lines, { target: { value: "20" } });
   expect(screen.getByText("Unsaved changes")).toBeDefined();
   fireEvent.keyDown(lines, { key: "Escape" });
-  expect(lines.getAttribute("value")).toBe("10");
+  expect(lines.getAttribute("value")).toBe("20");
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
+  expect(
+    screen.getByText(
+      /Monaco styled ranges, including ANSI styles, timestamps, origins, and notices\/markers/,
+    ),
+  ).toBeDefined();
 });
 
 it("keeps unapplied retention drafts while switching Settings categories", async () => {
@@ -265,7 +271,7 @@ it("finishes a stale retention retry as Saved without leaving confirmed drafts d
   expect(screen.queryByText("Unsaved changes")).toBeNull();
 });
 
-it("confirms a stale retry that would reduce the current retention budget", async () => {
+it("confirms a stale retry from its retained change after the visible draft changes", async () => {
   const h = await mountPage("logs");
   const lines = screen.getByRole("textbox", { name: /Retained lines/ });
   fireEvent.change(lines, { target: { value: "60000" } });
@@ -273,6 +279,7 @@ it("confirms a stale retry that would reduce the current retention budget", asyn
 
   fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
   await screen.findByText(/Not saved: changed in another window/);
+  fireEvent.change(lines, { target: { value: "70000" } });
   fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
 
   const dialog = screen.getByRole("alertdialog", {
@@ -280,8 +287,34 @@ it("confirms a stale retry that would reduce the current retention budget", asyn
   });
   expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 65_000 } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
-  await screen.findByText("Retained lines: Saved");
+  await act(async () => {});
   expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 60_000 } });
+  expect(lines.getAttribute("value")).toBe("70000");
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
+});
+
+it("confirms a conflicted Reset from its retained defaults after the visible draft changes", async () => {
+  const h = await mountPage("logs", {
+    version: 1,
+    logStreams: { maxLines: 80_000 },
+  });
+  const lines = screen.getByRole("textbox", { name: /Retained lines/ });
+  h.conflictNextPut({ version: 1, logStreams: { maxLines: 70_000 } });
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Reset section" })[0]!);
+  let dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  await screen.findByText(/Not saved: changed in another window/);
+  fireEvent.change(lines, { target: { value: "90000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Retry with my value" }));
+
+  dialog = screen.getByRole("alertdialog", { name: "Reduce retained Log Stream entries?" });
+  expect(h.value()).toEqual({ version: 1, logStreams: { maxLines: 70_000 } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply lower limits" }));
+  await act(async () => {});
+  expect(h.value()).toEqual({ version: 1 });
+  expect(lines.getAttribute("value")).toBe("90000");
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
 });
 
 it("uses labelled display controls and persists their shared defaults", async () => {
@@ -317,6 +350,33 @@ it("confirms a Reset that lowers an effective retention budget", async () => {
   expect(
     screen.getByText(/Retained lines, Retained characters, Styled ranges: Saved/),
   ).toBeDefined();
+});
+
+it("repairs an invalid stored budget with its effective default without resetting siblings", async () => {
+  const h = await mountPage("logs", {
+    version: 1,
+    logStreams: { maxLines: 0, maxCharacters: 1_000_000 },
+  });
+  const lines = screen.getByRole("textbox", { name: /Retained lines/ });
+  const characters = screen.getByRole("textbox", { name: /Retained characters/ });
+  const apply = screen.getByRole("button", { name: /^Apply$/ });
+  expect(lines.getAttribute("value")).toBe("50000");
+  expect(lines.getAttribute("aria-invalid")).toBe("true");
+  expect(characters.getAttribute("value")).toBe("1000000");
+
+  fireEvent.change(lines, { target: { value: "" } });
+  fireEvent.change(lines, { target: { value: "50000" } });
+  expect(screen.getByText("Unsaved changes")).toBeDefined();
+  expect(apply.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(apply);
+  await screen.findByText("Retained lines: Saved");
+
+  expect(h.value()).toEqual({
+    version: 1,
+    logStreams: { maxLines: 50_000, maxCharacters: 1_000_000 },
+  });
+  expect(lines.getAttribute("aria-invalid")).toBe("false");
+  expect(characters.getAttribute("value")).toBe("1000000");
 });
 
 it("requires explicit confirmation before replacing a malformed preference document", async () => {

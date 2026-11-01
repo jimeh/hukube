@@ -321,7 +321,7 @@ const budgetFields: readonly {
     name: "maxStyledRanges",
     path: "logStreams.maxStyledRanges",
     label: "Styled ranges",
-    unit: "ANSI style spans",
+    unit: "Monaco styled ranges, including ANSI styles, timestamps, origins, and notices/markers",
   },
 ];
 
@@ -396,13 +396,12 @@ function LogStreamSettings() {
     });
   };
   const retryChanges = (overwrite: boolean) => {
-    const paths = snapshot.saves.retention.paths ?? [];
-    const isReduction = paths.some((path) => {
+    const changes = snapshot.saves.retention.changes;
+    const paths = changes?.map(({ path }) => path) ?? [];
+    const isReduction = changes?.some(({ path, value }) => {
       const name = path.split(".")[1] as BudgetName;
-      const draft = drafts[name];
-      const intended =
-        draft === undefined ? undefined : parseDecimalDraft(draft, logPreferenceRanges[name]).value;
-      return intended !== undefined && intended < confirmed[name];
+      const intended = typeof value === "number" ? value : logPreferenceDefaults[name];
+      return intended < confirmed[name];
     });
     if (isReduction) setReduction({ kind: "retry", paths, overwrite });
     else retry(paths, overwrite);
@@ -466,16 +465,15 @@ function LogStreamSettings() {
                     setDrafts((current) => {
                       const next = { ...current };
                       const parsed = parseDecimalDraft(draft, range);
-                      if (!parsed.error && parsed.value === confirmed[name]) delete next[name];
+                      if (
+                        !parsed.error &&
+                        parsed.value === confirmed[name] &&
+                        !snapshot.fieldErrors[path]
+                      )
+                        delete next[name];
                       else next[name] = draft;
                       return next;
                     });
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      resetDrafts();
-                    }
                   }}
                 />
                 <span id={helpId} className="text-muted-foreground">
