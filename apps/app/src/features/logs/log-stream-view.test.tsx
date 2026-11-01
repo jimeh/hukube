@@ -795,11 +795,13 @@ it("keeps active collapsed filters and their counts, clears pending work synchro
   fireEvent.click(button);
   expect(button.getAttribute("aria-expanded")).toBe("false");
   expect(button.textContent).toContain("on");
+  expect(button.getAttribute("aria-description")).toBe("Filters are active");
   expect(document.activeElement).toBe(button);
   expect(document.getElementById(regionId)?.hidden).toBe(true);
   expect(screen.queryByRole("textbox", { name: "Include text" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   expect(document.activeElement).toBe(button);
+  expect(button.hasAttribute("aria-description")).toBe(false);
   expect(logText().textContent).toBe("hello");
   fireEvent.click(button);
   applyFilter("Include text", "missing");

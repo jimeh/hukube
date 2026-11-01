@@ -426,6 +426,7 @@ function LogRun({
             ref={filterButton}
             variant="ghost"
             aria-label="Filter"
+            aria-description={activeFilter ? "Filters are active" : undefined}
             aria-expanded={filters.expanded}
             aria-controls={filterId}
             onClick={() => {
