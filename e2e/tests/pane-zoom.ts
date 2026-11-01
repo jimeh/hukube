@@ -813,6 +813,7 @@ export async function paneZoomResourceScenario(
   for (const theme of ["light", "dark"] as const) {
     const toggle = page.getByRole("button", { name: `Switch to ${theme} mode` });
     if (await toggle.count()) await toggle.click();
+    await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
     for (const width of [1024, 640]) {
       await page.setViewportSize({ width, height: 900 });
       await expect
@@ -891,14 +892,17 @@ export async function paneZoomResourceScenario(
   await expect(page.getByRole("tabpanel", { name: resourceNames[1], exact: true })).toBeVisible();
   await assertVisibleFocus(page);
   await pane(page, resourceNames[0]).getByRole("button", { name: "Zoom Pane" }).click();
-  // Mounted Workspace retention while the picker and Settings dialog are used.
+  // Mounted Workspace retention while the picker and Settings page are used.
   await page.getByLabel("Open a cluster", { exact: true }).click();
   await page.getByRole("link", { name: clusterId, exact: true }).click();
   await expect(page.getByRole("button", { name: "Restore Panes" })).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Overview definitions" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Overview definitions", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Overview definitions", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Restore Panes" })).toBeHidden();
+  await page.getByRole("button", { name: /^Back to / }).click();
   await expect(page.getByRole("button", { name: "Restore Panes" })).toBeVisible();
   // Discard only this test's draft, then non-last and last closes use native state.
   await pane(page, resourceNames[0])
@@ -1207,6 +1211,7 @@ async function paneZoomTerminalSelection(
     "save",
     "zoom",
     "zoomed save",
+    "settings/back",
     "restore",
     "hide/reveal",
     "viewport",
@@ -1220,6 +1225,15 @@ async function paneZoomTerminalSelection(
         .getByRole("tab", { name: operation === "save" ? "YAML" : "Overview", exact: true })
         .click();
       await tab(page, title).click();
+    } else if (operation === "settings/back") {
+      await expect(own.getByRole("button", { name: "Restore Panes" })).toBeVisible();
+      await page.getByRole("link", { name: "Settings", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
+      await expect(session).toBeHidden();
+      await page.getByRole("button", { name: /^Back to / }).click();
+      await expect(input).toBeVisible();
+      await expect(own.getByRole("button", { name: "Restore Panes" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeFocused();
     } else if (operation === "hide/reveal") {
       await pane(page, "pods").getByRole("button", { name: "Zoom Pane" }).click();
       await expect(session).toBeHidden();
@@ -1245,7 +1259,12 @@ async function paneZoomTerminalSelection(
     }
     if (operation === "save" || operation === "zoomed save") await wire.nextSave(save);
     await expect.poll(copy, { message: `terminal selection after ${operation}` }).toBe(selected);
-    if (operation === "save" || operation === "zoomed save" || operation === "hide/reveal") {
+    if (
+      operation === "save" ||
+      operation === "zoomed save" ||
+      operation === "settings/back" ||
+      operation === "hide/reveal"
+    ) {
       expect(sizes()).toHaveLength(resized);
     }
     expect(await terminal.evaluate((element) => element.isConnected)).toBe(true);
