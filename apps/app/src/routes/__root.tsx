@@ -48,11 +48,14 @@ function RootLayout() {
       >
         <ClusterTabs />
         <main className="min-h-0 flex-1">
-          {ids.map((id) => (
-            <div key={id} hidden={id !== active} className="h-full">
-              <Workspace cluster={id} active={id === active && !outdated} />
-            </div>
-          ))}
+          {ids.map((id) => {
+            const visible = !settings && id === active;
+            return (
+              <div key={id} hidden={!visible} className="h-full">
+                <Workspace cluster={id} active={visible && !outdated} />
+              </div>
+            );
+          })}
           {visited && <SettingsPage visible={settings} />}
           <Outlet />
         </main>

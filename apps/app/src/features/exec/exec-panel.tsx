@@ -126,7 +126,15 @@ export function ExecPanel({
     if (showing && (theme === "dark" || theme === "light")) terminal?.theme();
   }, [terminal, theme, showing]);
   useEffect(() => {
-    if (renderingTerminal && showing && selected && terminal) terminal.focus();
+    // A Pane header action deliberately owns focus across native visibility changes.
+    if (
+      renderingTerminal &&
+      showing &&
+      selected &&
+      terminal &&
+      !document.activeElement?.closest("[data-pane-header-actions]")
+    )
+      terminal.focus();
   }, [terminal, showing, selected, renderingTerminal]);
   useEffect(() => terminal?.onFind(findFromTerminal), [terminal]);
   const phase = state?.phase;

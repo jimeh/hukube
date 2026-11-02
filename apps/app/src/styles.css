@@ -55,3 +55,11 @@
   top: -4px;
   bottom: auto;
 }
+
+/* Keep the Pane action outside the shrinking, scrollable Tab strip. */
+.dockview-theme-hukube .dv-tabs-and-actions-container > .dv-scrollable {
+  min-width: 0;
+}
+.dockview-theme-hukube .dv-right-actions-container {
+  flex-shrink: 0;
+}

@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import type { Setting, StreamListener } from "@hukube/engine-client";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { DockviewReact, type DockviewApi, type IDockviewPanelProps } from "dockview-react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ExecPanel } from "./exec-panel.tsx";
 import { endSession, useExecSessions, type ExecState, type ExecSessionParams } from "./sessions.ts";
 import { readSessionTabs, rememberSessionTab } from "./window-tabs.ts";
 import { fakeTerminal } from "./test-terminal.ts";
 import { WorkspaceContext, type WorkspaceValue } from "../workspace/workspace-context.tsx";
+import { PaneHeaderActions } from "../workspace/pane-header-actions.tsx";
+import { persistLayout } from "../workspace/layout-persistence.ts";
 
 const mocked = vi.hoisted(() => ({
   object: {
@@ -112,6 +115,8 @@ function view(state?: ExecState, initialParams: ExecSessionParams = params) {
 }
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   sessionStorage.clear();
   Object.assign(api, { isVisible: true, isActive: true });
   endSession("id");
@@ -128,6 +133,109 @@ afterEach(() => {
   mocked.exec = { allowed: true };
   delete mocked.object["metadata"];
   mocked.object["metadata"] = { uid: "uid" };
+});
+
+const nativeComponents = {
+  exec: ({ api: panelApi, params: panelParams }: IDockviewPanelProps<ExecSessionParams>) => (
+    <ExecPanel api={panelApi} params={panelParams} />
+  ),
+  resource: () => <textarea aria-label="Resource draft" defaultValue="kept draft" />,
+};
+
+it("keeps real header intent, terminal ownership and hidden visibility through native zoom and debounced save", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  mocked.terminal = fakeTerminal();
+  const terminal = mocked.terminal.terminal;
+  useExecSessions.setState({
+    entries: new Map([
+      [params.sessionId, { cluster: "c", params, state: { phase: "live" }, terminal }],
+    ]),
+  });
+  let dock!: DockviewApi;
+  render(
+    <WorkspaceContext value={workspace}>
+      <DockviewReact
+        components={nativeComponents}
+        rightHeaderActionsComponent={PaneHeaderActions}
+        onReady={(event) => {
+          dock = event.api;
+          dock.layout(1200, 800);
+        }}
+      />
+    </WorkspaceContext>,
+  );
+  let session!: ReturnType<DockviewApi["addPanel"]>;
+  let peer!: ReturnType<DockviewApi["addPanel"]>;
+  act(() => {
+    session = dock.addPanel({ id: "exec:id", component: "exec", title: "Exec", params });
+  });
+  act(() => {
+    peer = dock.addPanel({
+      id: "resource",
+      component: "resource",
+      position: { referencePanel: session, direction: "right" },
+    });
+  });
+  expect(terminal.focus).toHaveBeenCalled();
+  terminal.focus.mockClear();
+  const button = within(session.group.element).getByRole("button", { name: "Zoom Pane" });
+  fireEvent.click(button);
+  await act(async () => {});
+  expect(session.api.isActive).toBe(true);
+  expect(peer.api.isVisible).toBe(false);
+  expect(document.activeElement).toBe(button);
+  expect(terminal.focus).not.toHaveBeenCalled();
+  let deliver!: (value: Setting) => void;
+  const request = vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve());
+  const client = {
+    request,
+    subscribe: (_method: unknown, _params: unknown, listener: { data: typeof deliver }) => {
+      deliver = listener.data;
+      return { close() {} };
+    },
+  } as unknown as Parameters<typeof persistLayout>[0];
+  const dispose = persistLayout(client, dock, "workspace/c");
+  act(() => deliver({ revision: "", key: "workspace/c", value: null }));
+  act(() => session.api.updateParameters({ ...params, commandLine: "sh" }));
+  await act(async () => {});
+  act(() => {
+    vi.advanceTimersByTime(400);
+  });
+  await act(async () => {});
+  expect(request).toHaveBeenCalledOnce();
+  expect(session.group.api.isMaximized()).toBe(true);
+  expect(peer.api.isVisible).toBe(false);
+  expect(document.activeElement).toBe(button);
+  expect(terminal.focus).not.toHaveBeenCalled();
+  fireEvent.click(button);
+  await act(async () => {});
+  expect(document.activeElement).toBe(button);
+  expect(terminal.focus).not.toHaveBeenCalled();
+  fireEvent.click(within(peer.group.element).getByRole("button", { name: "Zoom Pane" }));
+  await act(async () => {});
+  expect(session.api.isVisible).toBe(false);
+  expect(terminal.attach.mock.calls.at(-1)?.[1]).toBe(false);
+  fireEvent.click(within(peer.group.element).getByRole("button", { name: "Restore Panes" }));
+  await act(async () => {});
+  expect(terminal.attach.mock.calls.at(-1)?.[1]).toBe(true);
+  expect(terminal.focus).not.toHaveBeenCalled();
+  // An ordinary Tab activation still focuses the session.
+  within(peer.group.element).getByRole("textbox").focus();
+  act(() => session.api.setActive());
+  expect(terminal.focus).toHaveBeenCalledOnce();
+  expect(useExecSessions.getState().entries.get("id")?.terminal).toBe(terminal);
+  expect(mocked.streams).toHaveLength(0);
+  expect(terminal.reset).not.toHaveBeenCalled();
+  expect(terminal.dispose).not.toHaveBeenCalled();
+  act(dispose);
 });
 
 it("shows gone with no stream until Start a new session is pressed", async () => {
@@ -657,4 +765,25 @@ it.each([
   expect(document.activeElement).toBe(other);
   Object.assign(api, { isVisible: true, isActive: true });
   other.remove();
+});
+
+it("keeps deliberate Pane header focus when an Exec Tab becomes selected, but retains ordinary Tab focus", () => {
+  Object.assign(api, { isActive: false });
+  const rendered = view({ phase: "live" });
+  const header = document.createElement("div");
+  header.dataset["paneHeaderActions"] = "";
+  const control = document.createElement("button");
+  header.append(control);
+  document.body.append(header);
+  control.focus();
+  Object.assign(api, { isActive: true });
+  rendered.unmount();
+  mocked.terminal!.terminal.focus.mockClear();
+  const selected = render(renderPanel(params));
+  expect(document.activeElement).toBe(control);
+  expect(mocked.terminal!.terminal.focus).not.toHaveBeenCalled();
+  selected.unmount();
+  header.remove();
+  render(renderPanel(params));
+  expect(mocked.terminal!.terminal.focus).toHaveBeenCalledOnce();
 });

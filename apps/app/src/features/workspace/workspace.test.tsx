@@ -92,7 +92,7 @@ vi.mock("dockview-react", () => ({
           if (mocks.broken) throw new Error("invalid layout");
         },
         activeGroup: { id: "active-pane" },
-        groups: [{ id: "first-pane" }],
+        groups: [],
         getPanel: (id: string) => mocks.panels.find((panel) => panel.id === id),
         addPanel: (options: (typeof mocks.addOptions)[number] & { id: string; title: string }) => {
           mocks.addOptions.push(options);
@@ -109,6 +109,9 @@ vi.mock("dockview-react", () => ({
           register(mocks.added, fn),
         onDidRemovePanel: (fn: typeof mocks.removed extends Set<infer T> ? T : never) =>
           register(mocks.removed, fn),
+        onDidAddGroup: () => ({ dispose: () => {} }),
+        onDidRemoveGroup: () => ({ dispose: () => {} }),
+        onDidMaximizedGroupChange: () => ({ dispose: () => {} }),
         onDidLayoutChange: () => ({ dispose: () => {} }),
         onDidActivePanelChange: () => ({ dispose: () => {} }),
       };
@@ -141,7 +144,11 @@ it("attaches every restored Tab including a hidden panel, without starting or at
   await startSession(engine as never, "c", params("visible"), async () => fakeTerminal().terminal);
   render(<Workspace cluster="c" active />);
   act(() =>
-    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+    mocks.watch!.data({
+      revision: "",
+      key: "workspace/c",
+      value: { version: 1, dockview: { grid: {} } },
+    }),
   );
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(2));
   expect(mocks.streams[0]!.params).toMatchObject({ session: "visible", start: true });
@@ -163,7 +170,11 @@ it("detaches held sessions on a failed layout clear and keeps their window recor
   const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
   const view = render(<Workspace cluster="c" active />);
   act(() =>
-    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+    mocks.watch!.data({
+      revision: "",
+      key: "workspace/c",
+      value: { version: 1, dockview: { grid: {} } },
+    }),
   );
   expect(mocks.request).not.toHaveBeenCalledWith("exec.end", expect.anything());
   expect(readSessionTabs("c").map((tab) => tab.params.sessionId)).toEqual(["visible", "hidden"]);
@@ -226,7 +237,11 @@ it("recovers this window's missing session Tab after the shared layout restores,
   const view = render(<Workspace cluster="c" active />);
   expect(mocks.panels).toHaveLength(0);
   act(() =>
-    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+    mocks.watch!.data({
+      revision: "",
+      key: "workspace/c",
+      value: { version: 1, dockview: { grid: {} } },
+    }),
   );
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(3));
   expect(mocks.panels.find((panel) => panel.id === "exec:local")?.api.title).toBe("My session");
@@ -253,7 +268,11 @@ it("recovers this window's missing session Tab after the shared layout restores,
   mocks.streams = [];
   render(<Workspace cluster="c" active />);
   act(() =>
-    mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+    mocks.watch!.data({
+      revision: "",
+      key: "workspace/c",
+      value: { version: 1, dockview: { grid: {} } },
+    }),
   );
   await vi.waitFor(() => expect(mocks.streams).toHaveLength(3));
   expect(mocks.panels.some((panel) => panel.id === "exec:local")).toBe(true);
@@ -266,7 +285,11 @@ it.each(["broken JSON", "null", "{}", '[null, {"title": "bad", "params": {"sessi
     expect(readSessionTabs("c")).toEqual([]);
     render(<Workspace cluster="c" active />);
     act(() =>
-      mocks.watch!.data({ revision: "", key: "workspace/c", value: { version: 1, dockview: {} } }),
+      mocks.watch!.data({
+        revision: "",
+        key: "workspace/c",
+        value: { version: 1, dockview: { grid: {} } },
+      }),
     );
     await vi.waitFor(() => expect(mocks.streams).toHaveLength(2));
     expect(mocks.panels).toHaveLength(2);
