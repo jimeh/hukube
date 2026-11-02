@@ -120,9 +120,15 @@ export async function assertPreviousInterruption(
   await expect(panel.getByRole("button", { name: /^Newest/ })).toBeHidden();
   const bounds = await editor.boundingBox();
   expect(bounds).not.toBeNull();
+  const logsBounds = await panel.getByRole("tabpanel", { name: "Logs", exact: true }).boundingBox();
+  const rowBounds = await editor.locator(".view-line").first().boundingBox();
+  expect(logsBounds).not.toBeNull();
+  expect(rowBounds).not.toBeNull();
+  // Force a real overflow despite the new editor reservation: six row heights
+  // for controls plus the editor cannot display all four model rows at once.
   await page.setViewportSize({
     width: 1440,
-    height: Math.max(320, Math.ceil(900 - bounds!.height + 40)),
+    height: Math.ceil(900 - logsBounds!.height + rowBounds!.height * 6),
   });
   await expect.poll(async () => (await monacoSnapshot(editor)).scrollTop).toBeGreaterThan(0);
   await editor.hover();
@@ -185,6 +191,29 @@ export async function assertPreviousInterruption(
     ),
     contentType: "application/json",
   });
+  // Keep Find and the EOF selection open at the exact constrained-height regression.
+  await panel.getByRole("button", { name: "Search", exact: true }).click();
+  const layoutFind = editor.getByRole("textbox", { name: "Find", exact: true });
+  await layoutFind.fill("original");
+  await expect(editor.locator(".matchesCount")).toHaveText(/\d of 2/);
+  await input.focus();
+  await input.press("ControlOrMeta+A");
+  try {
+    await setZoom(2);
+    const layout = await assertLogLayout(panel, true);
+    await persist("previous-layout-200-percent", {
+      body: JSON.stringify(layout, null, 2),
+      contentType: "application/json",
+    });
+    expect(await copiedSelection(editor)).toBe(retained);
+    expect(await monacoSnapshot(editor)).toMatchObject({ model: before.model, text: retained });
+    expect(fixture.evidence.requests).toBe(1);
+    await page.screenshot({ path: info.outputPath("previous-expanded-find-200-percent.png") });
+  } finally {
+    // Preference cleanup must remain reachable even when the zoom regression fails.
+    await setZoom(1);
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
   await panel.getByRole("button", { name: "Dismiss retention notice" }).click();
   await panel.getByRole("button", { name: "Search", exact: true }).click();
   const find = editor.getByRole("textbox", { name: "Find", exact: true });
@@ -213,6 +242,7 @@ export async function assertPreviousInterruption(
       // The canonical 240px Resource sidebar remains visible; width names the log content.
       await page.setViewportSize({ width: width === 320 ? 560 : width, height: 900 });
       await expect(stopped).toBeVisible();
+      await assertLogLayout(panel, false);
       const retry = panel.getByRole("button", { name: "Try again", exact: true });
       await retry.focus();
       await expect(retry).toBeFocused();
@@ -236,14 +266,23 @@ export async function assertPreviousInterruption(
       page.getByRole("region", { name: "Appearance", exact: true }).locator(":scope > output"),
     ).toHaveText("Saved");
     await page.getByRole("button", { name: /^Back to / }).click();
-    await setZoom(1.25);
-    await expect(stopped).toBeVisible();
-    await page.screenshot({ path: info.outputPath(`previous-incomplete-${theme}-zoom.png`) });
-    await persist(`previous-incomplete-${theme}-zoom-ax`, {
-      body: await panel.ariaSnapshot(),
-      contentType: "text/plain",
-    });
-    await setZoom(1);
+    try {
+      for (const factor of [1.25, 2]) {
+        await setZoom(factor);
+        await expect(stopped).toBeVisible();
+        await assertLogLayout(panel, false);
+        await page.screenshot({
+          path: info.outputPath(`previous-incomplete-${theme}-zoom-${factor}.png`),
+        });
+        await persist(`previous-incomplete-${theme}-zoom-${factor}-ax`, {
+          body: await panel.ariaSnapshot(),
+          contentType: "text/plain",
+        });
+      }
+    } finally {
+      await setZoom(1);
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
   }
   expect(fixture.evidence.requests).toBe(1);
   await panel.getByRole("button", { name: "Try again", exact: true }).click();
@@ -322,6 +361,73 @@ export async function assertPreviousInterruption(
     body: JSON.stringify({ ...fixture.evidence, hiddenAt, before, retained, fresh }, null, 2),
     contentType: "application/json",
   });
+}
+
+/** Real geometry, native scrolling and focus at the constrained Log Stream height. */
+async function assertLogLayout(panel: Locator, findOpen: boolean) {
+  const editor = panel.locator(".monaco-editor");
+  const layout = () =>
+    editor.evaluate((element, expectsFind) => {
+      const box = element.getBoundingClientRect();
+      const line = element.querySelector(".view-line")?.getBoundingClientRect();
+      const find = element.querySelector(".find-widget")?.getBoundingClientRect();
+      const pane = element.closest('[role="tabpanel"]')!.getBoundingClientRect();
+      return {
+        // Space for two payload rows plus EOF, alongside the existing Find widget.
+        readable: !!line && box.height >= line.height * 3 + (expectsFind ? (find?.height ?? 0) : 0),
+        contained: box.top >= pane.top && box.bottom <= Math.min(pane.bottom, innerHeight),
+      };
+    }, findOpen);
+  await expect.poll(layout).toMatchObject({ readable: true, contained: true });
+  const controls = panel.getByRole("region", {
+    name: "Log Stream controls and notices",
+    exact: true,
+  });
+  const outsideScroll = () =>
+    controls.evaluate((element) => {
+      const result: number[] = [];
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement)
+        result.push(ancestor.scrollTop);
+      return result;
+    });
+  const originalScroll = await outsideScroll();
+  for (const control of [
+    controls.getByRole("textbox", { name: "Include text", exact: true }),
+    controls.getByRole("textbox", { name: "Exclude text", exact: true }),
+    controls.getByRole("button", { name: "Match case", exact: true }),
+    controls.getByRole("button", { name: "Clear filters", exact: true }),
+    controls.getByRole("button", { name: "Try again", exact: true }),
+    controls.getByRole("button", { name: "Dismiss retention notice", exact: true }),
+  ]) {
+    if (!(await control.count())) continue;
+    await control.focus();
+    await expect(control).toBeFocused();
+    await expect
+      .poll(() =>
+        control.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const region = element
+            .closest('[aria-label="Log Stream controls and notices"]')!
+            .getBoundingClientRect();
+          return bounds.top >= region.top && bounds.bottom <= region.bottom;
+        }),
+      )
+      .toBe(true);
+  }
+  if (await controls.evaluate((element) => element.scrollHeight > element.clientHeight)) {
+    // Focusing the last action established a real scroll boundary, not a negative blank check.
+    await expect.poll(() => controls.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await controls.hover();
+    await panel.page().mouse.wheel(0, -1000);
+    await expect.poll(() => controls.evaluate((element) => element.scrollTop)).toBe(0);
+    await controls.focus();
+    await controls.press("End");
+    await expect.poll(() => controls.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await controls.press("Home");
+    await expect.poll(() => controls.evaluate((element) => element.scrollTop)).toBe(0);
+  }
+  expect(await outsideScroll()).toEqual(originalScroll);
+  return layout();
 }
 
 /** Inspect the actual editor/model through Monaco's public API, including EOF selection. */

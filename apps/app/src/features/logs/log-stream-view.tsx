@@ -406,111 +406,120 @@ function LogRun({
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <LogToolbar
-        ref={toolbar}
-        containers={containers}
-        container={container}
-        previous={previous}
-        hasPrevious={known.hasPrevious}
-        disabled={containers.length === 0}
-        ended={end?.reason === "deleted"}
-        focus={focus}
-        select={setContainer}
-        setPrevious={setPrevious}
-        searchDisabled={!hasProjection}
-        search={() => editor.current?.search()}
-        filterButton={
-          <Button
-            ref={filterButton}
-            variant="ghost"
-            aria-label="Filter"
-            aria-description={activeFilter ? "Filters are active" : undefined}
-            aria-expanded={filters.expanded}
-            aria-controls={filterId}
-            onClick={() => {
-              if (filters.expanded) filterButton.current?.focus();
-              filters.setExpanded(!filters.expanded);
-            }}
-          >
-            Filter{activeFilter ? " · on" : ""}
-          </Button>
-        }
+      <section
+        aria-label="Log Stream controls and notices"
+        // The scrolling area must be reachable for keyboard scrolling.
+        // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        className="min-h-0 shrink overflow-y-auto overscroll-contain focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
-        <LogFilters
-          filters={filters}
-          id={filterId}
-          includeRef={includeInput}
-          clear={() => clearFilters()}
-        />
-        {(activeFilter || filters.pending) && (
-          <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 border-t px-3 py-1 text-xs text-muted-foreground">
-            {activeFilter && (
-              <span>
-                {document.matchingLines.toLocaleString()} of{" "}
-                {document.retainedLines.toLocaleString()} retained lines match
-              </span>
-            )}
-            {filters.pending && <span>Applying filters…</span>}
-            {activeFilter && document.retainedCutLines > 0 && (
-              <span>
-                {document.retainedCutLines.toLocaleString()} retained{" "}
-                {document.retainedCutLines === 1 ? "line was" : "lines were"} cut. Removed text is
-                unavailable.
-              </span>
-            )}
-          </div>
-        )}
-      </LogToolbar>
-      {notices.map((notice, index) => (
-        <output
-          key={index}
-          title={notice.title}
-          className={cn(
-            "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2",
-            notice.destructive ? "text-destructive" : "text-muted-foreground",
-          )}
+        <LogToolbar
+          ref={toolbar}
+          containers={containers}
+          container={container}
+          previous={previous}
+          hasPrevious={known.hasPrevious}
+          disabled={containers.length === 0}
+          ended={end?.reason === "deleted"}
+          focus={focus}
+          select={setContainer}
+          setPrevious={setPrevious}
+          searchDisabled={!hasProjection}
+          search={() => editor.current?.search()}
+          filterButton={
+            <Button
+              ref={filterButton}
+              variant="ghost"
+              aria-label="Filter"
+              aria-description={activeFilter ? "Filters are active" : undefined}
+              aria-expanded={filters.expanded}
+              aria-controls={filterId}
+              onClick={() => {
+                if (filters.expanded) filterButton.current?.focus();
+                filters.setExpanded(!filters.expanded);
+              }}
+            >
+              Filter{activeFilter ? " · on" : ""}
+            </Button>
+          }
         >
-          <span className="min-w-0 flex-1 break-words">{notice.text}</span>
-          {notice.action}
-        </output>
-      ))}
-      {visible &&
-        document.evictedLines > 0 &&
-        (!acknowledgedLoss ||
-          acknowledgedLoss.document !== documentIdentity ||
-          document.lossGeneration > acknowledgedLoss.generation) && (
-          <RetentionNotice
-            key={`${type}:${document.lossGeneration}`}
-            count={document.evictedLines}
-            hasLines={hasLines}
-            dismiss={() => {
-              setAcknowledgedLoss({
-                document: documentIdentity,
-                generation: document.lossGeneration,
-              });
-              toolbar.current?.focus();
-            }}
+          <LogFilters
+            filters={filters}
+            id={filterId}
+            includeRef={includeInput}
+            clear={() => clearFilters()}
           />
-        )}
-      <output aria-label="Log filter result" aria-live="polite" className="sr-only">
-        {noMatches
-          ? "No matching lines. Filters inspect retained line text. Stream notices stay visible."
-          : ""}
-      </output>
-      {noMatches && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
-          <div className="min-w-0 flex-[1_1_12rem]">
-            <p>No matching lines</p>
-            <p className="text-xs text-muted-foreground">
-              Filters inspect retained line text. Stream notices stay visible.
-            </p>
+          {(activeFilter || filters.pending) && (
+            <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 border-t px-3 py-1 text-xs text-muted-foreground">
+              {activeFilter && (
+                <span>
+                  {document.matchingLines.toLocaleString()} of{" "}
+                  {document.retainedLines.toLocaleString()} retained lines match
+                </span>
+              )}
+              {filters.pending && <span>Applying filters…</span>}
+              {activeFilter && document.retainedCutLines > 0 && (
+                <span>
+                  {document.retainedCutLines.toLocaleString()} retained{" "}
+                  {document.retainedCutLines === 1 ? "line was" : "lines were"} cut. Removed text is
+                  unavailable.
+                </span>
+              )}
+            </div>
+          )}
+        </LogToolbar>
+        {notices.map((notice, index) => (
+          <output
+            key={index}
+            title={notice.title}
+            className={cn(
+              "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2",
+              notice.destructive ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            <span className="min-w-0 flex-1 break-words">{notice.text}</span>
+            {notice.action}
+          </output>
+        ))}
+        {visible &&
+          document.evictedLines > 0 &&
+          (!acknowledgedLoss ||
+            acknowledgedLoss.document !== documentIdentity ||
+            document.lossGeneration > acknowledgedLoss.generation) && (
+            <RetentionNotice
+              key={`${type}:${document.lossGeneration}`}
+              count={document.evictedLines}
+              hasLines={hasLines}
+              dismiss={() => {
+                setAcknowledgedLoss({
+                  document: documentIdentity,
+                  generation: document.lossGeneration,
+                });
+                toolbar.current?.focus();
+              }}
+            />
+          )}
+        <output aria-label="Log filter result" aria-live="polite" className="sr-only">
+          {noMatches
+            ? "No matching lines. Filters inspect retained line text. Stream notices stay visible."
+            : ""}
+        </output>
+        {noMatches && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <div className="min-w-0 flex-[1_1_12rem]">
+              <p>No matching lines</p>
+              <p className="text-xs text-muted-foreground">
+                Filters inspect retained line text. Stream notices stay visible.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => clearFilters(true)}>
+              Clear filters
+            </Button>
           </div>
-          <Button variant="outline" size="sm" onClick={() => clearFilters(true)}>
-            Clear filters
-          </Button>
-        </div>
-      )}
-      <div className="min-h-0 flex-1">
+        )}
+      </section>
+      {/* Keep room for Find and several rows; short Panes reserve at most half. */}
+      <div className="min-h-0 grow shrink-0 basis-[min(50%,8rem)]">
         {hadLines && (
           <div className="h-full" hidden={!hasProjection}>
             <LogEditor

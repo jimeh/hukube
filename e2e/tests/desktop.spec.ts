@@ -328,8 +328,13 @@ test("Previous interruption preserves confirmed retained lines in the desktop Ho
     const window = await app.firstWindow();
     await withLogStreamDefaults(window, () =>
       assertPreviousInterruption(window, fixture, info, async (factor) => {
+        const session = await window.context().newCDPSession(window);
+        await session.send("Emulation.clearDeviceMetricsOverride");
+        await session.detach();
         await app!.evaluate(({ BrowserWindow }, zoom) => {
-          BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(zoom);
+          const browser = BrowserWindow.getAllWindows()[0]!;
+          browser.setSize(1440, 900);
+          browser.webContents.setZoomFactor(zoom);
         }, factor);
       }),
     );
