@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import type { fitWithSelection as FitWithSelection } from "../../apps/app/src/lib/terminal-selection.ts";
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type JSHandle, type Locator, type Page, type WebSocket } from "@playwright/test";
 import { clusterId, kubectl, kubectlCreate } from "./env.ts";
 import { openGoToResource } from "./exec.ts";
 
@@ -439,10 +439,509 @@ type Wire = {
   event?: unknown;
 };
 
+// PANE_ZOOM_SETTINGS_BACK_GEOMETRY_V1: temporary, metadata-only Linux diagnosis.
+const paneFitDiagnosticMarker = "PANE_ZOOM_SETTINGS_BACK_GEOMETRY_V1";
+
+function paneFitFinite(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function paneFitBuffer<T>(limit: number) {
+  const events: T[] = [];
+  let dropped = 0;
+  return {
+    push(event: T) {
+      events.push(event);
+      if (events.length > limit) {
+        events.splice(1, 1); // Preserve the initial event and the recent tail.
+        dropped++;
+      }
+    },
+    snapshot: () => ({ events: events.slice(), dropped }),
+  };
+}
+
+function createPaneFitTimeline() {
+  type Event = {
+    observedAt: number;
+    socket: number;
+    kind: "exec-open" | "resize" | "exec-close" | "exec-end" | "save" | "saved" | "save-error";
+    id?: number;
+    cols?: number;
+    rows?: number;
+    originalResizeCount?: number;
+  };
+  const buffer = paneFitBuffer<Event>(64);
+  const cleanup: (() => void)[] = [];
+  let sockets = 0;
+  let stopped = false;
+  let readErrors = 0;
+  let oversized = 0;
+  let pendingDropped = 0;
+  let skippedSockets = 0;
+  return {
+    bind(socket: WebSocket, originalResizeCount: () => number) {
+      if (stopped) return;
+      if (sockets >= 8) {
+        skippedSockets++;
+        return;
+      }
+      const ordinal = ++sockets;
+      const pending = new Set<number>();
+      let exec = false;
+      const frame = (payload: string | Buffer, direction: "sent" | "received") => {
+        try {
+          const raw = typeof payload === "string" ? payload : payload.toString("utf8");
+          if (!raw.startsWith("{")) return;
+          if (raw.length > 65536) {
+            oversized++;
+            return;
+          }
+          const value = JSON.parse(raw) as Wire;
+          let event: Omit<Event, "observedAt" | "socket"> | undefined;
+          if (direction === "sent") {
+            if (value.type === "open" && value.method === "pod.exec") {
+              exec = true;
+              event = {
+                kind: "exec-open",
+                cols: paneFitFinite(value.params?.["cols"]),
+                rows: paneFitFinite(value.params?.["rows"]),
+              };
+            } else if (exec && value.type === "resize") {
+              event = {
+                kind: "resize",
+                cols: paneFitFinite(value.cols),
+                rows: paneFitFinite(value.rows),
+              };
+            } else if (value.method === "exec.end") event = { kind: "exec-end" };
+            else if (
+              value.method === "settings.put" &&
+              value.params?.["key"] === `workspace/${clusterId}` &&
+              paneFitFinite(value.id) !== undefined
+            ) {
+              if (pending.size < 32) pending.add(value.id!);
+              else pendingDropped++;
+              event = { kind: "save", id: value.id };
+            }
+          } else if (
+            pending.has(value.id!) &&
+            (value.type === "result" || value.type === "error")
+          ) {
+            pending.delete(value.id!);
+            event = { kind: value.type === "result" ? "saved" : "save-error", id: value.id };
+          }
+          if (event)
+            buffer.push({
+              ...event,
+              observedAt: Date.now(),
+              socket: ordinal,
+              originalResizeCount: exec ? originalResizeCount() : undefined,
+            });
+        } catch {
+          readErrors++;
+        }
+      };
+      const sent = ({ payload }: { payload: string | Buffer }) => frame(payload, "sent");
+      const received = ({ payload }: { payload: string | Buffer }) => frame(payload, "received");
+      const closed = () => {
+        try {
+          if (exec) buffer.push({ kind: "exec-close", socket: ordinal, observedAt: Date.now() });
+        } catch {
+          readErrors++;
+        }
+      };
+      cleanup.push(() => {
+        try {
+          socket.off("framesent", sent);
+        } catch {
+          readErrors++;
+        }
+        try {
+          socket.off("framereceived", received);
+        } catch {
+          readErrors++;
+        }
+        try {
+          socket.off("close", closed);
+        } catch {
+          readErrors++;
+        }
+      });
+      try {
+        socket.on("framesent", sent);
+        socket.on("framereceived", received);
+        socket.on("close", closed);
+      } catch {
+        readErrors++;
+      }
+    },
+    snapshot: () => ({
+      ...buffer.snapshot(),
+      readErrors,
+      oversized,
+      pendingDropped,
+      skippedSockets,
+    }),
+    stop() {
+      stopped = true;
+      for (const dispose of cleanup.splice(0)) {
+        try {
+          dispose();
+        } catch {
+          readErrors++;
+        }
+      }
+    },
+  };
+}
+
+/** Runs in the page. It reads public DOM geometry, never terminal contents or selection. */
+function installPaneFitDOMCapture() {
+  // Serialized page helpers must remain inside this callback.
+  // oxlint-disable-next-line unicorn/consistent-function-scoping
+  const number = (value: number) => (Number.isFinite(value) ? Math.round(value * 100) / 100 : null);
+  const rect = (element: Element | null | undefined) => {
+    if (!(element instanceof HTMLElement)) return null;
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return {
+      x: number(bounds.x),
+      y: number(bounds.y),
+      width: number(bounds.width),
+      height: number(bounds.height),
+      client: [element.clientWidth, element.clientHeight],
+      scroll: [element.scrollWidth, element.scrollHeight],
+      connected: element.isConnected,
+      hidden: !!element.closest("[hidden]"),
+      inert: !!element.closest("[inert]"),
+      display: style.display.slice(0, 32),
+      visibility: style.visibility.slice(0, 32),
+    };
+  };
+  const read = () => {
+    const dock = document.querySelector(".dv-dockview");
+    const terminal = document.querySelector(".xterm");
+    const rows = terminal?.querySelector(".xterm-rows");
+    const text = rows?.firstElementChild?.querySelector("span")?.firstChild;
+    let cell: { width: number | null; height: number | null } | null = null;
+    if (text?.nodeType === Node.TEXT_NODE && (text as Text).length) {
+      const range = document.createRange();
+      try {
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        const bounds = range.getBoundingClientRect();
+        cell = { width: number(bounds.width), height: number(bounds.height) };
+      } finally {
+        range.detach();
+      }
+    }
+    const font = rows ? getComputedStyle(rows) : undefined;
+    const viewport = window.visualViewport;
+    return {
+      window: {
+        inner: [window.innerWidth, window.innerHeight],
+        outer: [window.outerWidth, window.outerHeight],
+        dpr: number(window.devicePixelRatio),
+        visual: viewport
+          ? [
+              number(viewport.width),
+              number(viewport.height),
+              number(viewport.scale),
+              number(viewport.offsetLeft),
+              number(viewport.offsetTop),
+            ]
+          : null,
+      },
+      html: rect(document.documentElement),
+      body: rect(document.body),
+      root: rect(document.getElementById("root")),
+      main: rect(document.querySelector("main")),
+      workspace: rect(dock?.closest("[data-cluster]")),
+      dock: rect(dock),
+      panes: Array.from(document.querySelectorAll(".dv-groupview"))
+        .slice(0, 2)
+        .map((group) => ({
+          geometry: rect(group),
+          content: rect(group.querySelector(".dv-content-container")),
+          pressed:
+            group
+              .querySelector("[data-pane-header-actions] button")
+              ?.getAttribute("aria-pressed") === "true",
+        })),
+      terminal: terminal
+        ? {
+            host: rect(terminal),
+            screen: rect(terminal.querySelector(".xterm-screen")),
+            rows: rect(rows),
+            rowCount: rows?.children.length ?? 0,
+            cell,
+            font: font
+              ? {
+                  family: font.fontFamily.slice(0, 128),
+                  size: font.fontSize.slice(0, 32),
+                  weight: font.fontWeight.slice(0, 32),
+                  lineHeight: font.lineHeight.slice(0, 32),
+                  spacing: font.letterSpacing.slice(0, 32),
+                }
+              : null,
+          }
+        : null,
+      fonts: document.fonts.status.slice(0, 32),
+      settings: !!document.querySelector('[aria-label="App Settings"]:not([hidden])'),
+    };
+  };
+  type Sample = {
+    sequence: number;
+    observedAt: number;
+    reason: string;
+    pinned: boolean;
+    geometry: ReturnType<typeof read>;
+  };
+  let initial: Sample | undefined;
+  const pinned = new Map<string, Sample>();
+  const tail: Sample[] = [];
+  let sequence = 0;
+  let dropped = 0;
+  let readErrors = 0;
+  let last = "";
+  let entered = false;
+  let back = false;
+  let stopped = false;
+  let reads = 0;
+  let readLimit = false;
+  let raf = 0;
+  const sample = (reason: string, priority?: string) => {
+    try {
+      const geometry = read();
+      if (!priority && entered && geometry.settings && !pinned.has("settings-hidden"))
+        priority = "settings-hidden";
+      if (
+        !priority &&
+        back &&
+        !geometry.settings &&
+        geometry.workspace &&
+        !geometry.workspace.hidden &&
+        !pinned.has("returned")
+      )
+        priority = "returned";
+      const key = JSON.stringify(geometry);
+      if (!priority && reason === "frame" && key === last) return;
+      last = key;
+      const value = {
+        sequence: sequence++,
+        observedAt: number(performance.timeOrigin + performance.now())!,
+        reason: (priority ?? reason).slice(0, 32),
+        pinned: !!priority,
+        geometry,
+      };
+      if (!initial) initial = { ...value, pinned: true };
+      else if (priority && !pinned.has(priority)) pinned.set(priority, value);
+      else {
+        tail.push({ ...value, pinned: false });
+        if (tail.length > 43) {
+          tail.shift();
+          dropped++;
+        }
+      }
+    } catch {
+      readErrors++;
+    }
+  };
+  const click = (event: Event) => {
+    if (stopped) return;
+    try {
+      const target = event.target instanceof Element ? event.target : null;
+      const control = target?.closest("button,a");
+      const name = control?.getAttribute("aria-label") ?? control?.textContent?.trim() ?? "";
+      if (name === "Settings") {
+        sample("click", "pre-settings");
+        entered = true;
+      } else if (name.startsWith("Back to ")) {
+        sample("click", "before-back");
+        back = true;
+      } else if (name === "Zoom Pane" || name === "Restore Panes")
+        sample(name === "Zoom Pane" ? "zoom-click" : "restore-click");
+    } catch {
+      readErrors++;
+    }
+  };
+  const stop = () => {
+    stopped = true;
+    try {
+      cancelAnimationFrame(raf);
+    } catch {
+      readErrors++;
+    }
+    try {
+      document.removeEventListener("click", click, true);
+    } catch {
+      readErrors++;
+    }
+  };
+  const frame = () => {
+    if (stopped) return;
+    sample("frame");
+    if (++reads >= 600) {
+      readLimit = true;
+      stop();
+    } else {
+      try {
+        raf = requestAnimationFrame(frame);
+      } catch {
+        readErrors++;
+        stop();
+      }
+    }
+  };
+  sample("initial", "initial");
+  try {
+    document.addEventListener("click", click, true);
+    raf = requestAnimationFrame(frame);
+  } catch {
+    readErrors++;
+    stop();
+  }
+  return {
+    stop,
+    finish() {
+      try {
+        sample("failure");
+      } finally {
+        stop();
+      }
+      return {
+        samples: [...(initial ? [initial] : []), ...pinned.values(), ...tail].toSorted(
+          (a, b) => a.sequence - b.sequence,
+        ),
+        dropped,
+        readErrors,
+        readLimit,
+        missingInitial: !initial,
+        missingPreSettings: !pinned.has("pre-settings"),
+        missingSettingsHidden: !pinned.has("settings-hidden"),
+        missingReturned: !pinned.has("returned"),
+      };
+    },
+  };
+}
+
+async function paneFitBudget(milliseconds: number, task: (alive: () => boolean) => Promise<void>) {
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<"deadline">((finishDeadline) => {
+      timer = setTimeout(() => {
+        active = false;
+        finishDeadline("deadline");
+      }, milliseconds);
+    });
+    const work = Promise.resolve()
+      .then(() => task(() => active))
+      .then(
+        () => "complete" as const,
+        () => "failed" as const,
+      );
+    return await Promise.race([deadline, work]);
+  } finally {
+    active = false;
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function stopPaneFitCapture(handle?: JSHandle<ReturnType<typeof installPaneFitDOMCapture>>) {
+  if (!handle) return;
+  try {
+    void handle.evaluate((capture) => capture.stop()).catch(() => {});
+  } catch {
+    /* Best-effort cleanup. */
+  }
+  try {
+    void handle.dispose().catch(() => {});
+  } catch {
+    /* Best-effort cleanup. */
+  }
+}
+
+async function startPaneFitCapture(page: Page) {
+  let handle: JSHandle<ReturnType<typeof installPaneFitDOMCapture>> | undefined;
+  let setup: "complete" | "failed" | "deadline" = "failed";
+  try {
+    setup = await paneFitBudget(250, async (alive) => {
+      const created = await page.evaluateHandle(installPaneFitDOMCapture);
+      if (alive()) handle = created;
+      else stopPaneFitCapture(created);
+    });
+  } catch {
+    /* A missing observer cannot become a new scenario failure. */
+  }
+  return { handle, setup };
+}
+
+type PaneFitPhase = { operation: string; observedAt: number; baselineResizeCount: number };
+type PaneFitReport = {
+  setup: string;
+  dom: ReturnType<ReturnType<typeof installPaneFitDOMCapture>["finish"]> | null;
+  missingDOM: boolean;
+  phases: ReturnType<ReturnType<typeof paneFitBuffer<PaneFitPhase>>["snapshot"]>;
+  wire: ReturnType<ReturnType<typeof createPaneFitTimeline>["snapshot"]>;
+  payloadDropped: number;
+};
+
+function serializePaneFitReport(report: PaneFitReport) {
+  let serialized = JSON.stringify(report);
+  while (Buffer.byteLength(serialized, "utf8") > 96 * 1024) {
+    const disposable = report.dom?.samples.findIndex((sample) => !sample.pinned) ?? -1;
+    if (disposable >= 0) report.dom!.samples.splice(disposable, 1);
+    else if (report.wire.events.length > 1) report.wire.events.splice(1, 1);
+    else if (report.phases.events.length > 1) report.phases.events.splice(1, 1);
+    else
+      return JSON.stringify({
+        missingPayload: true,
+        reason: "size-limit",
+        payloadDropped: report.payloadDropped,
+      });
+    report.payloadDropped++;
+    serialized = JSON.stringify(report);
+  }
+  return serialized;
+}
+
+async function logPaneFitFailure(
+  capture: Awaited<ReturnType<typeof startPaneFitCapture>>,
+  phases: ReturnType<typeof paneFitBuffer<PaneFitPhase>>,
+  timeline: ReturnType<typeof createPaneFitTimeline>,
+) {
+  await paneFitBudget(500, async (alive) => {
+    let dom: PaneFitReport["dom"] = null;
+    try {
+      dom = (await capture.handle?.evaluate((observer) => observer.finish())) ?? null;
+    } catch {
+      /* Missing geometry is recorded, not a new assertion. */
+    }
+    if (!alive()) return;
+    let serialized: string;
+    try {
+      serialized = serializePaneFitReport({
+        setup: capture.setup,
+        dom,
+        missingDOM: !dom,
+        phases: phases.snapshot(),
+        wire: timeline.snapshot(),
+        payloadDropped: 0,
+      });
+    } catch {
+      serialized = '{"missingPayload":true,"reason":"serialization"}';
+    }
+    if (!alive()) return;
+    await Promise.resolve(console.log(paneFitDiagnosticMarker, serialized));
+  });
+}
+
 /** Attach before navigation/reload. A matching result, not a sent frame, is the save boundary. */
 export function observePaneZoom(page: Page) {
   const saved: StoredDock[] = [];
   const control: Wire[] = [];
+  const fitTimeline = createPaneFitTimeline();
   const streams: {
     method?: string;
     params?: Record<string, unknown>;
@@ -486,11 +985,13 @@ export function observePaneZoom(page: Page) {
         }
       } else stream.received.push(frame);
     });
+    fitTimeline.bind(socket, () => stream.sent.filter((frame) => frame.type === "resize").length);
   });
   return {
     saved,
     control,
     streams,
+    fitTimeline,
     nextSave: async (after: number, contains?: string) => {
       await expect
         .poll(
@@ -1207,70 +1708,97 @@ async function paneZoomTerminalSelection(
   const ends = wire.control.filter((frame) => frame.method === "exec.end").length;
   const own = pane(page, title);
   const viewport = page.viewportSize();
-  for (const operation of [
-    "save",
-    "zoom",
-    "zoomed save",
-    "settings/back",
-    "restore",
-    "hide/reveal",
-    "viewport",
-  ] as const) {
-    const save = wire.saved.length;
-    const resized = sizes().length;
-    if (operation === "save" || operation === "zoomed save") {
-      await tab(page, resourceNames[1]).click();
-      await page
-        .getByRole("tabpanel", { name: resourceNames[1], exact: true })
-        .getByRole("tab", { name: operation === "save" ? "YAML" : "Overview", exact: true })
-        .click();
-      await tab(page, title).click();
-    } else if (operation === "settings/back") {
-      await expect(own.getByRole("button", { name: "Restore Panes" })).toBeVisible();
-      await page.getByRole("link", { name: "Settings", exact: true }).click();
-      await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
-      await expect(session).toBeHidden();
-      await page.getByRole("button", { name: /^Back to / }).click();
-      await expect(input).toBeVisible();
-      await expect(own.getByRole("button", { name: "Restore Panes" })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeFocused();
-    } else if (operation === "hide/reveal") {
-      await pane(page, "pods").getByRole("button", { name: "Zoom Pane" }).click();
-      await expect(session).toBeHidden();
-      await page.getByRole("button", { name: "Restore Panes" }).click();
-      await expect(input).toBeVisible();
-    } else if (operation === "viewport") {
-      await page.setViewportSize({ width: 1300, height: 800 });
-    } else {
-      await own
-        .getByRole("button", { name: operation === "zoom" ? "Zoom Pane" : "Restore Panes" })
-        .click();
+  // Observation changes scheduling; it does not change the original actions or assertions.
+  const fitCapture = await startPaneFitCapture(page);
+  const fitPhases = paneFitBuffer<PaneFitPhase>(16);
+  try {
+    for (const operation of [
+      "save",
+      "zoom",
+      "zoomed save",
+      "settings/back",
+      "restore",
+      "hide/reveal",
+      "viewport",
+    ] as const) {
+      const save = wire.saved.length;
+      const resized = sizes().length;
+      fitPhases.push({ operation, observedAt: Date.now(), baselineResizeCount: resized });
+      if (operation === "save" || operation === "zoomed save") {
+        await tab(page, resourceNames[1]).click();
+        await page
+          .getByRole("tabpanel", { name: resourceNames[1], exact: true })
+          .getByRole("tab", { name: operation === "save" ? "YAML" : "Overview", exact: true })
+          .click();
+        await tab(page, title).click();
+      } else if (operation === "settings/back") {
+        await expect(own.getByRole("button", { name: "Restore Panes" })).toBeVisible();
+        await page.getByRole("link", { name: "Settings", exact: true }).click();
+        await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
+        await expect(session).toBeHidden();
+        await page.getByRole("button", { name: /^Back to / }).click();
+        await expect(input).toBeVisible();
+        await expect(own.getByRole("button", { name: "Restore Panes" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeFocused();
+      } else if (operation === "hide/reveal") {
+        await pane(page, "pods").getByRole("button", { name: "Zoom Pane" }).click();
+        await expect(session).toBeHidden();
+        await page.getByRole("button", { name: "Restore Panes" }).click();
+        await expect(input).toBeVisible();
+      } else if (operation === "viewport") {
+        await page.setViewportSize({ width: 1300, height: 800 });
+      } else {
+        await own
+          .getByRole("button", { name: operation === "zoom" ? "Zoom Pane" : "Restore Panes" })
+          .click();
+      }
+      if (operation === "zoom" || operation === "restore" || operation === "viewport") {
+        await expect.poll(() => sizes().length).toBeGreaterThan(resized);
+        expect(sizes().slice(resized)).toHaveLength(1);
+      }
+      if (operation === "zoom" || operation === "restore") {
+        await expect(
+          own.getByRole("button", {
+            name: operation === "zoom" ? "Restore Panes" : "Zoom Pane",
+          }),
+        ).toBeFocused();
+      }
+      if (operation === "save" || operation === "zoomed save") await wire.nextSave(save);
+      await expect.poll(copy, { message: `terminal selection after ${operation}` }).toBe(selected);
+      if (
+        operation === "save" ||
+        operation === "zoomed save" ||
+        operation === "settings/back" ||
+        operation === "hide/reveal"
+      ) {
+        expect(sizes()).toHaveLength(resized);
+      }
+      expect(await terminal.evaluate((element) => element.isConnected)).toBe(true);
+      expect(wire.streams.filter((stream) => stream.method === "pod.exec")).toHaveLength(streams);
+      expect(ownStream.closed).toBe(false);
+      expect(wire.control.filter((frame) => frame.method === "exec.end")).toHaveLength(ends);
     }
-    if (operation === "zoom" || operation === "restore" || operation === "viewport") {
-      await expect.poll(() => sizes().length).toBeGreaterThan(resized);
-      expect(sizes().slice(resized)).toHaveLength(1);
+  } catch (error) {
+    try {
+      await logPaneFitFailure(fitCapture, fitPhases, wire.fitTimeline);
+    } catch {
+      /* Diagnostic rejection cannot replace the original assertion. */
+    } finally {
+      // Always preserve the assertion, including a diagnostic's own rejection.
+      // oxlint-disable-next-line no-unsafe-finally
+      throw error;
     }
-    if (operation === "zoom" || operation === "restore") {
-      await expect(
-        own.getByRole("button", {
-          name: operation === "zoom" ? "Restore Panes" : "Zoom Pane",
-        }),
-      ).toBeFocused();
+  } finally {
+    try {
+      stopPaneFitCapture(fitCapture.handle);
+    } catch {
+      /* Best-effort diagnostic cleanup. */
     }
-    if (operation === "save" || operation === "zoomed save") await wire.nextSave(save);
-    await expect.poll(copy, { message: `terminal selection after ${operation}` }).toBe(selected);
-    if (
-      operation === "save" ||
-      operation === "zoomed save" ||
-      operation === "settings/back" ||
-      operation === "hide/reveal"
-    ) {
-      expect(sizes()).toHaveLength(resized);
+    try {
+      wire.fitTimeline.stop();
+    } catch {
+      /* Best-effort diagnostic cleanup. */
     }
-    expect(await terminal.evaluate((element) => element.isConnected)).toBe(true);
-    expect(wire.streams.filter((stream) => stream.method === "pod.exec")).toHaveLength(streams);
-    expect(ownStream.closed).toBe(false);
-    expect(wire.control.filter((frame) => frame.method === "exec.end")).toHaveLength(ends);
   }
   if (viewport) {
     const resized = sizes().length;
