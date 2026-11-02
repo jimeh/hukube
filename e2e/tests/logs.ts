@@ -374,8 +374,22 @@ async function assertLogLayout(panel: Locator, findOpen: boolean) {
       const pane = element.closest('[role="tabpanel"]')!.getBoundingClientRect();
       return {
         // Space for two payload rows plus EOF, alongside the existing Find widget.
-        readable: !!line && box.height >= line.height * 3 + (expectsFind ? (find?.height ?? 0) : 0),
-        contained: box.top >= pane.top && box.bottom <= Math.min(pane.bottom, innerHeight),
+        readable:
+          !!line &&
+          line.height > 0 &&
+          line.width > 0 &&
+          (!expectsFind || (!!find && find.height > 0 && find.width > 0)) &&
+          box.height >= line.height * 3 + (expectsFind ? find!.height : 0),
+        contained:
+          box.top >= Math.max(pane.top, 0) &&
+          box.bottom <= Math.min(pane.bottom, innerHeight) &&
+          box.left >= Math.max(pane.left, 0) &&
+          box.right <= Math.min(pane.right, innerWidth),
+        viewport: { width: innerWidth, height: innerHeight },
+        editor: box.toJSON(),
+        rowHeight: line?.height,
+        findHeight: find?.height,
+        pane: pane.toJSON(),
       };
     }, findOpen);
   await expect.poll(layout).toMatchObject({ readable: true, contained: true });
