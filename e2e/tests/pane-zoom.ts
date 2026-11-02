@@ -803,9 +803,9 @@ function installPaneFitDOMCapture() {
   }
   return {
     stop,
-    finish() {
+    finish(reason: "failure" | "complete" = "failure") {
       try {
-        sample("failure");
+        sample(reason);
       } finally {
         stop();
       }
@@ -906,15 +906,18 @@ function serializePaneFitReport(report: PaneFitReport) {
   return serialized;
 }
 
-async function logPaneFitFailure(
+async function logPaneFitObservation(
   capture: Awaited<ReturnType<typeof startPaneFitCapture>>,
   phases: ReturnType<typeof paneFitBuffer<PaneFitPhase>>,
   timeline: ReturnType<typeof createPaneFitTimeline>,
+  outcome: "failure" | "complete" = "failure",
 ) {
   await paneFitBudget(500, async (alive) => {
     let dom: PaneFitReport["dom"] = null;
     try {
-      dom = (await capture.handle?.evaluate((observer) => observer.finish())) ?? null;
+      dom =
+        (await capture.handle?.evaluate((observer, reason) => observer.finish(reason), outcome)) ??
+        null;
     } catch {
       /* Missing geometry is recorded, not a new assertion. */
     }
@@ -933,7 +936,14 @@ async function logPaneFitFailure(
       serialized = '{"missingPayload":true,"reason":"serialization"}';
     }
     if (!alive()) return;
-    await Promise.resolve(console.log(paneFitDiagnosticMarker, serialized));
+    await Promise.resolve(
+      console.log(
+        outcome === "complete"
+          ? "PANE_ZOOM_SETTINGS_BACK_GEOMETRY_PASS_V1"
+          : paneFitDiagnosticMarker,
+        serialized,
+      ),
+    );
   });
 }
 
@@ -1778,9 +1788,14 @@ async function paneZoomTerminalSelection(
       expect(ownStream.closed).toBe(false);
       expect(wire.control.filter((frame) => frame.method === "exec.end")).toHaveLength(ends);
     }
+    try {
+      await logPaneFitObservation(fitCapture, fitPhases, wire.fitTimeline, "complete");
+    } catch {
+      /* Completion metadata cannot change a successful scenario. */
+    }
   } catch (error) {
     try {
-      await logPaneFitFailure(fitCapture, fitPhases, wire.fitTimeline);
+      await logPaneFitObservation(fitCapture, fitPhases, wire.fitTimeline);
     } catch {
       /* Diagnostic rejection cannot replace the original assertion. */
     } finally {
