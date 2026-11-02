@@ -6,9 +6,25 @@ import type {
   StreamListener,
 } from "@hukube/engine-client";
 import { EngineProvider } from "@hukube/engine-client/react";
+import {
+  createRootRoute,
+  createRouter,
+  createMemoryHistory,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useImperativeHandle } from "react";
+import { useEffect, useImperativeHandle } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  EngineConnection,
+  type SocketLike,
+} from "../../../../../packages/engine-client/src/connection.ts";
+import {
+  Hash,
+  type StreamClientMessage,
+  type ClientMessage,
+} from "../../../../../packages/engine-client/src/protocol.gen.ts";
+import { frame } from "../../../../../packages/engine-client/src/log-test-fixtures.ts";
 import type { LogDocument } from "./log-document.ts";
 import type { LogEditorHandle } from "./log-editor.tsx";
 import LogStreamView, { type LogStreamViewProps } from "./log-stream-view.tsx";
@@ -16,6 +32,11 @@ import { PreferenceRuntime } from "../settings/preference-runtime.tsx";
 import { getPreferenceStore } from "../settings/store.ts";
 import { useLogSettings } from "./log-settings.ts";
 
+let renderedDocument: LogDocument;
+const flush = () =>
+  act(async () => {
+    await Promise.resolve();
+  });
 const search = vi.hoisted(() => vi.fn<() => void>());
 function StandInEditor({
   document,
@@ -28,6 +49,9 @@ function StandInEditor({
   wrap: boolean;
   ref: React.Ref<LogEditorHandle>;
 }) {
+  useEffect(() => {
+    renderedDocument = document;
+  }, [document]);
   useImperativeHandle(ref, () => ({ search }));
   return (
     // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- Stand-in records the editor document as visible text.
@@ -356,7 +380,7 @@ it("shares display toggles, enables previous only after a restart, searches, and
   event({ ...ready, sources: [{ ...source, previous: true }] });
   fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
   expect(latest().params.previous).toBe(true);
-  event();
+  event({ ...ready, sources: [{ ...source, instance: "" }] });
   expect(screen.getByText("No previous run")).toBeDefined();
   expect(screen.getByRole("button", { name: "Previous run" }).hasAttribute("disabled")).toBe(false);
   // The Engine sends a run's lines before it says it is ready.
@@ -367,16 +391,11 @@ it("shares display toggles, enables previous only after a restart, searches, and
   // Timestamps are still on from the toggle above.
   expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   expect(screen.getByText("The previous run of constructor.")).toBeDefined();
-  // A second socket sends the run again, and its lines replace the first's
-  // once they arrive, not before.
-  act(() => latest().listener.state?.("reconnecting"));
-  event({ ...ready, ready: false, sources: [] });
-  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
-  event({ ...restarted, ready: false });
-  line("old again");
-  event(restarted);
-  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old again");
   act(() => latest().listener.end({ reason: "complete" }));
+  event({ ...restarted, sources: [{ ...source, instance: "suspect" }] });
+  line("late suspect");
+  act(() => latest().listener.gap({ records: 1, bytes: 1 }));
+  expect(screen.getByRole("textbox").textContent).toBe("01:02:03.004 old");
   act(() => {
     vi.advanceTimersByTime(60_000);
   });
@@ -629,27 +648,32 @@ it("dismisses only the loss notice, coalesces routine losses and announces a new
   expect(latest().pause).not.toHaveBeenCalled();
 });
 
-it("shows the first new loss after replay clears a dismissed document", () => {
-  useLogSettings.setState({ maxLines: 1 });
+it("keeps dismissed loss and retained originals after terminal Previous and still trims confirmed budgets", () => {
+  useLogSettings.setState({ maxLines: 2 });
   mount();
   event({ ...ready, sources: [{ ...source, previous: true }] });
   fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
-  const previousStatus = { ...ready, sources: [{ ...source, previous: true }] };
-  event(previousStatus);
-  line("old one");
-  line("old two");
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  for (const text of ["old one", "old two", "old three"]) line(text);
   fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
-  act(() => latest().listener.state?.("reconnecting"));
-  event(previousStatus);
-  line("replayed one");
+  act(() =>
+    latest().listener.end({
+      reason: "error",
+      error: { code: "unavailable", message: "interrupted" },
+    }),
+  );
+  event();
+  line("suspect");
+  act(() => latest().listener.gap({ records: 1, bytes: 1 }));
   expect(screen.queryByRole("button", { name: "Dismiss retention notice" })).toBeNull();
-  line("replayed two");
+  expect(screen.getByRole("textbox").textContent).toBe("old twoold three");
+  act(() => useLogSettings.setState({ maxLines: 1 }));
   expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
-  expect(screen.getByRole("textbox").textContent).toBe("replayed two");
-  expect(screen.getAllByText("1 oldest retained lines removed by retention limits.")).toHaveLength(
+  expect(screen.getByRole("textbox").textContent).toBe("old three");
+  expect(screen.getAllByText("2 oldest retained lines removed by retention limits.")).toHaveLength(
     2,
   );
-  expect(opened).toHaveLength(2);
+  expect(latest().close).not.toHaveBeenCalled();
 });
 
 it("does not carry a dismissed loss into a replacement document", () => {
@@ -899,11 +923,15 @@ it("preserves filters through previous-run changes and hidden pause/resume, incl
   expect(latest().pause).toHaveBeenCalledOnce();
   rerender(true);
   expect(latest().resume).toHaveBeenCalled();
-  act(() => latest().listener.state?.("reconnecting"));
-  expect(screen.getByText("Connection to the Engine lost. Reconnecting…")).toBeDefined();
+  act(() =>
+    latest().listener.end({
+      reason: "error",
+      error: { code: "unavailable", message: "interrupted" },
+    }),
+  );
   event({ ...ready, sources: [{ ...source, previous: true }] });
   line("keep after resume");
-  expect(logText().textContent).toBe("keep after resume");
+  expect(logText().textContent).toBe("keep replaykeep before pause");
   expect(opened).toHaveLength(2);
   expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Include text" }).value).toBe(
     "keep",
@@ -984,4 +1012,229 @@ it("keeps a polite filter result mounted and announces no matches without per-li
   expect(screen.getByRole("status", { name: "Log filter result" })).toBe(status);
   expect(status!.textContent).toBe("");
   observer.disconnect();
+});
+
+it("preserves mounted confirmed retention and filtering after an opened Previous interruption with hostile replacement sockets", async () => {
+  class ScriptedSocket implements SocketLike {
+    binaryType = "";
+    onopen: SocketLike["onopen"] = null;
+    onclose: SocketLike["onclose"] = null;
+    onmessage: SocketLike["onmessage"] = null;
+    sent: (StreamClientMessage | ClientMessage)[] = [];
+    constructor(readonly control: boolean) {}
+    send(value: string | Uint8Array<ArrayBuffer>) {
+      if (typeof value !== "string") return;
+      const message = JSON.parse(value) as StreamClientMessage | ClientMessage;
+      this.sent.push(message);
+      if (this.control) {
+        if (message.type === "subscribe") {
+          expect(message.method).toBe("settings.watch");
+          queueMicrotask(() =>
+            this.receive({
+              type: "data",
+              id: message.id,
+              rev: message.rev,
+              data: { key: "app/preferences", value: preferenceValue, revision },
+            }),
+          );
+        } else if (message.type === "request") {
+          expect(message.method).toBe("settings.put");
+          const params = message.params as { value: unknown; ifRevision: string };
+          expect(params.ifRevision).toBe(revision);
+          preferenceValue = params.value;
+          revision += "x";
+          queueMicrotask(() => this.receive({ type: "result", id: message.id, data: {} }));
+        }
+        return;
+      }
+      if (message.type === "open" && sockets.indexOf(this) > 1) {
+        replacementOpens++;
+        // Every replacement is hostile, whether it repeats or corrects the announcement.
+        this.receive({ type: "event", event: previousStatus });
+        this.receive(frame(0, 1, 0n, "keep suspect prefix"));
+        this.receive({
+          type: "event",
+          event: {
+            ...previousStatus,
+            sources: [{ ...source, previous: true, instance: "changed" }],
+          },
+        });
+        this.receive(frame(0, 0, 9999999999n, "\u001b[31mkeep suspect suffix\u001b[0m"));
+        this.receive(frame(0, 4, 0n, "Error, exit code 1"));
+        this.receive({ type: "end", end: { reason: "complete" } });
+      }
+    }
+    close() {
+      this.onclose?.({} as CloseEvent);
+    }
+    receive(value: unknown) {
+      this.onmessage?.({
+        data: value instanceof ArrayBuffer ? value : JSON.stringify(value),
+      } as MessageEvent);
+    }
+    hello() {
+      this.onopen?.({} as Event);
+      this.receive({ type: "hello", hello: { protocol: Hash } });
+    }
+  }
+  const sockets: ScriptedSocket[] = [];
+  let replacementOpens = 0;
+  const previousStatus = { ...ready, sources: [{ ...source, previous: true }] };
+  let preferenceValue: unknown = { version: 1, logStreams: { timestamps: false, maxLines: 8 } };
+  let revision = "initial";
+  const client = new EngineConnection({
+    url: "http://localhost",
+    token: "test",
+    retryDelaysMs: [1],
+    createSocket: (url) => {
+      const socket = new ScriptedSocket(url.endsWith("/ws"));
+      if (!socket.control) sockets.push(socket);
+      queueMicrotask(() => socket.hello());
+      return socket;
+    },
+  });
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() });
+  const contents = (visible: boolean) => (
+    <RouterContextProvider router={router}>
+      <EngineProvider client={client}>
+        <PreferenceRuntime />
+        <LogStreamView {...props} visible={visible} />
+      </EngineProvider>
+    </RouterContextProvider>
+  );
+  const view = render(contents(true));
+  const store = getPreferenceStore(client);
+  try {
+    await flush();
+    act(() => sockets[0]!.receive({ type: "event", event: previousStatus }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+    await flush();
+    const first = sockets[1]!;
+    expect(first.sent.filter((message) => message.type === "open")).toHaveLength(1);
+    act(() => {
+      first.receive({ type: "event", event: previousStatus });
+      for (let i = 1; i <= 4; i++)
+        first.receive(
+          frame(
+            0,
+            i === 4 ? 1 : 0,
+            BigInt(i) * 1000000000n + BigInt(i),
+            `\u001b[32m${i === 3 ? "hidden" : "keep"} original ${i}\u001b[0m`,
+          ),
+        );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    applyFilter("Include text", "keep");
+    const doc = renderedDocument;
+    const editor = logText();
+    expect(doc.retainedLines).toBe(4);
+    view.rerender(contents(false));
+    await act(async () => {
+      store.change("maxLines", "2");
+      await Promise.resolve();
+    });
+    expect(store.getSnapshot().drafts.maxLines?.status).toBe("Saved");
+    expect(doc.retainedLines).toBe(2);
+    await act(async () => {
+      store.change("maxLines", "8");
+      await Promise.resolve();
+    });
+    expect(store.getSnapshot().drafts.maxLines?.status).toBe("Saved");
+    view.rerender(contents(true));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss retention notice" }));
+    const retained = structuredClone(doc.rows);
+    const projection = structuredClone(doc.visibleRows);
+    const owners = [...doc.sources];
+    const sequence = doc.nextSequence;
+    const generation = doc.lossGeneration;
+    expect(doc.matchingLines).toBe(1);
+    expect(doc.retainedCutLines).toBe(1);
+    act(() => first.close());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    // Before the fix the second socket is actually opened and runs its hostile script.
+    expect.soft(replacementOpens).toBe(0);
+    expect(doc.rows).toEqual(retained);
+    expect(doc.visibleRows).toEqual(projection);
+    expect([...doc.sources]).toEqual(owners);
+    expect(doc.nextSequence).toBe(sequence);
+    expect(doc.evictedLines).toBe(2);
+    expect(doc.lossGeneration).toBe(generation);
+    expect(doc.retainedLines).toBe(2);
+    expect(doc.matchingLines).toBe(1);
+    expect(doc.retainedCutLines).toBe(1);
+    expect(sockets).toHaveLength(2);
+    expect(renderedDocument).toBe(doc);
+    expect(logText()).toBe(editor);
+    expect(screen.queryByRole("button", { name: "Dismiss retention notice" })).toBeNull();
+    expect(screen.getByText(/reading the previous run was interrupted/)).toBeDefined();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(doc.visibleRows).toEqual(retained);
+  } finally {
+    view.unmount();
+    store.dispose();
+    client.close();
+  }
+});
+
+it.each([false, true])(
+  "shows a stopped empty Previous error with Try again, before status or after a chosen epoch (%s)",
+  (chosen) => {
+    mount();
+    event({ ...ready, sources: [{ ...source, previous: true }] });
+    fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+    if (chosen) event({ ...ready, sources: [{ ...source, previous: false, instance: "chosen" }] });
+    act(() =>
+      latest().listener.end({
+        reason: "error",
+        error: {
+          code: "unavailable",
+          message:
+            "reading the previous run was interrupted, so its lines may be incomplete. Try again starts a fresh read and replaces retained lines",
+        },
+      }),
+    );
+    expect(screen.getByText("Log Stream stopped")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Reading the previous run was interrupted, so its lines may be incomplete. Try again starts a fresh read and replaces retained lines.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/printed anything|printed nothing|No lines from/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(opened).toHaveLength(3);
+    expect(opened[1]!.close).toHaveBeenCalledOnce();
+  },
+);
+
+it("keeps a chosen empty Previous epoch distinct from provisional availability", () => {
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  event({ ...ready, sources: [{ ...source, previous: false, instance: "chosen" }] });
+  act(() => latest().listener.end({ reason: "complete" }));
+  expect(screen.getByText("No lines from the previous run")).toBeDefined();
+  expect(screen.getByText("No lines were read from the previous run.")).toBeDefined();
+});
+
+it("keeps Try again available for an interrupted Previous whose retained rows no longer fit", () => {
+  mount();
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Previous run" }));
+  event({ ...ready, sources: [{ ...source, previous: true }] });
+  line("retained");
+  act(() => useLogSettings.setState({ maxCharacters: 1 }));
+  expect(screen.getByText("No retained lines fit")).toBeDefined();
+  act(() =>
+    latest().listener.end({
+      reason: "error",
+      error: { code: "unavailable", message: "interrupted" },
+    }),
+  );
+  expect(screen.getByText("Log Stream stopped")).toBeDefined();
+  expect(screen.getByText("Interrupted.")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Dismiss retention notice" })).toBeDefined();
 });

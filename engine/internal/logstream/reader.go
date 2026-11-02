@@ -254,6 +254,10 @@ func (r *containerReader) wait(snapshot containerSnapshot, retry bool) {
 func (r *containerReader) run() {
 	if r.s.p.Previous {
 		snapshot := r.get()
+		if previous(snapshot.status) == "" {
+			r.settled()
+			return
+		}
 		r.instance(previous(snapshot.status))
 		options := &corev1.PodLogOptions{Container: r.name, Timestamps: true, Previous: true, TailLines: &r.s.tail}
 		_, err := r.read(options, "", 0)

@@ -1,4 +1,6 @@
-import { expect, type Locator } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
+import type { logReplayFixture } from "../log-replay.ts";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 /** Shared web/desktop check against a finite, known line in the retained buffer. */
 export async function assertLogFiltering(panel: Locator) {
@@ -69,4 +71,299 @@ async function copiedSelection(editor: Locator) {
   });
   expect(result.handled).toBe(true);
   return result.text;
+}
+
+/** Real Engine/Monaco regression, shared by the web and Electron Hosts. */
+export async function assertPreviousInterruption(
+  page: Page,
+  fixture: Awaited<ReturnType<typeof logReplayFixture>>,
+  info: TestInfo,
+  setZoom = async (factor: number) => {
+    await page.evaluate((value) => {
+      document.documentElement.style.zoom = value === 1 ? "" : String(value);
+    }, factor);
+  },
+) {
+  const persist = async (name: string, attachment: { body: string; contentType: string }) => {
+    const artifact = info.outputPath(
+      `${name}.${attachment.contentType === "application/json" ? "json" : "txt"}`,
+    );
+    await writeFile(artifact, attachment.body);
+    await info.attach(name, { path: artifact, contentType: attachment.contentType });
+  };
+  const { clusterId } = await import("./env.ts");
+  const { openGoToResource } = await import("./exec.ts");
+  await page.getByRole("button", { name: /^Back to / }).click();
+  await page.getByRole("button", { name: new RegExp(clusterId) }).click();
+  await expect(page.getByText(/Kubernetes v\d/)).toBeVisible();
+  await openGoToResource(page);
+  await page
+    .getByRole("combobox", { name: "Go to Resource" })
+    .fill(`${fixture.namespace}/pods/${fixture.name}`);
+  await page
+    .getByRole("option", { name: new RegExp(`^Pod ${fixture.name} ${fixture.namespace}$`) })
+    .click();
+  const panel = page.getByRole("tabpanel", { name: fixture.name, exact: true });
+  await panel.getByRole("tab", { name: "Logs", exact: true }).click();
+  await expect(panel.locator(".monaco-editor .view-lines")).toContainText("stable current");
+  await expect(panel.getByRole("button", { name: "Previous run" })).toBeEnabled();
+  await panel.getByRole("button", { name: "Filter", exact: true }).click();
+  const include = panel.getByRole("textbox", { name: "Include text" });
+  await include.fill("keep");
+  await expect(panel.getByText("No matching lines", { exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Previous run" }).click();
+  const editor = panel.locator(".monaco-editor");
+  await expect(panel.getByText("3 of 4 retained lines match")).toBeVisible();
+  await expect.poll(() => fixture.evidence.heldAt).toBeGreaterThan(0);
+  await expect.poll(() => fixture.evidence.upstreamEnded).toBe(true);
+  expect(fixture.evidence.requests).toBe(1);
+  await expect(panel.getByRole("button", { name: /^Newest/ })).toBeHidden();
+  const bounds = await editor.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.setViewportSize({
+    width: 1440,
+    height: Math.max(320, Math.ceil(900 - bounds!.height + 40)),
+  });
+  await expect.poll(async () => (await monacoSnapshot(editor)).scrollTop).toBeGreaterThan(0);
+  await editor.hover();
+  await page.mouse.wheel(0, -1000);
+  await expect(panel.getByRole("button", { name: /^Newest/ })).toBeVisible();
+  await expect.poll(async () => (await monacoSnapshot(editor)).scrollTop).toBe(0);
+  const before = await monacoSnapshot(editor);
+  expect(before.text).toBe("keep original 1\nkeep original 3\nkeep original 4\n");
+  const input = editor.getByRole("textbox", { name: /^Logs of / });
+  await input.focus();
+  await input.press("ControlOrMeta+A");
+  expect(await copiedSelection(editor)).toBe(before.text);
+  const hiddenAt = Date.now();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(panel).toBeHidden();
+  await page.getByRole("link", { name: "Log Streams", exact: true }).click();
+  const settings = page.getByRole("region", { name: "Log Streams", exact: true });
+  const limit = settings.getByLabel("Maximum retained lines", { exact: true });
+  await limit.fill("2");
+  await limit.press("Enter");
+  await expect(settings.locator(":scope > output")).toHaveText("Saved");
+  await limit.fill("8");
+  await limit.press("Enter");
+  await expect(settings.locator(":scope > output")).toHaveText("Saved");
+  // The actual product timer is an elapsed-time integration boundary, observed at response close.
+  await expect.poll(() => fixture.evidence.closedAt, { timeout: 25_000 }).toBeGreaterThan(0);
+  expect(fixture.evidence.closedAt - hiddenAt).toBeGreaterThanOrEqual(10_000);
+  await page.getByRole("button", { name: /^Back to / }).click();
+  await expect(panel).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const stopped = panel.getByText(
+    "The Log Stream stopped: reading the previous run was interrupted, so its lines may be incomplete. Try again starts a fresh read and replaces retained lines.",
+  );
+  await expect(stopped).toBeVisible();
+  await expect(panel.getByText("2 of 2 retained lines match")).toBeVisible();
+  const retained = "keep original 3\nkeep original 4\n";
+  expect(await copiedSelection(editor)).toBe(retained);
+  expect(await monacoSnapshot(editor)).toMatchObject({
+    model: before.model,
+    text: retained,
+    selection: retained,
+    scrollTop: 0,
+  });
+  expect(fixture.evidence.requests).toBe(1);
+  expect(fixture.evidence.withheld).toBe(1);
+  expect(fixture.evidence.errors).toEqual([]);
+  await persist("previous-held-boundary", {
+    body: JSON.stringify(
+      {
+        ...fixture.evidence,
+        namespace: fixture.namespace,
+        scratch: fixture.scratch,
+        hiddenAt,
+        before,
+        retained,
+        after: await monacoSnapshot(editor),
+      },
+      null,
+      2,
+    ),
+    contentType: "application/json",
+  });
+  await panel.getByRole("button", { name: "Dismiss retention notice" }).click();
+  await panel.getByRole("button", { name: "Search", exact: true }).click();
+  const find = editor.getByRole("textbox", { name: "Find", exact: true });
+  await find.fill("keep original");
+  await expect(editor.locator(".matchesCount")).toHaveText(/\d of 2/);
+  await find.fill("withheld");
+  await expect(editor.locator(".matchesCount")).toHaveText("No results");
+  await find.press("Escape");
+  await include.fill("missing");
+  await expect(panel.getByText("No matching lines", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Search", exact: true })).toBeDisabled();
+  await panel.getByRole("button", { name: "Clear filters", exact: true }).first().click();
+  expect((await monacoSnapshot(editor)).text).toBe(retained);
+  await include.fill("keep");
+  await expect(panel.getByText("2 of 2 retained lines match")).toBeVisible();
+
+  for (const theme of ["light", "dark"] as const) {
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Appearance", exact: true }).click();
+    await page.getByLabel("Theme", { exact: true }).selectOption(theme);
+    await expect(
+      page.getByRole("region", { name: "Appearance", exact: true }).locator(":scope > output"),
+    ).toHaveText("Saved");
+    await page.getByRole("button", { name: /^Back to / }).click();
+    for (const width of [1440, 320]) {
+      // The canonical 240px Resource sidebar remains visible; width names the log content.
+      await page.setViewportSize({ width: width === 320 ? 560 : width, height: 900 });
+      await expect(stopped).toBeVisible();
+      const retry = panel.getByRole("button", { name: "Try again", exact: true });
+      await retry.focus();
+      await expect(retry).toBeFocused();
+      expect((await monacoSnapshot(editor)).text).toBe(retained);
+      expect(fixture.evidence.requests).toBe(1);
+      await page.screenshot({ path: info.outputPath(`previous-incomplete-${theme}-${width}.png`) });
+      await persist(`previous-incomplete-${theme}-${width}-ax`, {
+        body: await panel.ariaSnapshot(),
+        contentType: "text/plain",
+      });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Electron supplies native webContents zoom; web exercises CSS zoom.
+  for (const theme of ["light", "dark"] as const) {
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Appearance", exact: true }).click();
+    await page.getByLabel("Theme", { exact: true }).selectOption(theme);
+    await expect(
+      page.getByRole("region", { name: "Appearance", exact: true }).locator(":scope > output"),
+    ).toHaveText("Saved");
+    await page.getByRole("button", { name: /^Back to / }).click();
+    await setZoom(1.25);
+    await expect(stopped).toBeVisible();
+    await page.screenshot({ path: info.outputPath(`previous-incomplete-${theme}-zoom.png`) });
+    await persist(`previous-incomplete-${theme}-zoom-ax`, {
+      body: await panel.ariaSnapshot(),
+      contentType: "text/plain",
+    });
+    await setZoom(1);
+  }
+  expect(fixture.evidence.requests).toBe(1);
+  await panel.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(panel.locator(".monaco-editor .view-lines")).toContainText(
+    "exited: Error, exit code 1",
+  );
+  await expect(stopped).toBeHidden();
+  expect(fixture.evidence.requests).toBe(2);
+  await expect(include).toHaveValue("keep");
+  await expect(panel.getByText("4 of 5 retained lines match")).toBeVisible();
+  const freshEditor = panel.locator(".monaco-editor");
+  await expect(panel.getByRole("button", { name: /^Newest/ })).toBeHidden();
+  const fresh = await monacoSnapshot(freshEditor);
+  expect(fresh.model).not.toBe(before.model);
+  expect(fresh.text).toBe(
+    "keep original 1\nkeep original 3\nkeep original 4\nkeep withheld 5\n··· the container exited: Error, exit code 1 ···\n",
+  );
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: /^Back to / }).click();
+  await expect(stopped).toBeHidden();
+  expect(fixture.evidence.requests).toBe(2);
+  await page.screenshot({ path: info.outputPath("previous-completed-dark-wide.png") });
+  fixture.holdNextEmpty();
+  await panel.getByRole("button", { name: "Previous run" }).click();
+  await panel.getByRole("button", { name: "Previous run" }).click();
+  await expect.poll(() => fixture.evidence.requests).toBe(3);
+  await expect.poll(() => fixture.evidence.upstreamEnded).toBe(true);
+  expect(fixture.evidence.forwarded).toBe(0);
+  const emptyHiddenAt = Date.now();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(panel).toBeHidden();
+  await expect.poll(() => fixture.evidence.closedAt, { timeout: 25_000 }).toBeGreaterThan(0);
+  expect(fixture.evidence.closedAt - emptyHiddenAt).toBeGreaterThanOrEqual(10_000);
+  await page.getByRole("button", { name: /^Back to / }).click();
+  await expect(panel.getByText("Log Stream stopped", { exact: true })).toBeVisible();
+  const emptyDescription = panel.getByText(
+    "Reading the previous run was interrupted, so its lines may be incomplete. Try again starts a fresh read and replaces retained lines.",
+    { exact: true },
+  );
+  await expect(emptyDescription).toBeVisible();
+  await expect(panel.getByText("No matching lines", { exact: true })).toBeHidden();
+  await expect(panel.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(panel.locator(".monaco-editor")).toHaveCount(0);
+  expect(fixture.evidence.requests).toBe(3);
+  for (const theme of ["dark", "light"] as const) {
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("link", { name: "Appearance", exact: true }).click();
+    await page.getByLabel("Theme", { exact: true }).selectOption(theme);
+    await expect(
+      page.getByRole("region", { name: "Appearance", exact: true }).locator(":scope > output"),
+    ).toHaveText("Saved");
+    await page.getByRole("button", { name: /^Back to / }).click();
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({ width: width === 320 ? 560 : width, height: 900 });
+      await expect(emptyDescription).toBeVisible();
+      await page.screenshot({
+        path: info.outputPath(`previous-empty-error-${theme}-${width}.png`),
+      });
+      await persist(`previous-empty-error-${theme}-${width}-ax`, {
+        body: await panel.ariaSnapshot(),
+        contentType: "text/plain",
+      });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+  await persist("previous-empty-boundary", {
+    body: JSON.stringify({ ...fixture.evidence, emptyHiddenAt }, null, 2),
+    contentType: "application/json",
+  });
+  await panel.getByRole("button", { name: "Try again" }).click();
+  await expect(panel.locator(".monaco-editor .view-lines")).toContainText(
+    "exited: Error, exit code 1",
+  );
+  expect(fixture.evidence.requests).toBe(4);
+  await persist("previous-replay-boundary", {
+    body: JSON.stringify({ ...fixture.evidence, hiddenAt, before, retained, fresh }, null, 2),
+    contentType: "application/json",
+  });
+}
+
+/** Inspect the actual editor/model through Monaco's public API, including EOF selection. */
+async function monacoSnapshot(editor: Locator) {
+  return editor.evaluate(async (element) => {
+    interface Model {
+      uri: { toString(): string };
+      getValue(): string;
+      getValueInRange(range: unknown): string;
+    }
+    interface Editor {
+      getDomNode(): HTMLElement | null;
+      getModel(): Model | null;
+      getSelection(): unknown;
+      getScrollTop(): number;
+    }
+    const resources = performance.getEntriesByType("resource").map((entry) => entry.name);
+    // Electron's custom scheme does not populate resource timing. Resolve the
+    // already built Monaco module from the entry script's dependency map.
+    for (const entryScript of [...document.scripts].filter((script) => script.src)) {
+      const code = await fetch(entryScript.src).then((response) => response.text());
+      for (const match of code.matchAll(/assets\/monaco-[\w-]+\.js/g))
+        resources.push(new URL(`/${match[0]}`, document.baseURI).href);
+    }
+    for (const name of new Set(resources)) {
+      if (!name.endsWith(".js")) continue;
+      const module = (await import(/* @vite-ignore */ name)) as Record<string, unknown>;
+      for (const value of Object.values(module)) {
+        const editors = (
+          value as { editor?: { getEditors?: () => Editor[] } } | null
+        )?.editor?.getEditors?.();
+        const found = editors?.find((candidate) => candidate.getDomNode() === element);
+        const model = found?.getModel();
+        if (found && model)
+          return {
+            model: model.uri.toString(),
+            text: model.getValue(),
+            selection: model.getValueInRange(found.getSelection()),
+            scrollTop: found.getScrollTop(),
+          };
+      }
+    }
+    throw new Error("Real Monaco editor not found");
+  });
 }

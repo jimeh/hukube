@@ -129,3 +129,79 @@ it("reclaims historical metadata only after retained and posted delivery owners 
     pins: 0,
   });
 });
+
+it("retains exact accepted cursors on interrupted end while retiring wire/current owners, then clears on close", () => {
+  const codec = new LogCodec();
+  const params = { cluster: "c", type: "pods", name: "web", uid: "uid", previous: true };
+  codec.retainSources([]);
+  const mapped = codec.event({
+    ...status,
+    sources: [
+      source,
+      { ...source, id: 8, container: "pending-status", instance: "" },
+      { ...source, id: 9, container: "retained", instance: "" },
+      { ...source, id: 10, container: "retired", instance: "" },
+    ],
+  }).sources;
+  const releaseStatus = codec.pin([mapped[1]!.id]);
+  codec.decode(frame(7, 0, 1790000000123456789n));
+  const releaseData = codec.pin([mapped[0]!.id]);
+  codec.retainSources([mapped[2]!.id]);
+  const cursors = [
+    { podUid: "uid", container: "constructor", instance: "run1", time: "1790000000123456789" },
+  ];
+  expect(codec.params(params).resume).toEqual(cursors);
+  codec.end(true);
+  expect(codec.params(params).resume).toEqual(cursors);
+  expect(codec.metadataSnapshot()).toEqual({
+    identities: 3,
+    wireSources: 0,
+    cursors: 1,
+    exited: 0,
+    pins: 2,
+  });
+  releaseStatus();
+  releaseData();
+  codec.retainSources([]);
+  expect(codec.params(params).resume).toEqual(cursors);
+  expect(codec.metadataSnapshot()).toEqual({
+    identities: 1,
+    wireSources: 0,
+    cursors: 1,
+    exited: 0,
+    pins: 0,
+  });
+  codec.dispose();
+  expect(codec.params(params).resume).toEqual([]);
+  expect(codec.metadataSnapshot()).toEqual({
+    identities: 0,
+    wireSources: 0,
+    cursors: 0,
+    exited: 0,
+    pins: 0,
+  });
+});
+
+it("normal end clears accepted cursors but keeps pending status/data and retained owners until released", () => {
+  const codec = new LogCodec();
+  const params = { cluster: "c", type: "pods", name: "web", uid: "uid" };
+  codec.retainSources([]);
+  const id = codec.event(status).sources[0]!.id;
+  const statusDone = codec.pin([id]);
+  codec.decode(frame());
+  const dataDone = codec.pin([id]);
+  codec.retainSources([id]);
+  codec.end();
+  expect(codec.params(params).resume).toEqual([]);
+  expect(codec.metadataSnapshot()).toMatchObject({
+    identities: 1,
+    wireSources: 0,
+    cursors: 0,
+    pins: 1,
+  });
+  statusDone();
+  dataDone();
+  expect(codec.metadataSnapshot().identities).toBe(1);
+  codec.retainSources([]);
+  expect(codec.metadataSnapshot().identities).toBe(0);
+});

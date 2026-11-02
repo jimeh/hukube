@@ -1,3 +1,5 @@
+import { logReplayFixture } from "../log-replay.ts";
+import { withLogStreamDefaults } from "../log-preferences.ts";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -7,7 +9,7 @@ import { join, resolve } from "node:path";
 import { _electron as electron } from "@playwright/test";
 import { expect, test } from "../fixtures.ts";
 
-import { assertLogFiltering } from "./logs.ts";
+import { assertLogFiltering, assertPreviousInterruption } from "./logs.ts";
 
 import { openGoToResource, savedSessionLayout } from "./exec.ts";
 
@@ -299,5 +301,45 @@ test("filters retained Log Stream lines and searches the projection in the deskt
   } finally {
     await app?.close();
     kubectl("delete", "namespace", namespace, "--wait=false");
+  }
+});
+
+// oxlint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixture argument.
+test("Previous interruption preserves confirmed retained lines in the desktop Host", async ({}, info) => {
+  test.setTimeout(180_000);
+  const fixture = await logReplayFixture();
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  try {
+    const env: Record<string, string> = {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      ),
+      KUBECONFIG: fixture.kubeconfig,
+      HUKUBE_USER_DATA_DIR: join(fixture.scratch, "profile"),
+    };
+    delete env["ELECTRON_RUN_AS_NODE"];
+    app = await electron.launch({
+      executablePath: electronBinary,
+      args: [desktopDir, "--no-sandbox"],
+      env,
+    });
+    const window = await app.firstWindow();
+    await withLogStreamDefaults(window, () =>
+      assertPreviousInterruption(window, fixture, info, async (factor) => {
+        await app!.evaluate(({ BrowserWindow }, zoom) => {
+          BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(zoom);
+        }, factor);
+      }),
+    );
+  } finally {
+    if (app) {
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const window of BrowserWindow.getAllWindows()) window.destroy();
+      });
+      await app.close();
+    }
+    await fixture.close();
   }
 });

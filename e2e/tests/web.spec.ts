@@ -1,4 +1,5 @@
-import { assertLogFiltering } from "./logs.ts";
+import { logReplayFixture } from "../log-replay.ts";
+import { assertLogFiltering, assertPreviousInterruption } from "./logs.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -2110,3 +2111,17 @@ test("shows a readable unknown-field refusal and keeps the YAML editor usable", 
 });
 
 overviewTests(namespace);
+
+test("Previous interruption preserves confirmed retained lines in the web Host", async ({
+  page,
+}, info) => {
+  test.setTimeout(180_000);
+  const fixture = await logReplayFixture();
+  try {
+    const url = await fixture.startWeb();
+    await page.goto(`${url}/#token=${engineToken}`);
+    await withLogStreamDefaults(page, () => assertPreviousInterruption(page, fixture, info));
+  } finally {
+    await fixture.close();
+  }
+});

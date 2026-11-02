@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { EngineConnection, type SocketLike } from "./connection.ts";
 import { Hash, ExecInputFrame, ExecInputWindow, type StreamClientMessage } from "./protocol.gen.ts";
 import type { StreamListener } from "./client.ts";
-import { streamInputPendingLimit } from "./streams.ts";
+import { StreamPool, streamInputPendingLimit } from "./streams.ts";
 import { frame, status, source } from "./log-test-fixtures.ts";
 
 class Socket implements SocketLike {
@@ -470,5 +470,134 @@ it("pins direct async deliveries through a new socket and collects released iden
   socket.receive({ type: "event", event: status });
   expect(ids.at(-1)).toBeGreaterThan(old);
   stream.close();
+  conn.close();
+});
+
+it.each(["close", "pause"] as const)(
+  "ends an opened Previous once on %s before replacement decode, even without rows, and releases its cap",
+  async (interruption) => {
+    const pool = new StreamPool(
+      {
+        url: "http://localhost",
+        token: "t",
+        retryDelaysMs: [1],
+        createSocket: (url, protocols) => {
+          const socket = new Socket(url, protocols);
+          sockets.push(socket);
+          return socket;
+        },
+      },
+      () => {},
+    );
+    const observe = listener();
+    const previous = pool.open("resource.logs", { ...params, previous: true }, observe);
+    const others = Array.from({ length: 8 }, () => pool.open("resource.logs", params, listener()));
+    await Promise.resolve();
+    expect(sockets).toHaveLength(8);
+    const first = sockets[0]!;
+    first.hello();
+    expect(first.sent.filter((message) => message.type === "open")).toHaveLength(1);
+    if (interruption === "close") first.close();
+    else previous.pause();
+    expect(observe.end).toHaveBeenCalledExactlyOnceWith({
+      reason: "error",
+      error: {
+        code: "unavailable",
+        message:
+          "reading the previous run was interrupted, so its lines may be incomplete. Try again starts a fresh read and replaces retained lines",
+      },
+    });
+    expect(observe.state).toHaveBeenLastCalledWith("ended");
+    expect(sockets).toHaveLength(9);
+    first.receive({ type: "event", event: status });
+    first.receive(frame());
+    first.receive({ type: "gap", gap: { bytes: 1, records: 1 } });
+    first.receive({ type: "end", end: { reason: "complete" } });
+    previous.resume();
+    previous.pause();
+    previous.close();
+    previous.close();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets).toHaveLength(9);
+    expect(observe.event).not.toHaveBeenCalled();
+    expect(observe.data).not.toHaveBeenCalled();
+    expect(observe.gap).not.toHaveBeenCalled();
+    expect(observe.end).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    for (const stream of others) stream.close();
+    pool.close();
+  },
+);
+
+it("keeps already posted Previous deliveries owned until consumption without acknowledging a retired socket", async () => {
+  const conn = connect();
+  const observe = listener();
+  let settle!: () => void;
+  observe.data = vi.fn<StreamListener<"resource.logs">["data"]>(
+    () =>
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+  );
+  const stream = conn.openStream("resource.logs", { ...params, previous: true }, observe);
+  stream.retainSources?.([]);
+  await Promise.resolve();
+  const socket = sockets[1]!;
+  socket.hello();
+  socket.receive({ type: "event", event: status });
+  socket.receive(frame());
+  expect(observe.data).toHaveBeenCalledWith([{ source: 0, time: 1234, text: "line" }]);
+  expect(socket.sent).toHaveLength(1);
+  socket.close();
+  stream.retainSources?.([0]);
+  settle();
+  await Promise.resolve();
+  expect(socket.sent).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(sockets).toHaveLength(2);
+  conn.close();
+});
+
+it.each(["complete", "deleted", "error"] as const)(
+  "keeps normal Previous %s terminal through hide/show",
+  async (reason) => {
+    const conn = connect();
+    const observe = listener();
+    const stream = conn.openStream("resource.logs", { ...params, previous: true }, observe);
+    await Promise.resolve();
+    const socket = sockets[1]!;
+    socket.hello();
+    const end = { reason };
+    socket.receive({ type: "end", end });
+    stream.pause();
+    stream.resume();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(observe.end).toHaveBeenCalledExactlyOnceWith(end);
+    expect(sockets).toHaveLength(2);
+    conn.close();
+  },
+);
+
+it("allows Previous queue, pre-open pause and lost-hello retry, while explicit close invents no error", async () => {
+  const conn = connect();
+  const observe = listener();
+  const stream = conn.openStream("resource.logs", { ...params, previous: true }, observe);
+  stream.pause();
+  await Promise.resolve();
+  expect(sockets).toHaveLength(1);
+  stream.resume();
+  const first = sockets[1]!;
+  first.close();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(sockets).toHaveLength(3);
+  stream.pause();
+  stream.resume();
+  expect(sockets).toHaveLength(4);
+  sockets[3]!.hello();
+  expect(sockets[3]!.sent[0]?.type).toBe("open");
+  stream.close();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(observe.end).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(4);
   conn.close();
 });

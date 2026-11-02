@@ -172,30 +172,18 @@ function LogRun({
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
-    // A previous run is sent whole on every socket, so a second socket's
-    // lines replace the first's. They are cleared when the new socket
-    // delivers something, not when it is ready, which comes after its lines.
-    let delivered = false;
-    let replaying = false;
-    const replace = () => {
-      delivered = true;
-      if (!replaying) return;
-      replaying = false;
-      document.clear();
-    };
+    let terminalPrevious = false;
     let pods: Map<string, string> | undefined;
     const handle = engine.openStream(
       "resource.logs",
       { cluster, type, namespace, name, uid: incarnation, container, previous },
       {
         state: (value) => {
-          if (!active) return;
+          if (!active || terminalPrevious) return;
           setState(value);
-          if (value === "connecting" || value === "reconnecting") replaying = previous && delivered;
         },
         event: (value) => {
-          if (!active) return;
-          if (value.sources.length) replace();
+          if (!active || terminalPrevious) return;
           document.status(value);
           const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
           // A status can be ready before a slow Pod's containers are known.
@@ -218,18 +206,18 @@ function LogRun({
             });
         },
         data: (lines) => {
-          if (!active) return;
-          replace();
+          if (!active || terminalPrevious) return;
           document.append(lines);
         },
         gap: (gap) => {
-          if (active)
+          if (active && !terminalPrevious)
             document.marker(
               `··· ${gap.records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
             );
         },
         end: (value) => {
-          if (active) {
+          if (active && !terminalPrevious) {
+            terminalPrevious = previous;
             document.end();
             setEnd(value);
           }
@@ -319,7 +307,14 @@ function LogRun({
     loading = false;
     if (end.error?.code === "forbidden")
       empty = { title: "Not permitted", description: end.error.message, action: action() };
-    else
+    else if (previous && !hasLines) {
+      const message = end.error?.message ?? "Unknown error";
+      empty = {
+        title: "Log Stream stopped",
+        description: `${message[0]?.toUpperCase() ?? ""}${message.slice(1).replace(/\.$/, "")}.`,
+        action: action(),
+      };
+    } else
       notices.push({
         text: `The Log Stream stopped: ${end.error?.message ?? "Unknown error"}.`,
         destructive: true,
@@ -331,15 +326,18 @@ function LogRun({
         title: "No Pods",
         description: `This ${kind} owns no Pods right now. Lines appear here when it does.`,
       };
-    else if (previous && !sources.some((source) => source.previous))
-      empty = { title: "No previous run", description: "No selected container has restarted." };
+    else if (previous && !sources.some((source) => source.instance))
+      empty = {
+        title: "No previous run",
+        description: "No previous run was available when this read started.",
+      };
     else if (previous)
       // A previous run is read once, so nothing more will come.
       empty = {
         title: "No lines from the previous run",
         description: unreadable.length
           ? `Its logs are no longer available: ${unreadable[0]!.error}`
-          : "The previous run printed nothing.",
+          : "No lines were read from the previous run.",
       };
     else if (count > 0 && waiting.length === count)
       empty = {
@@ -523,7 +521,7 @@ function LogRun({
             />
           </div>
         )}
-        {hasLines ? null : document.evictedLines ? (
+        {hasLines ? null : document.evictedLines && !(previous && end?.reason === "error") ? (
           <Notice
             title="No retained lines fit"
             description="No line currently fits the retention limits. Increasing a limit permits future lines but does not restore removed content."

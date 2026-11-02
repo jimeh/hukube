@@ -22,7 +22,7 @@ import {
 export interface StreamCodec<M extends StreamMethod> {
   retainSources?(ids: readonly number[]): void;
   pin?(ids: readonly number[]): () => void;
-  end?(): void;
+  end?(preserveCursors?: boolean): void;
   dispose?(): void;
   readonly input: boolean;
   readonly pausable: boolean;
@@ -158,6 +158,7 @@ class SocketStream implements EngineStream {
     if (!this.#codec.pausable) return;
     if (!this.#started) this.#heldBack = true;
     if (this.#closed || this.#ended || this.#paused) return;
+    if (this.#interruptPrevious()) return;
     this.#paused = true;
     this.#disconnect();
     this.pool.release(this);
@@ -230,13 +231,36 @@ class SocketStream implements EngineStream {
     this.#opened = this.#attached = false;
     if (dropped) this.listener.inputDropped?.(dropped);
   }
-  #end(end: StreamEnd): void {
+  #interruptPrevious(): boolean {
+    // Check before disconnect/dropInput retires the socket's open-sent state.
+    if (
+      this.method !== "resource.logs" ||
+      !("previous" in this.params) ||
+      !this.params.previous ||
+      !this.#opened
+    )
+      return false;
+    this.#end(
+      {
+        reason: "error",
+        error: {
+          code: "unavailable",
+          message:
+            "reading the previous run was interrupted, so its lines may be incomplete. Try again starts a fresh read and replaces retained lines",
+        },
+      },
+      true,
+    );
+    return true;
+  }
+  #end(end: StreamEnd, preserveCursors = false): void {
+    if (this.#closed || this.#ended) return;
     this.#ended = true;
     // A normal close confirms receipt of end to the Engine.
     this.#disconnect(1000);
     this.pool.release(this);
     this.state("ended");
-    this.#codec.end?.();
+    this.#codec.end?.(preserveCursors);
     this.listener.end(end);
   }
   connect(): void {
@@ -369,6 +393,7 @@ class SocketStream implements EngineStream {
     };
     socket.onclose = () => {
       if (this.#socket !== socket) return;
+      if (this.#interruptPrevious()) return;
       this.#socket = undefined;
       clearTimeout(this.#helloTimer);
       this.#dropInput();
