@@ -36,7 +36,7 @@ which the limit of 20 bounds.
 
 ## Resuming
 
-Every request asks for timestamps. For each container the Engine keeps a
+Every request asks for timestamps. The following resume rules apply to Follow. For each container the Engine keeps a
 cursor: the instance it read and the newest timestamp it sent. The client
 keeps the same cursors and passes them when it opens the stream again, so a
 lost socket, a restarted Engine, and a Facet that was hidden all resume the
@@ -62,6 +62,21 @@ written out of timestamp order by the container runtime, with the connection
 lost between them. The second is skipped. The runtime stamps each line with
 its own clock reading, so this needs a coincidence at the moment of a
 disconnect.
+
+## Previous reads
+
+Previous is a finite read of the previous instance chosen from each Pod snapshot.
+If that snapshot has no previous instance, the reader settles without opening a
+log request. A nonempty source `Instance` identifies the chosen read; `Previous`
+reports availability and can change independently of that choice.
+
+A Previous handle sends at most one `open`. Unexpected socket loss or an actual
+hidden pause after that request, before Engine `end`, ends locally as incomplete.
+Retained lines, filtering and accepted exact cursors stay until the handle is
+closed. The cursors are metadata, not proof that the API can continue the same
+physical file. No replacement socket opens automatically. Try again starts a
+new read with a fresh bounded tail and replaces the retained document. A normal
+completed, deleted or error end remains terminal through hide/show.
 
 ## Order
 

@@ -10,10 +10,20 @@ import { useEngine } from "@hukube/engine-client/react";
 import type { ResourceAddress } from "@hukube/k8s";
 import { Button } from "@hukube/ui/components/button";
 import { cn } from "@hukube/ui/lib/utils";
-import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Notice } from "../resource/notice.tsx";
 import { LogDocument } from "./log-document.ts";
 import LogEditor, { type LogEditorHandle } from "./log-editor.tsx";
+import { emptyLogFilter, hasLogFilter } from "./log-filter.ts";
+import { LogFilters, useLogFilters, type LogFiltersState } from "./log-filters.tsx";
 import { LogLoading } from "./log-loading.tsx";
 import { useLogSettings } from "./log-settings.ts";
 import { LogToolbar } from "./log-toolbar.tsx";
@@ -33,6 +43,7 @@ export interface LogStreamViewProps {
 
 /** A Log Stream with no dependency on Resource tabs or Facets. */
 export default function LogStreamView({ target, uid, exists, kind, visible }: LogStreamViewProps) {
+  const filters = useLogFilters();
   const [container, setContainer] = useState("");
   const [previous, setPrevious] = useState(false);
   const [run, setRun] = useState(0);
@@ -56,6 +67,7 @@ export default function LogStreamView({ target, uid, exists, kind, visible }: Lo
   return (
     <LogRun
       key={JSON.stringify([container, previous, run])}
+      filters={filters}
       focus={focus}
       known={known}
       setKnown={setKnown}
@@ -95,7 +107,9 @@ function LogRun({
   focus,
   known,
   setKnown,
+  filters,
 }: LogStreamViewProps & {
+  filters: LogFiltersState;
   initialUid?: string;
   focus?: "container" | "previous";
   known: KnownContainers;
@@ -116,6 +130,14 @@ function LogRun({
   const hiddenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const editor = useRef<LogEditorHandle>(null);
   const toolbar = useRef<HTMLDivElement>(null);
+  const filterButton = useRef<HTMLButtonElement>(null);
+  const includeInput = useRef<HTMLInputElement>(null);
+  const filterId = useId();
+  const clearFilters = (returnFocus = false) => {
+    document.filter(emptyLogFilter);
+    filters.clear();
+    if (returnFocus) (filters.expanded ? includeInput : filterButton).current?.focus();
+  };
   const [acknowledgedLoss, setAcknowledgedLoss] = useState<{
     document: symbol;
     generation: number;
@@ -123,10 +145,14 @@ function LogRun({
   const { wrap } = useLogSettings();
   const { cluster, type, namespace, name } = target;
   const [document, documentIdentity] = useMemo(
-    () => [new LogDocument(type), Symbol()] as const,
+    // A new run must project its first batch with the already applied criteria.
+    () => [new LogDocument(type, undefined, filters.applied), Symbol()] as const,
+    // Filter edits update this document in place, never replace its editor or stream.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
     [type],
   );
   useSyncExternalStore(document.subscribe, document.snapshot);
+  useEffect(() => document.filter(filters.applied), [document, filters.applied]);
   useEffect(() => {
     const apply = () => {
       const settings = useLogSettings.getState();
@@ -146,30 +172,18 @@ function LogRun({
     if (!initialUid) return;
     const incarnation = initialUid;
     let active = true;
-    // A previous run is sent whole on every socket, so a second socket's
-    // lines replace the first's. They are cleared when the new socket
-    // delivers something, not when it is ready, which comes after its lines.
-    let delivered = false;
-    let replaying = false;
-    const replace = () => {
-      delivered = true;
-      if (!replaying) return;
-      replaying = false;
-      document.clear();
-    };
+    let terminalPrevious = false;
     let pods: Map<string, string> | undefined;
     const handle = engine.openStream(
       "resource.logs",
       { cluster, type, namespace, name, uid: incarnation, container, previous },
       {
         state: (value) => {
-          if (!active) return;
+          if (!active || terminalPrevious) return;
           setState(value);
-          if (value === "connecting" || value === "reconnecting") replaying = previous && delivered;
         },
         event: (value) => {
-          if (!active) return;
-          if (value.sources.length) replace();
+          if (!active || terminalPrevious) return;
           document.status(value);
           const next = new Map(value.sources.map((source) => [source.podUid, source.pod]));
           // A status can be ready before a slow Pod's containers are known.
@@ -192,18 +206,18 @@ function LogRun({
             });
         },
         data: (lines) => {
-          if (!active) return;
-          replace();
+          if (!active || terminalPrevious) return;
           document.append(lines);
         },
         gap: (gap) => {
-          if (active)
+          if (active && !terminalPrevious)
             document.marker(
               `··· ${gap.records.toLocaleString()} lines dropped: they arrived faster than they could be shown ···`,
             );
         },
         end: (value) => {
-          if (active) {
+          if (active && !terminalPrevious) {
+            terminalPrevious = previous;
             document.end();
             setEnd(value);
           }
@@ -234,6 +248,9 @@ function LogRun({
   const count = sources.length;
   const one = count === 1;
   const hasLines = document.rows.length > 0;
+  const hasProjection = document.projectedRows > 0;
+  const activeFilter = hasLogFilter(filters.applied);
+  const noMatches = document.retainedLines > 0 && document.matchingLines === 0;
   const [hadLines, setHadLines] = useState(false);
   if (hasLines && !hadLines) setHadLines(true);
   const waiting = sources.filter((source) => source.state === "waiting");
@@ -290,7 +307,14 @@ function LogRun({
     loading = false;
     if (end.error?.code === "forbidden")
       empty = { title: "Not permitted", description: end.error.message, action: action() };
-    else
+    else if (previous && !hasLines) {
+      const message = end.error?.message ?? "Unknown error";
+      empty = {
+        title: "Log Stream stopped",
+        description: `${message[0]?.toUpperCase() ?? ""}${message.slice(1).replace(/\.$/, "")}.`,
+        action: action(),
+      };
+    } else
       notices.push({
         text: `The Log Stream stopped: ${end.error?.message ?? "Unknown error"}.`,
         destructive: true,
@@ -302,15 +326,18 @@ function LogRun({
         title: "No Pods",
         description: `This ${kind} owns no Pods right now. Lines appear here when it does.`,
       };
-    else if (previous && !sources.some((source) => source.previous))
-      empty = { title: "No previous run", description: "No selected container has restarted." };
+    else if (previous && !sources.some((source) => source.instance))
+      empty = {
+        title: "No previous run",
+        description: "No previous run was available when this read started.",
+      };
     else if (previous)
       // A previous run is read once, so nothing more will come.
       empty = {
         title: "No lines from the previous run",
         description: unreadable.length
           ? `Its logs are no longer available: ${unreadable[0]!.error}`
-          : "The previous run printed nothing.",
+          : "No lines were read from the previous run.",
       };
     else if (count > 0 && waiting.length === count)
       empty = {
@@ -379,53 +406,122 @@ function LogRun({
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <LogToolbar
-        ref={toolbar}
-        containers={containers}
-        container={container}
-        previous={previous}
-        hasPrevious={known.hasPrevious}
-        disabled={containers.length === 0}
-        ended={end?.reason === "deleted"}
-        focus={focus}
-        select={setContainer}
-        setPrevious={setPrevious}
-        search={() => editor.current?.search()}
-      />
-      {notices.map((notice, index) => (
-        <output
-          key={index}
-          title={notice.title}
-          className={cn(
-            "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2",
-            notice.destructive ? "text-destructive" : "text-muted-foreground",
-          )}
+      <section
+        aria-label="Log Stream controls and notices"
+        // The scrolling area must be reachable for keyboard scrolling.
+        // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        className="min-h-0 shrink overflow-y-auto overscroll-contain focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <LogToolbar
+          ref={toolbar}
+          containers={containers}
+          container={container}
+          previous={previous}
+          hasPrevious={known.hasPrevious}
+          disabled={containers.length === 0}
+          ended={end?.reason === "deleted"}
+          focus={focus}
+          select={setContainer}
+          setPrevious={setPrevious}
+          searchDisabled={!hasProjection}
+          search={() => editor.current?.search()}
+          filterButton={
+            <Button
+              ref={filterButton}
+              variant="ghost"
+              aria-label="Filter"
+              aria-description={activeFilter ? "Filters are active" : undefined}
+              aria-expanded={filters.expanded}
+              aria-controls={filterId}
+              onClick={() => {
+                if (filters.expanded) filterButton.current?.focus();
+                filters.setExpanded(!filters.expanded);
+              }}
+            >
+              Filter{activeFilter ? " · on" : ""}
+            </Button>
+          }
         >
-          <span className="min-w-0 flex-1 break-words">{notice.text}</span>
-          {notice.action}
-        </output>
-      ))}
-      {visible &&
-        document.evictedLines > 0 &&
-        (!acknowledgedLoss ||
-          acknowledgedLoss.document !== documentIdentity ||
-          document.lossGeneration > acknowledgedLoss.generation) && (
-          <RetentionNotice
-            key={`${type}:${document.lossGeneration}`}
-            count={document.evictedLines}
-            hasLines={hasLines}
-            dismiss={() => {
-              setAcknowledgedLoss({
-                document: documentIdentity,
-                generation: document.lossGeneration,
-              });
-              toolbar.current?.focus();
-            }}
+          <LogFilters
+            filters={filters}
+            id={filterId}
+            includeRef={includeInput}
+            clear={() => clearFilters()}
           />
+          {(activeFilter || filters.pending) && (
+            <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 border-t px-3 py-1 text-xs text-muted-foreground">
+              {activeFilter && (
+                <span>
+                  {document.matchingLines.toLocaleString()} of{" "}
+                  {document.retainedLines.toLocaleString()} retained lines match
+                </span>
+              )}
+              {filters.pending && <span>Applying filters…</span>}
+              {activeFilter && document.retainedCutLines > 0 && (
+                <span>
+                  {document.retainedCutLines.toLocaleString()} retained{" "}
+                  {document.retainedCutLines === 1 ? "line was" : "lines were"} cut. Removed text is
+                  unavailable.
+                </span>
+              )}
+            </div>
+          )}
+        </LogToolbar>
+        {notices.map((notice, index) => (
+          <output
+            key={index}
+            title={notice.title}
+            className={cn(
+              "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2",
+              notice.destructive ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            <span className="min-w-0 flex-1 break-words">{notice.text}</span>
+            {notice.action}
+          </output>
+        ))}
+        {visible &&
+          document.evictedLines > 0 &&
+          (!acknowledgedLoss ||
+            acknowledgedLoss.document !== documentIdentity ||
+            document.lossGeneration > acknowledgedLoss.generation) && (
+            <RetentionNotice
+              key={`${type}:${document.lossGeneration}`}
+              count={document.evictedLines}
+              hasLines={hasLines}
+              dismiss={() => {
+                setAcknowledgedLoss({
+                  document: documentIdentity,
+                  generation: document.lossGeneration,
+                });
+                toolbar.current?.focus();
+              }}
+            />
+          )}
+        <output aria-label="Log filter result" aria-live="polite" className="sr-only">
+          {noMatches
+            ? "No matching lines. Filters inspect retained line text. Stream notices stay visible."
+            : ""}
+        </output>
+        {noMatches && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <div className="min-w-0 flex-[1_1_12rem]">
+              <p>No matching lines</p>
+              <p className="text-xs text-muted-foreground">
+                Filters inspect retained line text. Stream notices stay visible.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => clearFilters(true)}>
+              Clear filters
+            </Button>
+          </div>
         )}
-      <div className="min-h-0 flex-1">
+      </section>
+      {/* Keep room for Find and several rows; short Panes reserve at most half. */}
+      <div className="min-h-0 grow shrink-0 basis-[min(50%,8rem)]">
         {hadLines && (
-          <div className="h-full" hidden={!hasLines}>
+          <div className="h-full" hidden={!hasProjection}>
             <LogEditor
               ref={editor}
               document={document}
@@ -434,7 +530,7 @@ function LogRun({
             />
           </div>
         )}
-        {hasLines ? null : document.evictedLines ? (
+        {hasLines ? null : document.evictedLines && !(previous && end?.reason === "error") ? (
           <Notice
             title="No retained lines fit"
             description="No line currently fits the retention limits. Increasing a limit permits future lines but does not restore removed content."

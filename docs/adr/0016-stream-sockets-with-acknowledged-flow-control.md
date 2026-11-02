@@ -45,8 +45,11 @@ TCP backpressure cannot be the mechanism:
 The Engine's last message on a stream is `end`, with a reason: `complete`,
 `deleted`, `stopped`, `detached`, or `error` with an error detail. It then
 closes the socket. A socket that closes without `end` was lost, and the
-client opens the stream again. An `end` is final, and the client does not
-reconnect.
+client opens the stream again, except for an opened Previous Log Stream.
+That finite read ends locally as incomplete after an unexpected loss or an
+actual hidden pause, preserving retained lines without opening another socket.
+Before its first `open`, queueing, pause and connection retries remain normal.
+An `end` is final, and the client does not reconnect.
 
 The control protocol gets no such message. A subscription is a view of
 current state: it answers again whenever the state changes, a Resource that
@@ -61,7 +64,10 @@ WebSockets per host (`docs/research/engine-protocol-tooling.md`), so the cap
 is well inside the browser's. It bounds what one window can ask of the Engine
 and the Cluster, because one Log Stream can hold dozens of requests to the
 API server. A Log Stream closes its socket while
-its Facet is hidden, so in practice the cap counts what is on screen.
+its Facet has been hidden for ten seconds, so in practice the cap counts
+what is on screen. Follow resumes when shown. An opened Previous read that
+has not ended becomes incomplete instead; only an explicit new read replaces
+its retained lines. Completed Previous reads stay complete through hide/show.
 
 ## How an Exec Session uses it
 
@@ -125,7 +131,7 @@ have the measurements.
   Engine would keep sending between the moment the client falls behind and
   the moment its message arrives, so memory in the browser has no bound.
 - **Keep a stream alive in the Engine across a lost socket** and replay from
-  a sequence number. For a Log Stream an Engine restart loses that state
+  a sequence number. For a following Log Stream an Engine restart loses that state
   anyway, and the client can resume from what it holds, so one mechanism
   covers both. An Exec Session has a process that nothing can resume from
   the client's side, so the Engine does keep it (ADR-0026).

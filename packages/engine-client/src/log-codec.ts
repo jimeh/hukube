@@ -67,9 +67,10 @@ export class LogCodec {
         this.#exited.delete(id);
       }
   }
-  end(): void {
+  end(preserveCursors = false): void {
     this.#current.clear();
-    this.#cursors.clear();
+    // An interrupted finite read keeps accepted cursor metadata until close.
+    if (!preserveCursors) this.#cursors.clear();
     this.#sources.clear();
     this.#prune();
   }

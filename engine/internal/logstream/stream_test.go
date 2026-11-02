@@ -1014,3 +1014,22 @@ func TestLogRetirementFlushesBeforeSourceRemovalAndInstanceChange(t *testing.T) 
 		})
 	}
 }
+
+func TestLogPreviousNoInstanceNeverOpens(t *testing.T) {
+	f, g := newFake(pod("pod", "main"))
+	f.open = func(context.Context, string, *corev1.PodLogOptions) (io.ReadCloser, error) {
+		// If called after a crash between the snapshot and request, the API could return another epoch.
+		return textBody(line(1, "unowned previous lines")), nil
+	}
+	p := targetParams()
+	p.Previous = true
+	out, end, _ := start(t, f, g, p)
+	e := awaitEnd(t, end)
+	records, status := out.snapshot()
+	if e.Reason != protocol.StreamEndReasonComplete || len(records) != 0 || len(f.requests) != 0 {
+		t.Fatalf("no-instance previous: end=%+v requests=%d records=%s", e, len(f.requests), describe(records))
+	}
+	if !status.Ready || len(status.Sources) != 1 || status.Sources[0].Instance != "" || status.Sources[0].Previous {
+		t.Fatalf("no-instance status=%+v", status)
+	}
+}

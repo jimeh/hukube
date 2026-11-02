@@ -1,4 +1,5 @@
 import type { LogLine, LogSource, LogStreamStatus } from "@hukube/engine-client";
+import { emptyLogFilter, logPredicate, sameLogFilter, type LogFilter } from "./log-filter.ts";
 
 export interface TextSpan {
   start: number;
@@ -84,6 +85,19 @@ export class LogDocument {
   readonly #listeners = new Set<() => void>();
   #entries: Entry[] = [];
   rows: LogRow[] = [];
+  visibleRows: LogRow[] = [];
+  retainedLines = 0;
+  matchingLines = 0;
+  retainedCutLines = 0;
+  filterRevision = 0;
+  #filter: LogFilter;
+  #matches: (text: string) => boolean;
+  get projectedRows(): number {
+    return this.visibleRows.length;
+  }
+  get nextSequence(): number {
+    return this.#sequence;
+  }
   #sequence = 0;
   #current = new Set<number>();
   #usage = new Map<number, number>();
@@ -105,7 +119,32 @@ export class LogDocument {
   constructor(
     readonly type: string,
     public budgets = { ...logBudgets },
-  ) {}
+    filter = emptyLogFilter,
+  ) {
+    this.#filter = { ...filter };
+    this.#matches = logPredicate(filter);
+  }
+  filter(filter: LogFilter): void {
+    if (sameLogFilter(this.#filter, filter)) return;
+    this.#filter = { ...filter };
+    this.#matches = logPredicate(filter);
+    this.filterRevision++;
+    this.#project();
+    this.#changed();
+  }
+  #payload(entry: Entry): boolean {
+    return !!entry.line && !entry.line.gap && !entry.line.exited;
+  }
+  #project(): void {
+    this.matchingLines = 0;
+    this.visibleRows = this.rows.filter((_, index) => {
+      const entry = this.#entries[index]!;
+      if (!this.#payload(entry)) return true;
+      if (!this.#matches(entry.line!.text)) return false;
+      this.matchingLines++;
+      return true;
+    });
+  }
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -180,6 +219,10 @@ export class LogDocument {
     this.evictedLines = 0;
     this.#prune();
     this.rows = [];
+    this.visibleRows = [];
+    this.retainedLines = 0;
+    this.matchingLines = 0;
+    this.retainedCutLines = 0;
     this.#characters = 0;
     this.#decorations = 0;
     this.rewrites++;
@@ -243,6 +286,15 @@ export class LogDocument {
     const row = this.#format(entry);
     this.#entries.push(entry);
     this.rows.push(row);
+    const payload = this.#payload(entry);
+    if (payload) {
+      this.retainedLines++;
+      if (entry.line!.cut) this.retainedCutLines++;
+    }
+    if (!payload || this.#matches(entry.line!.text)) {
+      this.visibleRows.push(row);
+      if (payload) this.matchingLines++;
+    }
     this.#characters += row.text.length + 1;
     this.#decorations += row.spans.length;
   }
@@ -260,12 +312,23 @@ export class LogDocument {
     }
     if (count) {
       this.rows.splice(0, count);
-      for (const entry of this.#entries.splice(0, count))
+      const first = this.rows[0]?.sequence ?? this.#sequence;
+      let hiddenHead = 0;
+      while (hiddenHead < this.visibleRows.length && this.visibleRows[hiddenHead]!.sequence < first)
+        hiddenHead++;
+      this.visibleRows.splice(0, hiddenHead);
+      for (const entry of this.#entries.splice(0, count)) {
+        if (this.#payload(entry)) {
+          this.retainedLines--;
+          if (entry.line!.cut) this.retainedCutLines--;
+          if (this.#matches(entry.line!.text)) this.matchingLines--;
+        }
         if (entry.line) {
           const uses = this.#usage.get(entry.line.source)! - 1;
           if (uses) this.#usage.set(entry.line.source, uses);
           else this.#usage.delete(entry.line.source);
         }
+      }
       if (!this.evictedLines || settingsChange) this.lossGeneration++;
       this.evictedLines += count;
       this.#prune();
@@ -273,6 +336,7 @@ export class LogDocument {
   }
   #rebuild(settingsChange = false): void {
     this.rows = this.#entries.map((entry) => this.#format(entry));
+    this.#project();
     this.#characters = this.rows.reduce((sum, row) => sum + row.text.length + 1, 0);
     this.#decorations = this.rows.reduce((sum, row) => sum + row.spans.length, 0);
     this.#trim(settingsChange);

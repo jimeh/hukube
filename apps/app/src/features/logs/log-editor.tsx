@@ -6,6 +6,14 @@ import { monaco } from "@/lib/monaco.ts";
 import { useTheme } from "@/lib/theme.ts";
 import { applyEditorTheme } from "../resource/editor-theme.ts";
 import { type LogDocument, type LogRow } from "./log-document.ts";
+import {
+  anchorPosition,
+  newProjectedRows,
+  restorePosition,
+  sequenceEdits,
+  sequenceIndex,
+  type SequencePosition,
+} from "./log-editor-sequences.ts";
 
 /** How many characters edits may add to the model before it is built again. */
 const rebuildAfter = 8_000_000;
@@ -169,12 +177,15 @@ export default function LogEditor({
       const ids = rows.flat();
       if (ids.length) model.deltaDecorations(ids, []);
     };
-    // The model holds the rows from sequence shownFirst on. Rows leave the
-    // document at its head and join at its tail, so counting sequences says
-    // what changed without keeping a copy of the rows.
-    let shownFirst = 0;
-    let shownCount = 0;
+    // Numeric identities describe the old model even after a projection changes.
+    // No text history is kept alongside the document and Monaco.
+    let shownSequences: number[] = [];
     let shownRewrites = log.rewrites;
+    let shownFilter = log.filterRevision;
+    let watermark = log.nextSequence;
+    let selectionAnchor: { start: SequencePosition; end: SequencePosition } | undefined;
+    let selectionChanged = true;
+    let topAnchor: { sequence: number; offset: number } | undefined;
     // Monaco's text buffer only grows: an edit is added to it and text that
     // is deleted stays. This counts what the edits have added, so the model
     // can be built again from the rows before that outgrows them.
@@ -183,58 +194,49 @@ export default function LogEditor({
       rows.length ? `${rows.map((row) => row.text).join("\n")}\n` : "";
     const synchronize = () => {
       ownScroll.current = true;
-      const rows = log.rows;
-      const first = rows[0]?.sequence ?? shownFirst + shownCount;
-      const next = rows.length ? rows.at(-1)!.sequence + 1 : first;
-      const received = Math.max(0, next - (shownFirst + shownCount));
-      const removed = first - shownFirst;
-      const inPlace = removed >= 0 && removed <= shownCount;
-      if (!inPlace || shownRewrites !== log.rewrites || added > rebuildAfter) {
-        // Lines that are still there keep their place on screen and their
-        // selection, also when they were only formatted again.
-        const shift = inPlace ? removed : undefined;
-        const top = editor.getVisibleRanges()[0]?.startLineNumber ?? 1;
-        const offset = editor.getScrollTop() - editor.getTopForLineNumber(top);
+      const rows = log.visibleRows;
+      const sequences = rows.map((row) => row.sequence);
+      const edits = sequenceEdits(shownSequences, sequences);
+      // Keep meaningful anchors through an empty projection. Its placeholder
+      // line has no entry identity and must not overwrite them.
+      if (shownSequences.length) {
+        const top = editor.getVisibleRanges()[0]?.startLineNumber;
+        if (top !== undefined)
+          topAnchor = {
+            sequence: shownSequences[Math.min(top - 1, shownSequences.length - 1)]!,
+            offset: editor.getScrollTop() - editor.getTopForLineNumber(top),
+          };
         const selection = editor.getSelection();
+        if (selection && selectionChanged) {
+          const start = anchorPosition(
+            shownSequences,
+            selection.selectionStartLineNumber,
+            selection.selectionStartColumn,
+          )!;
+          const end = anchorPosition(
+            shownSequences,
+            selection.positionLineNumber,
+            selection.positionColumn,
+          )!;
+          selectionAnchor = { start, end };
+          selectionChanged = false;
+        }
+      }
+      if (
+        !edits ||
+        shownRewrites !== log.rewrites ||
+        shownFilter !== log.filterRevision ||
+        added > rebuildAfter
+      ) {
         model.setValue(text(rows));
         decorationIds = decorations(rows, 1);
         added = 0;
-        if (shift !== undefined && selection && selection.startLineNumber > shift)
-          editor.setSelection(
-            new monaco.Selection(
-              selection.selectionStartLineNumber - shift,
-              selection.selectionStartColumn,
-              selection.positionLineNumber - shift,
-              selection.positionColumn,
-            ),
-          );
-        if (!follow.current)
-          editor.setScrollTop(
-            shift === undefined
-              ? 0
-              : Math.max(0, editor.getTopForLineNumber(Math.max(1, top - shift)) + offset),
-            monaco.editor.ScrollType.Immediate,
-          );
       } else {
-        if (removed > 0) {
-          const top = editor.getScrollTop();
-          const height = editor.getTopForLineNumber(removed + 1) - editor.getTopForLineNumber(1);
-          const selection = editor.getSelection();
-          removeDecorations(decorationIds.splice(0, removed));
-          model.applyEdits([{ range: new monaco.Range(1, 1, removed + 1, 1), text: null }]);
-          if (selection)
-            editor.setSelection(
-              new monaco.Selection(
-                Math.max(1, selection.selectionStartLineNumber - removed),
-                selection.selectionStartLineNumber > removed ? selection.selectionStartColumn : 1,
-                Math.max(1, selection.positionLineNumber - removed),
-                selection.positionLineNumber > removed ? selection.positionColumn : 1,
-              ),
-            );
-          if (!follow.current)
-            editor.setScrollTop(Math.max(0, top - height), monaco.editor.ScrollType.Immediate);
+        if (edits.removed > 0) {
+          removeDecorations(decorationIds.splice(0, edits.removed));
+          model.applyEdits([{ range: new monaco.Range(1, 1, edits.removed + 1, 1), text: null }]);
         }
-        const appended = received ? rows.slice(rows.length - received) : [];
+        const appended = edits.appended ? rows.slice(rows.length - edits.appended) : [];
         if (appended.length) {
           const line = model.getLineCount();
           const inserted = text(appended);
@@ -243,12 +245,37 @@ export default function LogEditor({
           for (const ids of decorations(appended, line)) decorationIds.push(ids);
         }
       }
-      shownFirst = first;
-      shownCount = rows.length;
-      shownRewrites = log.rewrites;
+      if (sequences.length && selectionAnchor) {
+        const start = restorePosition(sequences, selectionAnchor.start, (line) =>
+          model.getLineMaxColumn(line),
+        );
+        const end = restorePosition(sequences, selectionAnchor.end, (line) =>
+          model.getLineMaxColumn(line),
+        );
+        editor.setSelection(
+          new monaco.Selection(start.lineNumber, start.column, end.lineNumber, end.column),
+        );
+        // A fallback or column clamp is temporary. Keep the original identities
+        // until the user moves the selection, so Clear can restore hidden ends.
+        selectionChanged = false;
+      }
       if (follow.current)
         editor.setScrollTop(editor.getScrollHeight(), monaco.editor.ScrollType.Immediate);
-      else if (received) setNewLines((count) => count + received);
+      else {
+        if (sequences.length && topAnchor)
+          editor.setScrollTop(
+            Math.max(
+              0,
+              editor.getTopForLineNumber(sequenceIndex(sequences, topAnchor.sequence) + 1) +
+                topAnchor.offset,
+            ),
+            monaco.editor.ScrollType.Immediate,
+          );
+        setNewLines(newProjectedRows(sequences, watermark));
+      }
+      shownSequences = sequences;
+      shownRewrites = log.rewrites;
+      shownFilter = log.filterRevision;
       ownScroll.current = false;
     };
     // Lines can arrive many times a frame. One edit a frame is all that can
@@ -265,12 +292,18 @@ export default function LogEditor({
       // new content height is Monaco wrapping or measuring again, which the
       // content size listener answers.
       if (ownScroll.current || !event.scrollTopChanged || event.scrollHeightChanged) return;
-      follow.current = event.scrollTop + editor.getLayoutInfo().height >= event.scrollHeight - 2;
+      const atBottom = event.scrollTop + editor.getLayoutInfo().height >= event.scrollHeight - 2;
+      if (follow.current && !atBottom) watermark = log.nextSequence;
+      follow.current = atBottom;
       setFollowing(follow.current);
       if (follow.current) setNewLines(0);
     });
     const selection = editor.onDidChangeCursorSelection((event) => {
+      // Restoring an after-row endpoint can put it at an appended row's start.
+      // Only a new external selection may replace that endpoint's affinity.
+      if (!ownScroll.current) selectionChanged = true;
       if (!ownScroll.current && !event.selection.isEmpty()) {
+        if (follow.current) watermark = log.nextSequence;
         follow.current = false;
         setFollowing(false);
       }
@@ -342,7 +375,7 @@ export default function LogEditor({
           className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-sm"
           onClick={newest}
         >
-          <HugeiconsIcon icon={ArrowDown01Icon} data-icon="inline-start" />
+          <HugeiconsIcon icon={ArrowDown01Icon} data-icon="inline-start" aria-hidden="true" />
           Newest{newLines > 0 && ` · ${newLines.toLocaleString()} new`}
         </Button>
       )}

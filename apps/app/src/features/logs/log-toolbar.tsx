@@ -46,6 +46,9 @@ export function LogToolbar({
   select,
   setPrevious,
   search,
+  searchDisabled = disabled,
+  filterButton,
+  children,
   ref: toolbarRef,
 }: {
   ref?: React.Ref<HTMLDivElement>;
@@ -61,6 +64,9 @@ export function LogToolbar({
   select: (value: string) => void;
   setPrevious: (value: boolean) => void;
   search: () => void;
+  searchDisabled?: boolean;
+  filterButton?: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   const { timestamps, wrap, setTimestamps, setWrap, loaded, saveStatus, saveError, retrySave } =
     useLogSettings();
@@ -188,7 +194,7 @@ export function LogToolbar({
             <Button
               variant="ghost"
               aria-label="Search"
-              disabled={disabled}
+              disabled={searchDisabled}
               onClick={search}
               className="text-muted-foreground @max-[34rem]/logs:w-7 @max-[34rem]/logs:p-0"
             >
@@ -197,7 +203,9 @@ export function LogToolbar({
           </TooltipTrigger>
           <TooltipContent>Search</TooltipContent>
         </Tooltip>
+        {filterButton}
       </div>
+      {children}
     </div>
   );
 }
