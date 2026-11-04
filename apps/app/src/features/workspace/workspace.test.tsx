@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { commandTestWorkspace } from "../commands/test-runtime.ts";
+const commandOwners: (() => void)[] = [];
 import type { StreamListener, SubscriptionListener, Setting } from "@hukube/engine-client";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, useEffectEvent } from "react";
@@ -125,6 +127,7 @@ vi.mock("dockview-react", () => ({
 }));
 afterEach(() => {
   cleanup();
+  for (const off of commandOwners.splice(0)) off();
   detachClusterSessions("c");
   mocks.panels = [];
   mocks.broken = false;
@@ -208,6 +211,7 @@ it.each(["button", "middle click"])(
       onDidTitleChange: () => ({ dispose: () => {} }),
     } as unknown as Parameters<typeof PanelTab>[0]["api"];
     const props = { api, params: {} } as Parameters<typeof PanelTab>[0];
+    commandOwners.push(commandTestWorkspace(api, () => props.params));
     const view = render(
       <WorkspaceContext value={{ cluster: "c" } as never}>
         <PanelTab {...props} />

@@ -1,3 +1,4 @@
+import { commands } from "../commands/runtime.ts";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -17,7 +18,8 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import type { DragEvent } from "react";
+import { useRef, type DragEvent } from "react";
+import type { Origin } from "../commands/runtime.ts";
 
 import { usePreferences } from "../settings/store.ts";
 
@@ -31,6 +33,8 @@ import { useOpenClusters } from "./open-clusters.ts";
 
 /** The window's top strip: one tab per open Cluster. */
 export function ClusterTabs() {
+  const paletteOrigin = useRef<Origin | undefined>(undefined);
+  const settingsOrigin = useRef<Origin | undefined>(undefined);
   const ids = useOpenClusters((s) => s.ids);
   const active = useParams({ strict: false }).cluster;
   const close = useCloseCluster();
@@ -123,14 +127,56 @@ export function ClusterTabs() {
         <TooltipContent>Open a cluster</TooltipContent>
       </Tooltip>
       <div className="ml-auto flex items-center pr-1">
+        <Button
+          variant="ghost"
+          aria-label="Command palette"
+          onPointerDown={() => {
+            paletteOrigin.current = commands.capture();
+          }}
+          onClick={(event) => {
+            commands.dispatch(
+              "app.commandPalette",
+              {},
+              event.detail ? (paletteOrigin.current ?? commands.capture()) : commands.capture(),
+            );
+            paletteOrigin.current = undefined;
+          }}
+        >
+          Commands
+        </Button>
         <Tooltip>
           <TooltipTrigger
             render={
               <Link
                 to="/settings/$section"
                 params={{ section: "appearance" }}
-                aria-label="Settings"
                 className={buttonVariants({ variant: "ghost", size: "icon" })}
+                aria-label="Settings"
+                onPointerDown={() => {
+                  settingsOrigin.current = commands.capture();
+                }}
+                onClick={(event) => {
+                  const origin = settingsOrigin.current;
+                  settingsOrigin.current = undefined;
+                  if (
+                    event.defaultPrevented ||
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
+                  commands.dispatch(
+                    "app.openSettings",
+                    {},
+                    {
+                      ...(event.detail ? (origin ?? commands.capture()) : commands.capture()),
+                      element: event.currentTarget,
+                    },
+                  );
+                }}
               />
             }
           >
@@ -160,7 +206,7 @@ function ThemeToggle() {
               size="icon"
               disabled={!snapshot.loaded || !!snapshot.error}
               aria-label={`Switch to ${next} mode`}
-              onClick={() => store.change("theme", next)}
+              onClick={() => commands.dispatch("appearance.setTheme", { theme: next })}
             />
           }
         >

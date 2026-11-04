@@ -1,3 +1,4 @@
+import { commands } from "../commands/runtime.ts";
 import { Button } from "@hukube/ui/components/button";
 import { cn } from "@hukube/ui/lib/utils";
 import { Cancel01Icon, ComputerTerminal01Icon } from "@hugeicons/core-free-icons";
@@ -5,13 +6,10 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import { useEffect, useRef, useState } from "react";
 
-import { guardPanel, useUnsavedEdits } from "../edit/unsaved-edits.ts";
+import { useUnsavedEdits } from "../edit/unsaved-edits.ts";
 import { useExecSessions } from "../exec/sessions.ts";
 
-import { closeSessionTab } from "../exec/window-tabs.ts";
 import { useWorkspace } from "./workspace-context.tsx";
-
-import { pinPanel } from "./dock.ts";
 
 /**
  * A tab that shows Preview Tabs in italics. Double-clicking pins a preview;
@@ -37,11 +35,7 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
     });
     return () => d.dispose();
   }, [api]);
-  const close = () =>
-    guardPanel(api.id, () => {
-      if (exec) closeSessionTab(cluster, api.id.slice(5));
-      api.close();
-    });
+  const close = () => commands.dispatch("tab.close", {}, commands.capture(cluster, api.id));
   const [title, setTitle] = useState(api.title ?? "");
   useEffect(() => {
     const d = api.onDidTitleChange((e) => setTitle(e.title));
@@ -53,7 +47,9 @@ export function PanelTab({ api, params }: IDockviewPanelHeaderProps<{ preview?: 
       ref={tab}
       className="flex h-full items-center gap-1 pr-1 pl-3"
       title={exec ? `Exec Session, ${status}: ${title}` : undefined}
-      onDoubleClick={() => pinPanel(api, params)}
+      onDoubleClick={() => {
+        if (params.preview) commands.dispatch("tab.pin", {}, commands.capture(cluster, api.id));
+      }}
       onAuxClick={(e) => {
         if (e.button === 1) close();
       }}

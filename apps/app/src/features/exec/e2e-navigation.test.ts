@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from "vitest";
 import { openGoToResource } from "../../../../../e2e/tests/exec.ts";
-import { execKey } from "./keys.ts";
+import { terminalTakesKey } from "./keys.ts";
 
 afterEach(() => document.body.replaceChildren());
 it.each(["macOS", "Windows", "Linux"])(
@@ -20,18 +20,9 @@ it.each(["macOS", "Windows", "Linux"])(
           expect(key).toBe("ControlOrMeta+K");
           action =
             document.activeElement === terminal
-              ? execKey(
-                  mac,
-                  {
-                    key: "k",
-                    code: "KeyK",
-                    metaKey: mac,
-                    ctrlKey: !mac,
-                    shiftKey: false,
-                    altKey: false,
-                  },
-                  false,
-                )
+              ? terminalTakesKey(mac, { key: "k", code: "KeyK", metaKey: mac, ctrlKey: !mac }, true)
+                ? "terminal"
+                : "goToResource"
               : "goToResource";
         },
       },

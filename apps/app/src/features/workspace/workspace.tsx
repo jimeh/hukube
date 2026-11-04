@@ -7,10 +7,10 @@ import {
   type DockviewTheme,
   type IDockviewPanelProps,
 } from "dockview-react";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } from "react";
 
 import { clusterScope } from "@/features/clusters/cluster-color.ts";
-import { GoToResource } from "@/features/go-to-resource/go-to-resource.tsx";
+import { commands } from "../commands/runtime.ts";
 import { ResourceListPanel } from "@/features/resource-list/resource-list-panel.tsx";
 import { useRegistry } from "../overview/registry.ts";
 import { matches } from "../overview/definition.ts";
@@ -41,26 +41,32 @@ import { WorkspaceContext, type WorkspaceValue } from "./workspace-context.tsx";
 
 const components = {
   exec: ({ api, params }: IDockviewPanelProps<ExecSessionParams>) => (
-    <ExecPanel api={api} params={params} />
+    <div data-command-panel={api.id} className="h-full">
+      <ExecPanel api={api} params={params} />
+    </div>
   ),
   list: ({ api, params }: IDockviewPanelProps<ListPanelParams>) => (
-    <ResourceListPanel
-      panelId={api.id}
-      type={params.type}
-      namespaces={params.namespaces}
-      // One partial update, so a full copy of older params cannot undo it.
-      // The selection is saved with the Tab, so changing it pins a preview.
-      onNamespacesChange={(namespaces) =>
-        api.updateParameters({
-          namespaces: namespaces.length > 0 ? namespaces : undefined,
-          preview: false,
-        })
-      }
-      onInteract={() => pinPanel(api, params)}
-    />
+    <div data-command-panel={api.id} className="h-full">
+      <ResourceListPanel
+        panelId={api.id}
+        type={params.type}
+        namespaces={params.namespaces}
+        // One partial update, so a full copy of older params cannot undo it.
+        // The selection is saved with the Tab, so changing it pins a preview.
+        onNamespacesChange={(namespaces) =>
+          api.updateParameters({
+            namespaces: namespaces.length > 0 ? namespaces : undefined,
+            preview: false,
+          })
+        }
+        onInteract={() => pinPanel(api, params)}
+      />
+    </div>
   ),
   resource: ({ api, params }: IDockviewPanelProps<ResourcePanelParams>) => (
-    <ResourcePanel key={api.id} api={api} params={params} />
+    <div data-command-panel={api.id} className="h-full">
+      <ResourcePanel key={api.id} api={api} params={params} />
+    </div>
   ),
 };
 const tabComponents = { tab: PanelTab };
@@ -120,9 +126,18 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
   useEffect(() => {
     if (!api) return;
     const d = api.onDidActivePanelChange(() => {
+      commands.chords.cancel();
+      commands.refreshAvailability();
       setActiveListType((api.activePanel?.params as Partial<ListPanelParams> | undefined)?.type);
     });
-    return () => d.dispose();
+    const layout = api.onDidLayoutChange(() => {
+      commands.chords.cancel();
+      commands.refreshAvailability();
+    });
+    return () => {
+      d.dispose();
+      layout.dispose();
+    };
   }, [api]);
 
   const targetFor = useCallback(
@@ -169,6 +184,8 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
           title: type,
           params: { type },
           preview: options?.preview ?? false,
+          beside: options?.beside,
+          pane: options?.pane,
         });
       },
       openResource: (address, options) => {
@@ -207,8 +224,51 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
     [api, engine, cluster, active, status, types, activeListType, targetFor],
   );
 
+  const owner = useRef<{ token: object; api: DockviewApi; value: WorkspaceValue } | undefined>(
+    undefined,
+  );
+  useLayoutEffect(() => {
+    if (!api) return;
+    const registered = { token: {}, api, value };
+    owner.current = registered;
+    return commands.registerWorkspace(cluster, registered);
+    // Registration follows the mounted Dockview, not its changing feature state.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, cluster]);
+  useLayoutEffect(() => {
+    if (owner.current) owner.current.value = value;
+    commands.refreshAvailability();
+  });
+  const routed = useMemo<WorkspaceValue>(
+    () => ({
+      ...value,
+      openList: (type, options) => {
+        const origin = commands.capture(cluster, options?.beside ?? options?.pane);
+        origin.openPane = options?.pane;
+        commands.dispatch(
+          "resource.openType",
+          { type, preview: options?.preview, beside: !!options?.beside },
+          origin,
+        );
+      },
+      openResource: (address, options) => {
+        const origin = commands.capture(cluster, options?.beside ?? options?.pane);
+        origin.openPane = options?.pane;
+        commands.dispatch(
+          "resource.open",
+          {
+            uri: formatResourceUri({ ...address, cluster }),
+            preview: options?.preview,
+            beside: !!options?.beside,
+          },
+          origin,
+        );
+      },
+    }),
+    [value, cluster],
+  );
   return (
-    <WorkspaceContext value={value}>
+    <WorkspaceContext value={routed}>
       <div {...clusterScope(cluster)} className="flex h-full min-h-0 flex-col">
         <div className="grid min-h-0 flex-1 grid-cols-[15rem_minmax(0,1fr)]">
           <TypeSidebar />
@@ -223,7 +283,6 @@ export function Workspace({ cluster, active }: { cluster: string; active: boolea
         </div>
         <StatusBar />
       </div>
-      <GoToResource active={active} />
     </WorkspaceContext>
   );
 }

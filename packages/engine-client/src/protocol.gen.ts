@@ -107,7 +107,12 @@ export interface Access {
  * Hash identifies the protocol definition. The Engine sends it in Hello; a UI
  * with another value is of another build.
  */
-export const Hash = "5c23777d57a9dca6";
+export const Hash = "73949f323ae92d55";
+
+//////////
+// source: keybindings.go
+
+export const AppKeybindingsKey = "app/keybindings";
 
 //////////
 // source: preferences.go

@@ -16,7 +16,9 @@ import { useSettingsOpenWork } from "../settings/open-work.ts";
 
 export function UnsavedGuard() {
   const overviewDirty = useSettingsOpenWork((state) => state.overview);
-  const settingsDirty = useSettingsOpenWork((state) => state.preferences) ? 1 : 0;
+  const settingsDirty = useSettingsOpenWork((state) => state.preferences || state.keybindings)
+    ? 1
+    : 0;
   const host = useHost();
   const edits = useUnsavedEdits((state) => state.entries.size);
   const sessions = useExecSessions(
@@ -34,6 +36,7 @@ export function UnsavedGuard() {
       if (
         !useSettingsOpenWork.getState().overview &&
         !useSettingsOpenWork.getState().preferences &&
+        !useSettingsOpenWork.getState().keybindings &&
         !useUnsavedEdits.getState().entries.size &&
         !(
           host.kind === "desktop" &&

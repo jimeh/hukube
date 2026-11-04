@@ -1,5 +1,6 @@
 import { logReplayFixture } from "../log-replay.ts";
 import { assertLogFiltering, assertPreviousInterruption } from "./logs.ts";
+import { commandTests, palettePreservesExecInput } from "./commands.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -186,6 +187,7 @@ test("runs, guards, restarts, and restores Exec Sessions without reopening a pro
   };
   await expect(input).toBeFocused();
   await run("echo hukube-$((6*7))", "hukube-42");
+  await palettePreservesExecInput(page, input, screen);
   await input.pressSequentially(
     "stty raw -echo; printf 'paste-%s-ready\\n' $((6*7)); head -c 1048576 | md5sum; stty sane; echo paste-done-$((6*7))",
   );
@@ -2125,3 +2127,5 @@ test("Previous interruption preserves confirmed retained lines in the web Host",
     await fixture.close();
   }
 });
+
+commandTests();

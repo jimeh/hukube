@@ -1,9 +1,10 @@
+import { useCommandSurface } from "../commands/owners.ts";
 import { useSubscription, useConnectionState } from "@hukube/engine-client/react";
 import { formatResourceUri, parseResourceUri, type Facet } from "@hukube/k8s";
 import { Badge } from "@hukube/ui/components/badge";
 import { Tabs, TabsContent } from "@hukube/ui/components/tabs";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, useRef } from "react";
 
 import { usePanelEdit } from "../edit/use-panel-edit.ts";
 import { ReviewDialog } from "../edit/review-dialog.tsx";
@@ -84,6 +85,18 @@ export function ResourcePanel({
     editAccess: access?.edit,
     onEdit: () => pinPanel(api, params),
   });
+  const commandBody = useRef<HTMLDivElement>(null);
+  const reviewButton = useRef<HTMLButtonElement>(null);
+  useCommandSurface(commandBody, () => ({
+    kind: "resource",
+    review: edit.reviewOperation,
+    reviewReason: edit.reviewReason,
+    dirty: edit.dirty,
+    uid: manifest.data?.deleted
+      ? undefined
+      : (metadata(manifest.data?.object ?? lastObject ?? {})["uid"] as string | undefined),
+    focus: edit.returnFocus,
+  }));
   const discovered = types.get(address?.type ?? "");
   const apiVersion = discovered
     ? discovered.group
@@ -118,6 +131,11 @@ export function ResourcePanel({
   );
   const resolved = resolveFacet(address?.facet, target);
   const selected = !address?.facet && edit.session && latched ? latched : resolved;
+  const setReviewFocus = edit.setFocus;
+  useLayoutEffect(() => {
+    if (selected !== "overview" && selected !== "yaml")
+      setReviewFocus(() => reviewButton.current?.focus());
+  }, [selected, setReviewFocus]);
   if (!edit.session && !defaultPending && latched !== resolved) setLatched(resolved);
   const related = useSubscription(
     "resource.related",
@@ -175,6 +193,7 @@ export function ResourcePanel({
   return (
     // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
+      ref={commandBody}
       className="flex h-full min-h-0 flex-col"
       onClickCapture={(event) => {
         const opened = takePointerOpened(address.cluster);
@@ -243,6 +262,7 @@ export function ResourcePanel({
           <span className="text-warning">Unsaved changes</span>
           {selected !== "yaml" && selected !== "overview" && (
             <Button
+              ref={reviewButton}
               size="sm"
               disabled={!!edit.reviewReason || !edit.parsed?.object}
               title={

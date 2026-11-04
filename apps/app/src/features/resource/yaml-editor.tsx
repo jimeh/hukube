@@ -1,3 +1,5 @@
+import { useCommandSurface } from "../commands/owners.ts";
+import { commands } from "../commands/runtime.ts";
 import "monaco-editor/languages/definitions/yaml/register";
 
 import { monaco } from "@/lib/monaco.ts";
@@ -36,6 +38,7 @@ export default function YamlEditor({
   issues = [],
   onChange,
   onReview,
+  reviewReason,
   baseText,
   editGroup,
   editUid,
@@ -50,9 +53,22 @@ export default function YamlEditor({
   issues?: YamlIssue[];
   onChange?: (text: string) => void;
   onReview?: () => void;
+  reviewReason?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  useCommandSurface(containerRef, () => ({
+    kind: "editor",
+    find: () => {
+      editorRef.current?.focus();
+      void editorRef.current?.getAction("actions.find")?.run();
+    },
+    review: onReview,
+    reviewReason,
+    dirty,
+    uid: editUid,
+    focus: () => editorRef.current?.focus(),
+  }));
   const theme = useTheme();
   const description = useId();
   const gutter = useMemo(() => gutterChanges(baseText ?? value, value), [baseText, value]);
@@ -102,6 +118,7 @@ export default function YamlEditor({
       padding: { top: 8 },
       stickyScroll: { enabled: true },
     });
+    editor.createContextKey("hukubeCommandOwned", true);
     editorRef.current = editor;
     decorations.current = editor.createDecorationsCollection();
     const changes = editor.onDidChangeModelContent(() => {
@@ -110,9 +127,11 @@ export default function YamlEditor({
     editor.addAction({
       id: "hukube.edit.review",
       label: "Review changes",
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+      keybindings: [],
       precondition: "hukubeEditDirty && editorTextFocus",
-      run: () => callbacks.current.onReview?.(),
+      run: () => {
+        commands.dispatch("manifest.review", {});
+      },
     });
     const dirtyKey = editor.createContextKey("hukubeEditDirty", false);
     contextRef.current = dirtyKey;

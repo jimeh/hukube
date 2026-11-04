@@ -1,3 +1,5 @@
+import { commands } from "../commands/runtime.ts";
+import { useCommandSurface } from "../commands/owners.ts";
 import {
   ExecReasonEngineStopped,
   ExecReasonNoShell,
@@ -25,11 +27,11 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useSyncExternalStore, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { CommandForm } from "./command-form.tsx";
 import { commandProgram, execTitle, imageKey, parseCommand } from "./command.ts";
-import { isMac } from "@/lib/platform.ts";
+
 import { useTheme } from "@/lib/theme.ts";
 import { useResourceAccess } from "../edit/use-access.ts";
 import { metadata } from "../edit/yaml.ts";
@@ -39,7 +41,7 @@ import { useWorkspace } from "../workspace/workspace-context.tsx";
 import { execContainers, execDisabledReason } from "./containers.ts";
 import { useCommands } from "./use-commands.ts";
 import { closeSessionTab, rememberSessionTab } from "./window-tabs.ts";
-import { execKeyLabels } from "./keys.ts";
+
 import {
   dismissSkippedNotice,
   startSession,
@@ -98,13 +100,36 @@ export function ExecPanel({
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState(false);
   const restartButton = useRef<HTMLButtonElement>(null);
-  const keys = execKeyLabels(isMac);
+  useSyncExternalStore(commands.subscribe, commands.getSnapshot);
+  const commandOrigin = () =>
+    commands.capture(
+      cluster,
+      api.id,
+      terminal?.element.querySelector<HTMLElement>("textarea") ?? terminal?.element,
+    );
+  const keyContext = {
+    ...commands.context({ route: "/c/" + cluster }),
+    route: "workspace" as const,
+    workspace: true,
+    focus: "terminal" as const,
+    tabKind: "exec" as const,
+    terminalLive: state?.phase === "live" && !terminal?.inputHeld,
+    terminalSelection: selection,
+  };
+  const keys = {
+    copy: commands.labelFor("terminal.copy", keyContext, commandOrigin()),
+    paste: commands.labelFor("terminal.paste", keyContext, commandOrigin()),
+    selectAll: commands.labelFor("terminal.selectAll", keyContext, commandOrigin()),
+    find: commands.labelFor("editor.find", keyContext, commandOrigin()),
+    goToResource: commands.labelFor("app.goToResource", keyContext, commandOrigin()),
+  };
   // Asked for again while its bar is open, find returns to its field.
   const find = () => {
     setFinding(true);
     findInput.current?.focus();
     findInput.current?.select();
   };
+  useCommandSurface(body, () => ({ kind: "terminal", find, focus: () => terminal?.focus() }));
   const findFromTerminal = useEffectEvent(find);
   const theme = useTheme();
   const showing = visible && active;
@@ -269,7 +294,7 @@ export function ExecPanel({
                 className="shrink-0"
                 aria-label="Find in scrollback"
                 disabled={!terminal || !renderingTerminal}
-                onClick={find}
+                onClick={() => commands.dispatch("editor.find", {}, commandOrigin())}
               />
             }
           >
@@ -397,7 +422,10 @@ export function ExecPanel({
           </ContextMenuTrigger>
           <ContextMenuContent>
             <ContextMenuGroup>
-              <ContextMenuItem disabled={!selection} onClick={() => terminal?.copy()}>
+              <ContextMenuItem
+                disabled={!selection}
+                onClick={() => commands.dispatch("terminal.copy", {}, commandOrigin())}
+              >
                 Copy
                 <Shortcut>{keys.copy}</Shortcut>
               </ContextMenuItem>
@@ -405,24 +433,29 @@ export function ExecPanel({
                 disabled={!navigator.clipboard?.readText || state?.phase !== "live"}
                 title={!navigator.clipboard?.readText ? pasteReason : undefined}
                 onClick={() => {
-                  void navigator.clipboard
-                    .readText()
-                    .then((text) => terminal?.paste(text))
-                    .catch(() => {});
+                  commands.dispatch("terminal.paste", {}, commandOrigin());
                 }}
               >
                 Paste
                 <Shortcut>{keys.paste}</Shortcut>
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => terminal?.selectAll()}>
+              <ContextMenuItem
+                onClick={() => commands.dispatch("terminal.selectAll", {}, commandOrigin())}
+              >
                 Select all
                 <Shortcut>{keys.selectAll}</Shortcut>
               </ContextMenuItem>
-              <ContextMenuItem onClick={find}>
+              <ContextMenuItem
+                onClick={() => commands.dispatch("editor.find", {}, commandOrigin())}
+              >
                 Find
                 <Shortcut>{keys.find}</Shortcut>
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => terminal?.clear()}>Clear</ContextMenuItem>
+              <ContextMenuItem
+                onClick={() => commands.dispatch("terminal.clear", {}, commandOrigin())}
+              >
+                Clear
+              </ContextMenuItem>
               <ContextMenuItem onClick={() => openGoToResource(cluster)}>
                 Go to Resource
                 <Shortcut>{keys.goToResource}</Shortcut>

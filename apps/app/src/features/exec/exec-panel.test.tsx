@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { commandTestWorkspace } from "../commands/test-runtime.ts";
 import type { Setting, StreamListener } from "@hukube/engine-client";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { DockviewReact, type DockviewApi, type IDockviewPanelProps } from "dockview-react";
@@ -93,13 +94,23 @@ const workspace: WorkspaceValue = {
   openResource,
   openExecSession: () => {},
 };
-const renderPanel = (current: ExecSessionParams) => (
-  <WorkspaceContext value={workspace}>
-    <ExecPanel api={api} params={current} />
-  </WorkspaceContext>
-);
+let currentCommandParams: ExecSessionParams = params;
+let unregisterCommands: (() => void) | undefined;
+const renderPanel = (current: ExecSessionParams) => {
+  currentCommandParams = current;
+  return (
+    <WorkspaceContext value={workspace}>
+      <div data-command-panel={api.id}>
+        <ExecPanel api={api} params={current} />
+      </div>
+    </WorkspaceContext>
+  );
+};
 function view(state?: ExecState, initialParams: ExecSessionParams = params) {
   mocked.terminal = fakeTerminal();
+  mocked.terminal.terminal.element.dataset["execSession"] = initialParams.sessionId;
+  vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+  unregisterCommands = commandTestWorkspace(api, () => currentCommandParams, workspace);
   if (state)
     useExecSessions.setState({
       entries: new Map([
@@ -117,6 +128,9 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  unregisterCommands?.();
+  unregisterCommands = undefined;
+  vi.restoreAllMocks();
   sessionStorage.clear();
   Object.assign(api, { isVisible: true, isActive: true });
   endSession("id");
@@ -377,7 +391,9 @@ it("shows starting, live, and terminating, opens the Pod in its Pane, and keeps 
   mocked.object["metadata"] = { uid: "uid", deletionTimestamp: "now" };
   rendered.rerender(
     <WorkspaceContext value={workspace}>
-      <ExecPanel api={api} params={params} />
+      <div data-command-panel={api.id}>
+        <ExecPanel api={api} params={params} />
+      </div>
     </WorkspaceContext>,
   );
   expect(screen.getByText("Terminating")).toBeDefined();
@@ -390,7 +406,9 @@ it("shows starting, live, and terminating, opens the Pod in its Pane, and keeps 
   rendered.unmount();
   render(
     <WorkspaceContext value={workspace}>
-      <ExecPanel api={api} params={params} />
+      <div data-command-panel={api.id}>
+        <ExecPanel api={api} params={params} />
+      </div>
     </WorkspaceContext>,
   );
   expect(terminal.attach).toHaveBeenCalledTimes(2);
@@ -408,7 +426,9 @@ it("hides restart for a replacement Pod and disables it while reconnecting", asy
   mocked.object["metadata"] = { uid: "replacement" };
   rendered.rerender(
     <WorkspaceContext value={workspace}>
-      <ExecPanel api={api} params={params} />
+      <div data-command-panel={api.id}>
+        <ExecPanel api={api} params={params} />
+      </div>
     </WorkspaceContext>,
   );
   expect(screen.queryByRole("button", { name: "Start again" })).toBeNull();

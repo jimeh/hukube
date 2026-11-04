@@ -110,6 +110,14 @@ func init() {
 				return protocol.None{}, err
 			}
 		}
+		if p.Key == protocol.AppKeybindingsKey {
+			if p.IfRevision == nil {
+				return protocol.None{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeInvalid, Message: "Keybindings require ifRevision"}
+			}
+			if err := settings.ValidateKeybindings(p.Value); err != nil {
+				return protocol.None{}, err
+			}
+		}
 		err := srv.cfg.Settings.CompareAndPut(p.Key, p.Value, p.IfRevision)
 		if errors.Is(err, settings.ErrConflict) {
 			return protocol.None{}, &protocol.ErrorDetail{Code: protocol.ErrorCodeConflict, Message: err.Error()}
