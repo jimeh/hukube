@@ -591,7 +591,7 @@ the same rule: text in the editor, compared by value, held in a `Map`.
   found that an entry which comes and goes is disorienting. A custom
   Resource gains the entry once, a moment after its tab opens.
 
-The switcher order follows `CONTEXT.md`: YAML, Logs, Events, Related. The
+The switcher order follows `GLOSSARY.md`: YAML, Logs, Events, Related. The
 entry has no badge. `logs` joins the Resource URI's Facets.
 
 A new tab takes the Pane's active Facet when it applies to the new tab's

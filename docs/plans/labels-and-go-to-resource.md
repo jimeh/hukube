@@ -197,7 +197,7 @@ A subscription, not a request, fits the existing pattern: typing sends
 `update` messages, the session already discards superseded params, and results
 stay live while the palette is open.
 
-"Find" is used instead of "search" because `CONTEXT.md` lists "search" as a
+"Find" is used instead of "search" because `GLOSSARY.md` lists "search" as a
 word to avoid for Query.
 
 ### Parse type and namespace prefixes in the UI

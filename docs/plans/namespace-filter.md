@@ -37,7 +37,7 @@ The Engine and the protocol do not change.
   a hand-rolled one; no key binding is added without Jim's approval (none is
   proposed); the running app is reviewed in both themes and at two widths, and
   the `ux-review` skill runs before code review.
-- Use `CONTEXT.md` terms: Namespace, Resource, Resource Type, Tab, Pane,
+- Use `GLOSSARY.md` terms: Namespace, Resource, Resource Type, Tab, Pane,
   Workspace, Preview Tab, Query, Engine, Cluster.
 - `AGENTS.md`, "Query windows": a Namespace list holds at most `limit` rows,
   so code must check `total`. Today's dropdown ignores it.
@@ -495,7 +495,7 @@ checks that need long names or many Namespaces create temporary ones with a
 unique prefix and delete them afterwards, because another session shares the
 test cluster.
 
-No Engine, protocol, ADR, or `CONTEXT.md` change.
+No Engine, protocol, ADR, or `GLOSSARY.md` change.
 
 ## Steps
 
