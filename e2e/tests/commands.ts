@@ -138,7 +138,8 @@ export function commandTests() {
     await expect(page.getByLabel("One or two strokes (space separated)")).toHaveValue("Mod+Alt+U");
     await expect(page).toHaveURL(/keyboard-shortcuts/);
     await page.getByRole("button", { name: "Cancel rule", exact: true }).click();
-    await page.getByRole("button", { name: "Cancel changes", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Save shortcuts", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Cancel changes", exact: true })).toBeDisabled();
   });
   test("keyboard draft conflicts across windows and restores the original Engine document", async ({
     page,
