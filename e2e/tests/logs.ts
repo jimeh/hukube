@@ -454,18 +454,23 @@ async function assertLogLayout(panel: Locator, findOpen: boolean, info: TestInfo
       })
       .toMatchObject({ readable: true, contained: true });
   } catch (error) {
-    // Keep the assertion error even if the page also fails while collecting diagnostics.
-    try {
-      await info.attach("previous-layout-failure", {
-        body: Buffer.from(
-          JSON.stringify({ samples, monaco: await monacoSnapshot(editor) }, null, 2),
-        ),
+    // Preserve collected samples independently of optional diagnostics, and keep the assertion error.
+    const diagnostics = await Promise.allSettled([
+      info.attach("previous-layout-failure", {
+        body: Buffer.from(JSON.stringify({ samples }, null, 2)),
         contentType: "application/json",
-      });
-      await panel.page().screenshot({ path: info.outputPath("previous-layout-failure.png") });
-    } catch (diagnosticError) {
-      console.warn("Could not save Previous layout diagnostics", diagnosticError);
-    }
+      }),
+      monacoSnapshot(editor).then((snapshot) =>
+        info.attach("previous-monaco-failure", {
+          body: Buffer.from(JSON.stringify(snapshot, null, 2)),
+          contentType: "application/json",
+        }),
+      ),
+      panel.page().screenshot({ path: info.outputPath("previous-layout-failure.png") }),
+    ]);
+    for (const result of diagnostics)
+      if (result.status === "rejected")
+        console.warn("Could not save Previous layout diagnostics", result.reason);
     throw error;
   }
   const controls = panel.getByRole("region", {
