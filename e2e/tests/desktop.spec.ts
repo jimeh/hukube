@@ -331,11 +331,22 @@ test("Previous interruption preserves confirmed retained lines in the desktop Ho
         const session = await window.context().newCDPSession(window);
         await session.send("Emulation.clearDeviceMetricsOverride");
         await session.detach();
-        await app!.evaluate(({ BrowserWindow }, zoom) => {
+        const native = await app!.evaluate(({ BrowserWindow, screen }, zoom) => {
           const browser = BrowserWindow.getAllWindows()[0]!;
           browser.setSize(1440, 900);
           browser.webContents.setZoomFactor(zoom);
+          return {
+            sampledAt: Date.now(),
+            zoom: browser.webContents.getZoomFactor(),
+            bounds: browser.getBounds(),
+            contentBounds: browser.getContentBounds(),
+            display: screen.getDisplayMatching(browser.getBounds()),
+          };
         }, factor);
+        await info.attach(`previous-native-zoom-${factor}`, {
+          body: Buffer.from(JSON.stringify(native, null, 2)),
+          contentType: "application/json",
+        });
       }),
     );
   } finally {

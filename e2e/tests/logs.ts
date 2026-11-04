@@ -200,7 +200,7 @@ export async function assertPreviousInterruption(
   await input.press("ControlOrMeta+A");
   try {
     await setZoom(2);
-    const layout = await assertLogLayout(panel, true);
+    const layout = await assertLogLayout(panel, true, info);
     await persist("previous-layout-200-percent", {
       body: JSON.stringify(layout, null, 2),
       contentType: "application/json",
@@ -242,7 +242,7 @@ export async function assertPreviousInterruption(
       // The canonical 240px Resource sidebar remains visible; width names the log content.
       await page.setViewportSize({ width: width === 320 ? 560 : width, height: 900 });
       await expect(stopped).toBeVisible();
-      await assertLogLayout(panel, false);
+      await assertLogLayout(panel, false, info);
       const retry = panel.getByRole("button", { name: "Try again", exact: true });
       await retry.focus();
       await expect(retry).toBeFocused();
@@ -270,7 +270,7 @@ export async function assertPreviousInterruption(
       for (const factor of [1.25, 2]) {
         await setZoom(factor);
         await expect(stopped).toBeVisible();
-        await assertLogLayout(panel, false);
+        await assertLogLayout(panel, false, info);
         await page.screenshot({
           path: info.outputPath(`previous-incomplete-${theme}-zoom-${factor}.png`),
         });
@@ -364,14 +364,40 @@ export async function assertPreviousInterruption(
 }
 
 /** Real geometry, native scrolling and focus at the constrained Log Stream height. */
-async function assertLogLayout(panel: Locator, findOpen: boolean) {
+async function assertLogLayout(panel: Locator, findOpen: boolean, info: TestInfo) {
   const editor = panel.locator(".monaco-editor");
   const layout = () =>
     editor.evaluate((element, expectsFind) => {
       const box = element.getBoundingClientRect();
       const line = element.querySelector(".view-line")?.getBoundingClientRect();
       const find = element.querySelector(".find-widget")?.getBoundingClientRect();
-      const pane = element.closest('[role="tabpanel"]')!.getBoundingClientRect();
+      const paneElement = element.closest('[role="tabpanel"]')!;
+      const pane = paneElement.getBoundingClientRect();
+      // The browser evaluation is serialized without its surrounding scope.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const measure = (node: Element) => {
+        const html = node as HTMLElement;
+        const style = getComputedStyle(node);
+        return {
+          tag: node.tagName,
+          class: node.className,
+          role: node.getAttribute("role"),
+          box: node.getBoundingClientRect().toJSON(),
+          clientTop: html.clientTop,
+          clientLeft: html.clientLeft,
+          clientHeight: html.clientHeight,
+          scrollHeight: html.scrollHeight,
+          scrollTop: html.scrollTop,
+          clientWidth: html.clientWidth,
+          scrollWidth: html.scrollWidth,
+          scrollLeft: html.scrollLeft,
+          overflow: style.overflow,
+          height: style.height,
+          minHeight: style.minHeight,
+          flex: style.flex,
+        };
+      };
+      const controls = paneElement.querySelector('[aria-label="Log Stream controls and notices"]');
       return {
         // Space for two payload rows plus EOF, alongside the existing Find widget.
         readable:
@@ -385,14 +411,68 @@ async function assertLogLayout(panel: Locator, findOpen: boolean) {
           box.bottom <= Math.min(pane.bottom, innerHeight) &&
           box.left >= Math.max(pane.left, 0) &&
           box.right <= Math.min(pane.right, innerWidth),
+        sampledAt: Date.now(),
         viewport: { width: innerWidth, height: innerHeight },
+        violations: {
+          top: Math.max(pane.top, 0) - box.top,
+          bottom: box.bottom - Math.min(pane.bottom, innerHeight),
+          left: Math.max(pane.left, 0) - box.left,
+          right: box.right - Math.min(pane.right, innerWidth),
+        },
         editor: box.toJSON(),
         rowHeight: line?.height,
         findHeight: find?.height,
+        line: line?.toJSON(),
+        find: find?.toJSON(),
+        controls: controls && measure(controls),
         pane: pane.toJSON(),
+        // Preserve failed geometry too: a boolean alone cannot identify the overflow boundary.
+        devicePixelRatio,
+        visualViewport: visualViewport && {
+          width: visualViewport.width,
+          height: visualViewport.height,
+          scale: visualViewport.scale,
+          offsetTop: visualViewport.offsetTop,
+          offsetLeft: visualViewport.offsetLeft,
+        },
+        ancestors: (() => {
+          const result = [];
+          for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+            result.push(measure(ancestor));
+          }
+          return result;
+        })(),
       };
     }, findOpen);
-  await expect.poll(layout).toMatchObject({ readable: true, contained: true });
+  const samples: Awaited<ReturnType<typeof layout>>[] = [];
+  try {
+    await expect
+      .poll(async () => {
+        const sample = await layout();
+        samples.push(sample);
+        return sample;
+      })
+      .toMatchObject({ readable: true, contained: true });
+  } catch (error) {
+    // Preserve collected samples independently of optional diagnostics, and keep the assertion error.
+    const diagnostics = await Promise.allSettled([
+      info.attach("previous-layout-failure", {
+        body: Buffer.from(JSON.stringify({ samples }, null, 2)),
+        contentType: "application/json",
+      }),
+      monacoSnapshot(editor).then((snapshot) =>
+        info.attach("previous-monaco-failure", {
+          body: Buffer.from(JSON.stringify(snapshot, null, 2)),
+          contentType: "application/json",
+        }),
+      ),
+      panel.page().screenshot({ path: info.outputPath("previous-layout-failure.png") }),
+    ]);
+    for (const result of diagnostics)
+      if (result.status === "rejected")
+        console.warn("Could not save Previous layout diagnostics", result.reason);
+    throw error;
+  }
   const controls = panel.getByRole("region", {
     name: "Log Stream controls and notices",
     exact: true,
@@ -457,6 +537,8 @@ async function monacoSnapshot(editor: Locator) {
       getModel(): Model | null;
       getSelection(): unknown;
       getScrollTop(): number;
+      getLayoutInfo(): unknown;
+      getContainerDomNode(): HTMLElement;
     }
     const resources = performance.getEntriesByType("resource").map((entry) => entry.name);
     // Electron's custom scheme does not populate resource timing. Resolve the
@@ -481,6 +563,8 @@ async function monacoSnapshot(editor: Locator) {
             text: model.getValue(),
             selection: model.getValueInRange(found.getSelection()),
             scrollTop: found.getScrollTop(),
+            layout: found.getLayoutInfo(),
+            container: found.getContainerDomNode().getBoundingClientRect().toJSON(),
           };
       }
     }

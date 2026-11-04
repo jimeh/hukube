@@ -321,7 +321,8 @@ export default function LogEditor({
       if (!entry?.contentRect.width || !entry.contentRect.height) return;
       frame = requestAnimationFrame(() => {
         ownScroll.current = true;
-        editor.layout();
+        // Use the fractional content box: rounded client dimensions can overflow a zoomed Pane.
+        editor.layout(entry.contentRect);
         if (follow.current)
           editor.setScrollTop(editor.getScrollHeight(), monaco.editor.ScrollType.Immediate);
         ownScroll.current = false;
