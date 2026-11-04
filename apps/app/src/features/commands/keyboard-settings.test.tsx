@@ -4,6 +4,7 @@ import { EngineProvider } from "@hukube/engine-client/react";
 import type { EngineClient, Setting } from "@hukube/engine-client";
 import { afterEach, expect, it } from "vitest";
 import { KeyboardSettings } from "./keyboard-settings.tsx";
+import { Dialog, DialogContent, DialogTitle } from "@hukube/ui/components/dialog";
 import { commands } from "./runtime.ts";
 import { compileKeymap, emptyDocument, type Rule } from "./keyboard.ts";
 const rule: Rule = {
@@ -31,17 +32,27 @@ async function setup(rules: Rule[] = [], visible = true) {
     },
   } as unknown as EngineClient;
   let view!: ReturnType<typeof render>;
-  const content = (shown: boolean) => (
+  const content = (shown: boolean, modal = false) => (
     <EngineProvider client={client}>
       <KeyboardSettings visible={shown} />
       <input aria-label="Outside" />
+      <Dialog open={modal}>
+        <DialogContent>
+          <DialogTitle>Other owner</DialogTitle>
+          <input aria-label="Modal input" />
+        </DialogContent>
+      </Dialog>
     </EngineProvider>
   );
   await act(async () => {
     view = render(content(visible));
   });
   expect(screen.getByText("Shortcuts loaded")).toBeTruthy();
-  return { hide: () => view.rerender(content(false)), show: () => view.rerender(content(true)) };
+  return {
+    modal: (open: boolean) => view.rerender(content(true, open)),
+    hide: () => view.rerender(content(false)),
+    show: () => view.rerender(content(true)),
+  };
 }
 it("searches real default and saved rows by title while preserving unknown rules and drafts", async () => {
   await setup([rule, { ...rule, id: "future", command: "future.action", args: { retained: 1 } }]);
@@ -191,4 +202,60 @@ it("refreshes effective rule status on actual DOM focus changes", async () => {
   expect(screen.getByText("Effective in this context")).toBeTruthy();
   act(() => screen.getByRole("button", { name: "Edit / recordsaved-theme" }).focus());
   expect(screen.getByText("Condition does not match this context")).toBeTruthy();
+});
+
+it("destroys the real recorder when another Dialog takes input and never resumes its draft", async () => {
+  const root = document.createElement("div");
+  root.id = "root";
+  document.body.append(root);
+  const h = await setup([rule]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit / recordsaved-theme" }));
+  fireEvent.change(screen.getByLabelText("Condition (when)"), { target: { value: "workspace" } });
+  fireEvent.click(screen.getByRole("button", { name: "Record shortcut" }));
+  expect(commands.getSnapshot().recording).toBe(true);
+  h.modal(true);
+  const input = screen.getByLabelText("Modal input");
+  for (const letter of "hello") {
+    const e = new KeyboardEvent("keydown", {
+      key: letter,
+      code: `Key${letter.toUpperCase()}`,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(input, e);
+    expect(e.defaultPrevented).toBe(false);
+  }
+  expect(commands.getSnapshot().recording).toBe(false);
+  h.modal(false);
+  expect(screen.getByRole("button", { name: "Record shortcut" })).toBeTruthy();
+  expect(
+    screen.getByLabelText<HTMLInputElement>("One or two strokes (space separated)").value,
+  ).toBe("F8");
+  expect(screen.getByLabelText<HTMLInputElement>("Condition (when)").value).toBe("workspace");
+  expect(screen.getByText("Rule ID: saved-theme")).toBeTruthy();
+  root.remove();
+});
+
+it("shows a possible shifted conflict instead of claiming whole-layout shadowing", async () => {
+  const rules: Rule[] = [
+    { ...rule, id: "glyph", keys: ["!"] },
+    { ...rule, id: "position", keys: ["Shift+[Digit1]"], command: "app.openSettings", args: {} },
+  ];
+  commands.configure({
+    route: "/settings/keyboard-shortcuts",
+    platform: "linux",
+    host: "web",
+    connection: "open",
+    modalCount: 0,
+    map: compileKeymap({ ...emptyDocument, rules }, "linux"),
+    preferencesReady: () => true,
+    preference() {},
+    settings() {},
+  });
+  await setup(rules);
+  expect(
+    screen.getByText("May be shadowed here by position, for some matching input"),
+  ).toBeTruthy();
+  expect(screen.getByText(/position may overlap glyph/)).toBeTruthy();
+  expect(screen.getAllByText("Effective in this context").length).toBeGreaterThan(0);
 });

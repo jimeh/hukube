@@ -167,27 +167,22 @@ export function compileKeymap(document: KeybindingDocument, platform: Platform):
     };
     if (raw.enabled) rules.push({ ...raw, command: raw.command, args, keys, condition: scoped });
   }
-  const overlaps = (left: string, right: string) => {
-    const a = parseHotkey(left, platform),
-      b = parseHotkey(right, platform);
-    if (a.ctrl !== b.ctrl || a.meta !== b.meta || a.shift !== b.shift || a.alt !== b.alt)
-      return false;
-    // A logical character may be produced by any physical code on a different layout.
-    return a.code && b.code ? a.code === b.code : a.code || b.code ? true : a.key === b.key;
-  };
   for (let i = 0; i < rules.length; i++)
     for (let j = i + 1; j < rules.length; j++) {
       const a = rules[i]!,
         b = rules[j]!;
-      if (!overlaps(a.keys[0]!, b.keys[0]!) || disjoint(a.condition, b.condition)) continue;
+      if (!strokesOverlap(a.keys[0]!, b.keys[0]!, platform) || disjoint(a.condition, b.condition))
+        continue;
       if (a.keys.length !== b.keys.length)
         throw Error(`${a.id} and ${b.id}: single stroke conflicts with chord prefix`);
       if (
         a.keys.length === b.keys.length &&
-        a.keys.every((key, step) => overlaps(key, b.keys[step]!))
+        a.keys.every((key, step) => strokesOverlap(key, b.keys[step]!, platform))
       )
         diagnostics.push(
-          `${b.id} overrides ${a.id} where their conditions overlap (last eligible rule wins)`,
+          sameStrokes(a.keys, b.keys, platform)
+            ? `${b.id} overrides ${a.id} where their conditions overlap (last eligible rule wins)`
+            : `${b.id} may overlap ${a.id} (last eligible matching rule wins)`,
         );
     }
   return { rules, diagnostics };
@@ -212,40 +207,58 @@ export function eligibleRules(
     );
   });
 }
-/** Matcher input only; never dispatched or replayed into a control or terminal. */
-export function strokeEvent(stroke: string, platform: Platform) {
-  const p = parseHotkey(stroke, platform);
-  const punctuation = Object.entries(PUNCTUATION_CODE_MAP);
-  const code =
-    p.code ??
-    (/^[A-Z]$/.test(p.key ?? "")
-      ? `Key${p.key}`
-      : /^[0-9]$/.test(p.key ?? "")
-        ? `Digit${p.key}`
-        : (punctuation.find(([, key]) => key === p.key)?.[0] ?? p.key ?? ""));
-  const key =
-    p.key ??
-    (code.startsWith("Key")
-      ? code.slice(3)
-      : code.startsWith("Digit")
-        ? code.slice(5)
-        : (punctuation.find(([position]) => position === code)?.[1] ?? code));
-  return new KeyboardEvent("keydown", {
-    key,
-    code,
-    ctrlKey: p.ctrl,
-    metaKey: p.meta,
-    altKey: p.alt,
-    shiftKey: p.shift,
-  });
+/** Possible intersection, not a layout mapping or authority to dispatch an event.
+ * Direct key identities, physical codes and the library's compatibility fallback
+ * are independent. Probe both Shift states because printable glyphs allow an
+ * implicit Shift. An unknown layout can pair either logical key with either code.
+ */
+export function strokesOverlap(left: string, right: string, platform: Platform) {
+  const a = parseHotkey(left, platform),
+    b = parseHotkey(right, platform);
+  if (a.ctrl !== b.ctrl || a.meta !== b.meta || a.alt !== b.alt) return false;
+  if (normalizeHotkey(left, platform) === normalizeHotkey(right, platform)) return true;
+  const codes = new Set([a.code, b.code, ""]);
+  for (const p of [a, b]) {
+    if (!p.key) continue;
+    if (/^[A-Z]$/.test(p.key)) codes.add(`Key${p.key}`);
+    if (/^[0-9]$/.test(p.key)) codes.add(`Digit${p.key}`);
+    for (const [code, key] of Object.entries(PUNCTUATION_CODE_MAP))
+      if (key === p.key) codes.add(code);
+  }
+  // Non-Latin text permits the installed code fallback; it is not a mapping
+  // from the user's layout. Actual dispatch always matches the incoming event.
+  for (const key of new Set([a.key, b.key, "м"])) {
+    if (!key) continue;
+    for (const code of codes)
+      for (const shiftKey of [false, true]) {
+        const event = {
+          key,
+          code: code ?? "",
+          shiftKey,
+          ctrlKey: a.ctrl,
+          metaKey: a.meta,
+          altKey: a.alt,
+          isComposing: false,
+          keyCode: 0,
+          location: 0,
+          getModifierState: () => false,
+        } as unknown as KeyboardEvent;
+        if (matchesStroke(event, left, platform) && matchesStroke(event, right, platform))
+          return true;
+      }
+  }
+  return false;
 }
+export const sameStrokes = (left: string[], right: string[], platform: Platform) =>
+  left.length === right.length &&
+  left.every((key, i) => normalizeHotkey(key, platform) === normalizeHotkey(right[i]!, platform));
+const nativePasteKeys = (platform: Platform) =>
+  platform === "mac" ? ["Meta+V"] : ["Control+V", "Control+Shift+V"];
+/** Future prefix/presentation possibility only; never grants completed permission. */
+export const possibleNativePaste = (stroke: string, platform: Platform) =>
+  nativePasteKeys(platform).some((key) => strokesOverlap(stroke, key, platform));
 export function nativePasteGesture(e: KeyboardEvent, platform: Platform) {
-  return (
-    !unsafeKey(e) &&
-    e.key.toLowerCase() === "v" &&
-    !e.altKey &&
-    (platform === "mac" ? e.metaKey && !e.ctrlKey && !e.shiftKey : e.ctrlKey && !e.metaKey)
-  );
+  return nativePasteKeys(platform).some((key) => matchesStroke(e, key, platform));
 }
 export interface Clock {
   set(fn: () => void, ms: number): unknown;

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useMemo, useState, useId } from "react";
+import { useModalCount } from "@hukube/ui/hooks/use-modal-inert";
 import { HotkeyRecorder } from "@tanstack/hotkeys";
 import { Button } from "@hukube/ui/components/button";
 import { Input } from "@hukube/ui/components/input";
@@ -87,7 +88,13 @@ export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
     const current = compilation.map?.rules.find((r) => r.id === id);
     if (!current) return "Disabled or inactive";
     if (!current.condition.test(context)) return "Condition does not match this context";
-    const effective = commands.winnerFor(current, compilation.map!, origin, context);
+    const { winner: effective, conflict } = commands.resolveRule(
+      current,
+      compilation.map!,
+      origin,
+      context,
+    );
+    if (conflict) return `May be shadowed here by ${conflict.id}, for some matching input`;
     if (!effective) return "Unavailable in this context";
     return effective.id === id ? "Effective in this context" : `Shadowed here by ${effective.id}`;
   };
@@ -412,9 +419,10 @@ function RuleEditor({
     setRule((r) => ({ ...r, args: value }));
     setArgsText(JSON.stringify(value, null, 2));
   };
-  if (!visible && recording) setRecording(false);
+  const modalCount = useModalCount();
+  if ((!visible || modalCount > 0) && recording) setRecording(false);
   useLayoutEffect(() => {
-    if (!visible || !recording) return;
+    if (!visible || modalCount > 0 || !recording) return;
     commands.setRecording(true);
     const recorder = new HotkeyRecorder({
       platform: commandPlatform,
@@ -437,7 +445,7 @@ function RuleEditor({
       subscription.unsubscribe();
       commands.setRecording(false);
     };
-  }, [recording, visible]);
+  }, [recording, visible, modalCount]);
   return (
     <form
       ref={form}

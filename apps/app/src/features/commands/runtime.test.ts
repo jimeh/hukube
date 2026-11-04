@@ -1498,3 +1498,193 @@ it.each([
     expect(h.settings).not.toHaveBeenCalled();
   },
 );
+
+it.each(["open", "dispatch", "arguments", "missing"])(
+  "refuses recorder palette opening via %s",
+  (path) => {
+    const h = harness();
+    h.rt.setRecording(true);
+    if (path === "open") h.rt.openPalette("commands");
+    if (path === "dispatch") h.rt.dispatch("app.commandPalette", {});
+    if (path === "arguments") h.rt.editArguments("appearance.setTheme", h.rt.capture());
+    if (path === "missing") h.rt.invoke("appearance.setTheme", {}, h.rt.capture(), "keyboard");
+    expect(h.rt.getSnapshot().palette).toBeUndefined();
+    expect(h.rt.getSnapshot().error).toContain("Stop or cancel shortcut recording");
+    expect(h.rt.getSnapshot().recording).toBe(true);
+  },
+);
+it.each(["mac", "linux", "windows"] as const)(
+  "preserves %s non-Latin native Paste fallback",
+  (platform) => {
+    const h = pasteHarness(["F8"]);
+    vi.stubGlobal("navigator", {});
+    h.rt.configure({ ...h.config, platform, map: compileKeymap(emptyDocument, platform) });
+    const e = key("м", "KeyV", { ctrlKey: platform !== "mac", metaKey: platform === "mac" });
+    h.rt.key(e);
+    expect(e.defaultPrevented).toBe(false);
+    expect(terminalVerdicts.get(e)).toBe("paste");
+    expect(h.t.paste).not.toHaveBeenCalled();
+  },
+);
+it.each([false, true])(
+  "uses the actual physical Paste completion before selecting a competitor (chord=%s)",
+  (chord) => {
+    const h = pasteHarness(["F8"]);
+    vi.stubGlobal("navigator", {});
+    const rules: Rule[] = [
+      {
+        id: "clear",
+        command: "terminal.clear",
+        keys: chord ? ["F9", "Control+V"] : ["Control+V"],
+        when: "",
+        enabled: true,
+        scope: "terminal",
+      },
+      {
+        id: "paste",
+        command: "terminal.paste",
+        keys: chord ? ["F9", "Control+[KeyB]"] : ["Control+[KeyB]"],
+        when: "",
+        enabled: true,
+        scope: "terminal",
+      },
+    ];
+    h.rt.configure({ ...h.config, map: compileKeymap({ ...emptyDocument, rules }, "linux") });
+    const prefix = key("F9", "F9", { ctrlKey: false });
+    if (chord) h.rt.key(prefix);
+    expect(prefix.defaultPrevented).toBe(chord);
+    expect(!!h.rt.chords.pending).toBe(chord);
+    const e = key("v", "KeyB");
+    h.rt.key(e);
+    expect(h.t.clear).not.toHaveBeenCalled();
+    expect(e.defaultPrevented).toBe(false);
+    expect(terminalVerdicts.get(e)).toBe("paste");
+  },
+);
+it.each([false, true])(
+  "leaves an unavailable actual custom Paste completion unconsumed (chord=%s)",
+  (chord) => {
+    const h = pasteHarness(chord ? ["F9", "Control+[KeyV]"] : ["Control+[KeyV]"]);
+    vi.stubGlobal("navigator", {});
+    const prefix = key("F9", "F9", { ctrlKey: false });
+    if (chord) h.rt.key(prefix);
+    expect(prefix.defaultPrevented).toBe(chord);
+    expect(!!h.rt.chords.pending).toBe(chord);
+    const e = key("b", "KeyV");
+    h.rt.key(e);
+    expect(e.defaultPrevented).toBe(false);
+    expect(terminalVerdicts.get(e)).toBeUndefined();
+    expect(h.t.paste).not.toHaveBeenCalled();
+  },
+);
+it.each([
+  ["!", "Shift+[Digit1]", "!", "Digit1"],
+  ["?", "Shift+[Slash]", "?", "Slash"],
+])(
+  "does not advertise a possible shifted %s loser as effective",
+  (logical, physical, glyph, code) => {
+    for (const position of ["single", "first", "second"]) {
+      const sequence = (stroke: string) =>
+        position === "single" ? [stroke] : position === "first" ? [stroke, "H"] : ["G", stroke];
+      const h = harness([
+        {
+          id: "logical",
+          command: "app.openSettings",
+          keys: sequence(logical),
+          when: "",
+          scope: "app",
+          enabled: true,
+        },
+        {
+          id: "physical",
+          command: "appearance.setTheme",
+          keys: sequence(physical),
+          when: "",
+          scope: "app",
+          enabled: true,
+          args: { theme: "dark" },
+        },
+      ]);
+      if (position === "second") h.rt.key(key("g", "KeyG", { ctrlKey: false }));
+      h.rt.key(key(glyph, code, { ctrlKey: false, shiftKey: true }));
+      if (position === "first") h.rt.key(key("h", "KeyH", { ctrlKey: false }));
+      expect(h.preference).toHaveBeenCalledExactlyOnceWith("theme", "dark");
+      expect(h.settings).not.toHaveBeenCalled();
+      expect(h.rt.label("app.openSettings")).toBeUndefined();
+      h.rt.blur();
+    }
+  },
+);
+
+it.each([false, true])(
+  "dispatches a custom physical Paste using only the completed actual event (chord=%s)",
+  async (chord) => {
+    const h = pasteHarness(chord ? ["F9", "Control+[KeyV]"] : ["Control+[KeyV]"]);
+    const prefix = key("F9", "F9", { ctrlKey: false });
+    if (chord) h.rt.key(prefix);
+    expect(prefix.defaultPrevented).toBe(chord);
+    expect(h.readText).not.toHaveBeenCalled();
+    const e = key("b", "KeyV");
+    h.rt.key(e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(h.readText).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(h.t.paste).toHaveBeenCalledTimes(1);
+  },
+);
+it.each([false, true])(
+  "chooses the available competitor when actual custom Paste is unavailable (chord=%s)",
+  (chord) => {
+    const h = pasteHarness(["F8"]);
+    vi.stubGlobal("navigator", {});
+    const keys = chord ? ["F9", "Control+[KeyV]"] : ["Control+[KeyV]"];
+    const rules: Rule[] = [
+      { id: "clear", command: "terminal.clear", keys, when: "", enabled: true, scope: "terminal" },
+      { id: "paste", command: "terminal.paste", keys, when: "", enabled: true, scope: "terminal" },
+    ];
+    h.rt.configure({ ...h.config, map: compileKeymap({ ...emptyDocument, rules }, "linux") });
+    if (chord) h.rt.key(key("F9", "F9", { ctrlKey: false }));
+    const e = key("b", "KeyV");
+    h.rt.key(e);
+    expect(h.t.clear).toHaveBeenCalledTimes(1);
+    expect(e.defaultPrevented).toBe(true);
+    expect(h.readText).not.toHaveBeenCalled();
+  },
+);
+it.each(["mac", "linux", "windows"] as const)(
+  "never grants %s native Paste for excluded modifier/composition input",
+  (platform) => {
+    for (const patch of [
+      { altKey: true },
+      { isComposing: true },
+      { keyCode: 229 },
+      { getModifierState: (name: string) => name === "AltGraph" },
+    ]) {
+      const h = pasteHarness(["F8"]);
+      vi.stubGlobal("navigator", {});
+      h.rt.configure({ ...h.config, platform, map: compileKeymap(emptyDocument, platform) });
+      const e = key("м", "KeyV", {
+        ctrlKey: platform !== "mac",
+        metaKey: platform === "mac",
+        ...patch,
+      });
+      if ("getModifierState" in patch)
+        Object.defineProperty(e, "getModifierState", { value: patch.getModifierState });
+      h.rt.key(e);
+      expect(e.defaultPrevented).toBe(false);
+      expect(terminalVerdicts.get(e)).toBeUndefined();
+      expect(h.t.paste).not.toHaveBeenCalled();
+    }
+  },
+);
+it.each(["commands", "resources"] as const)(
+  "refuses direct recorder %s mode without losing ownership",
+  (mode) => {
+    const h = harness();
+    h.rt.setRecording(true);
+    h.rt.openPalette(mode);
+    expect(h.rt.getSnapshot().palette).toBeUndefined();
+    expect(h.rt.getSnapshot().error).toContain("Stop or cancel shortcut recording");
+    expect(h.rt.getSnapshot().recording).toBe(true);
+  },
+);

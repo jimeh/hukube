@@ -10,7 +10,9 @@ import { argumentsFor, catalog, definition, type CommandArgs, type CommandId } f
 import {
   Chords,
   eligibleRules,
-  strokeEvent,
+  strokesOverlap,
+  sameStrokes,
+  possibleNativePaste,
   nativePasteGesture,
   matchesStroke,
   unsafeKey,
@@ -324,7 +326,16 @@ export class CommandRuntime {
       recording: this.view.recording,
     };
   }
+  private refuseRecording() {
+    if (!this.view.recording) return false;
+    this.show({
+      error: "Stop or cancel shortcut recording before opening Commands or Go to Resource.",
+    });
+    return true;
+  }
   reason(id: CommandId, origin: Origin, nativePaste = false): string | undefined {
+    if (paletteCommand(id) && this.view.recording)
+      return "Stop or cancel shortcut recording before opening Commands or Go to Resource.";
     if (this.config?.connection === "outdated") return "The app is out of date.";
     const def = definition(id);
     if (
@@ -385,6 +396,7 @@ export class CommandRuntime {
         argumentsFor(id, args);
       } catch (e) {
         if (source === "pointer") throw e;
+        if (this.refuseRecording()) return false;
         this.show({ palette: { mode: "commands", origin, prompt: { id, args } } });
         return true;
       }
@@ -497,6 +509,7 @@ export class CommandRuntime {
     this.closePalette();
   }
   openPalette(mode: "commands" | "resources", origin = this.capture()) {
+    if (this.refuseRecording()) return;
     if (this.reason(mode === "commands" ? "app.commandPalette" : "app.goToResource", origin))
       return;
     this.chords.cancel();
@@ -507,6 +520,7 @@ export class CommandRuntime {
     this.show({ palette: { mode, origin: this.view.palette?.origin ?? origin }, error: "" });
   }
   editArguments(id: CommandId, origin: Origin, args: Record<string, unknown> = {}) {
+    if (this.refuseRecording()) return;
     this.show({ palette: { mode: "commands", origin, prompt: { id, args } } });
   }
   backToSearch() {
@@ -566,25 +580,36 @@ export class CommandRuntime {
   label(id: CommandId, origin = this.capture()) {
     return this.labelFor(id, this.context(origin), origin);
   }
-  private ruleAvailable(rule: CompiledRule, origin: Origin) {
+  private ruleAvailable(rule: CompiledRule, origin: Origin, event?: KeyboardEvent) {
     const native =
       rule.command === "terminal.paste" &&
-      nativePasteGesture(
-        strokeEvent(rule.keys.at(-1)!, this.config!.platform),
-        this.config!.platform,
-      );
+      (event
+        ? nativePasteGesture(event, this.config!.platform)
+        : possibleNativePaste(rule.keys.at(-1)!, this.config!.platform));
     return !this.reason(rule.command, origin, native);
   }
-  winnerFor(rule: CompiledRule, map: Keymap, origin: Origin, context = this.context(origin)) {
-    const events = rule.keys.map((key) => strokeEvent(key, context.platform));
-    return eligibleRules(
+  resolveRule(rule: CompiledRule, map: Keymap, origin: Origin, context = this.context(origin)) {
+    const candidates = eligibleRules(
       map.rules,
       () => context,
       (r) =>
-        r.keys.length === events.length &&
-        r.keys.every((key, i) => matchesStroke(events[i]!, key, context.platform)),
+        r.keys.length === rule.keys.length &&
+        r.keys.every((key, i) => strokesOverlap(rule.keys[i]!, key, context.platform)),
       (r) => this.ruleAvailable(r, origin),
-    ).at(-1);
+    );
+    if (!candidates.includes(rule)) return {};
+    const later = candidates.slice(candidates.indexOf(rule) + 1);
+    const conflict = later.at(-1);
+    if (!conflict) return { winner: rule };
+    // Only identical normalized sequences establish dominance over the entire
+    // represented event class. Partial overlap depends on the actual layout.
+    return sameStrokes(rule.keys, conflict.keys, context.platform) &&
+      !this.reason(conflict.command, origin)
+      ? { winner: conflict }
+      : { conflict };
+  }
+  winnerFor(rule: CompiledRule, map: Keymap, origin: Origin, context = this.context(origin)) {
+    return this.resolveRule(rule, map, origin, context).winner;
   }
   labelFor(id: CommandId, c: Context, origin = this.capture()) {
     return this.config?.map.rules
@@ -693,7 +718,9 @@ export class CommandRuntime {
       this.config.map.rules,
       (r) => matchContext(r, ruleOrigin(r.command)),
       (r) => matchesStroke(event, r.keys[0]!, context.platform),
-      (r) => this.ruleAvailable(r, ruleOrigin(r.command)),
+      // A prefix cannot know its completion's key/code. Keep possible
+      // candidates, then check the actual second event before choosing a winner.
+      (r) => this.ruleAvailable(r, ruleOrigin(r.command), r.keys.length === 1 ? event : undefined),
     );
     if (!eligible.length) return;
     const winner = eligible.at(-1)!,

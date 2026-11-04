@@ -113,3 +113,20 @@ it("rejects layout-dependent physical/logical prefix overlaps conservatively", (
     compileKeymap({ ...emptyDocument, rules: [rule({ keys: ["Mod+[KeyK]", "X"] })] }, "linux"),
   ).toThrow("prefix");
 });
+
+it.each(["!", "?"])("rejects a shifted %s single/chord prefix overlap", (glyph) => {
+  const code = glyph === "!" ? "Digit1" : "Slash";
+  expect(() =>
+    compileKeymap(
+      {
+        ...emptyDocument,
+        disabledDefaults: defaultRules.map((r) => r.id),
+        rules: [
+          rule({ id: "glyph", keys: [glyph] }),
+          rule({ id: "physical", keys: [`Shift+[${code}]`, "H"] }),
+        ],
+      },
+      "linux",
+    ),
+  ).toThrow("prefix");
+});
