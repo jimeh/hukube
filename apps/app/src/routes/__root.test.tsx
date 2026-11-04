@@ -41,6 +41,7 @@ vi.mock("@/features/settings/settings-page.tsx", () => ({
   rememberSettingsOrigin: vi.fn<(pathname: string, origin?: HTMLElement) => void>(),
 }));
 vi.mock("@/features/settings/preference-runtime.tsx", () => ({ PreferenceRuntime: () => null }));
+vi.mock("@/features/commands/command-runtime.tsx", () => ({ CommandRuntime: () => null }));
 vi.mock("@/features/edit/unsaved-guard.tsx", () => ({ UnsavedGuard: () => null }));
 vi.mock("@/features/clusters/cluster-tabs.tsx", () => ({ ClusterTabs: () => null }));
 vi.mock("@/features/connection/out-of-date-notice.tsx", () => ({ OutOfDateNotice: () => null }));
