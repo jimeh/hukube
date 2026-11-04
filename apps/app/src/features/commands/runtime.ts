@@ -146,13 +146,15 @@ export class CommandRuntime {
       this.paletteInput === palette &&
       this.view.palette === palette &&
       !this.view.recording &&
-      this.valid(palette.origin) &&
+      this.valid(palette.origin, "workspace") &&
       this.config?.connection !== "outdated" &&
       (this.config?.modalCount ?? 0) <= 1
     );
   }
   refreshAvailability() {
-    if (this.paletteInput && !this.valid(this.paletteInput.origin)) this.paletteInput = undefined;
+    // Visible navigation input follows placement, not Resource/edit authorization.
+    if (this.paletteInput && !this.valid(this.paletteInput.origin, "workspace"))
+      this.paletteInput = undefined;
     if (this.returnFocus && !this.valid(this.returnFocus.target)) this.returnFocus = undefined;
     if (this.chords.pending && !this.valid(this.chords.pending.origin)) this.chords.cancel();
     if (
@@ -315,7 +317,12 @@ export class CommandRuntime {
   reason(id: CommandId, origin: Origin, source = "palette"): string | undefined {
     if (this.config?.connection === "outdated") return "The app is out of date.";
     const def = definition(id);
-    if (!this.valid(origin, def.target === "workspace" ? "workspace" : "captured"))
+    if (
+      !this.valid(
+        origin,
+        def.target === "workspace" || paletteCommand(id) ? "workspace" : "captured",
+      )
+    )
       return "The captured target changed or is no longer available.";
     const surface = origin.surface?.read();
     if (def.target === "workspace" && !origin.workspace) return "Open a Cluster Workspace first.";

@@ -13,11 +13,11 @@ import { EngineProvider } from "@hukube/engine-client/react";
 import type { EngineClient, Setting } from "@hukube/engine-client";
 import { createBrowserHost } from "@hukube/host";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { DockviewApi } from "dockview-react";
+import type { DockviewApi, IDockviewPanel } from "dockview-react";
 import type { WorkspaceValue } from "../workspace/workspace-context.tsx";
 import { HostProvider } from "@/lib/host.tsx";
 import { CommandRuntime } from "./command-runtime.tsx";
-import { commands } from "./runtime.ts";
+import { commands, type Surface } from "./runtime.ts";
 
 const scrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 beforeEach(() => {
@@ -49,7 +49,7 @@ afterEach(() => {
   else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
 });
 
-async function setup(workspace = false) {
+async function setup(workspace = false, resource: boolean | "hydrated" = false) {
   // Only the Engine transport is fake. Stores, root hooks, modal count and Base UI
   // focus/transition owners are mounted together, as in the real window.
   const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async (method) =>
@@ -84,7 +84,9 @@ async function setup(workspace = false) {
         <EngineProvider client={client}>
           <HostProvider host={createBrowserHost()}>
             <CommandRuntime />
-            <textarea aria-label="Origin" />
+            <div data-command-panel="p">
+              <textarea aria-label="Origin" />
+            </div>
             <Dialog open={modal} onOpenChange={updateModal}>
               <DialogContent>
                 <DialogTitle>Other owner</DialogTitle>
@@ -107,14 +109,34 @@ async function setup(workspace = false) {
     render(<RouterProvider router={router} />, { container });
   });
   const value = { active: true, cluster: "c", types: new Map() } as unknown as WorkspaceValue;
-  const unregister = workspace
+  const panel = {
+    id: "p",
+    group: {},
+    params: { uri: "original" },
+    api: { title: "Original Resource", component: "resource" },
+  } as unknown as IDockviewPanel;
+  const unregisterWorkspace = workspace
     ? commands.registerWorkspace("c", {
         token: {},
         value,
-        api: { getPanel: () => undefined } as unknown as DockviewApi,
+        api: {
+          getPanel: () => (resource ? panel : undefined),
+          activePanel: resource ? panel : undefined,
+        } as unknown as DockviewApi,
       })
     : () => {};
   const origin = screen.getByRole("textbox", { name: "Origin" });
+  let uid: string | undefined = resource === "hydrated" ? undefined : "original";
+  const review = vi.fn<() => void>();
+  const surface: Surface = {
+    element: origin.parentElement!,
+    read: () => ({ kind: "resource", uid, review }),
+  };
+  let unregisterSurface = resource ? commands.registerSurface(surface) : () => {};
+  const unregister = () => {
+    unregisterSurface();
+    unregisterWorkspace();
+  };
   origin.focus();
   await act(async () => {
     commands.openPalette("commands");
@@ -126,6 +148,15 @@ async function setup(workspace = false) {
   expect(document.activeElement).toBe(search);
   return {
     origin,
+    panel,
+    review,
+    changeResource: (change: string) => {
+      if (change === "remount") {
+        unregisterSurface();
+        unregisterSurface = commands.registerSurface({ ...surface });
+      } else uid = change === "deleted" ? undefined : "replacement";
+      commands.refreshAvailability();
+    },
     search,
     request,
     value,
@@ -491,4 +522,84 @@ it("releases the outgoing view before a removal blur can schedule a stale popup 
   });
   await frame();
   expect(document.activeElement).toBe(current);
+});
+
+it.each(
+  ["hydrated", "deleted", "replaced", "remount"].flatMap((change) =>
+    ["pointer", "Escape"].map((back) => ({ change, back })),
+  ),
+)(
+  "stale Resource $change retains useful Back by $back and both mode inputs",
+  async ({ change, back }) => {
+    const h = await setup(true, change === "hydrated" ? "hydrated" : true);
+    try {
+      const captured = commands.getSnapshot().palette!.origin;
+      fireEvent.change(h.search, { target: { value: "Open Resource" } });
+      fireEvent.click(screen.getByRole("button", { name: "Edit arguments for Open Resource" }));
+      const field = screen.getByLabelText("Resource URI (required)");
+      expect(document.activeElement).toBe(field);
+      act(() => h.changeResource(change));
+      // Ordinary identity/availability updates retain the current field and caret.
+      expect(document.activeElement).toBe(field);
+      fireEvent.input(document.activeElement!, { target: { value: "draftxyz" } });
+      expect(field).toHaveProperty("value", "draftxyz");
+      if (back === "pointer") {
+        const button = screen.getByRole("button", { name: "Back" });
+        button.focus();
+        fireEvent.click(button);
+      } else {
+        fireEvent.keyDown(field, { key: "Escape", code: "Escape" });
+        fireEvent.keyUp(window, { key: "Escape", code: "Escape" });
+      }
+      await frame();
+      const search = screen.getByLabelText("Search commands");
+      expect(document.activeElement).toBe(search);
+      fireEvent.input(document.activeElement!, { target: { value: "Open Resourcexyz" } });
+      expect(search).toHaveProperty("value", "Open Resourcexyz");
+      for (const mode of ["Go to Resource", "Commands"]) {
+        fireEvent.click(screen.getByRole("button", { name: mode }));
+        await frame();
+        const input = screen.getByLabelText(mode === "Commands" ? "Search commands" : mode, {
+          selector: "input",
+        });
+        expect(document.activeElement).toBe(input);
+        fireEvent.input(document.activeElement!, { target: { value: "typed" } });
+        expect(input).toHaveProperty("value", "typed");
+        expect(commands.getSnapshot().palette?.origin).toBe(captured);
+      }
+      act(() => {
+        expect(commands.invoke("manifest.review", {}, captured)).toBe(false);
+      });
+      expect(commands.getSnapshot().error).toContain("captured target changed");
+      expect(h.review).not.toHaveBeenCalled();
+    } finally {
+      act(h.unregister);
+    }
+  },
+);
+
+it("Resource updates preserve deliberate palette focus and selection without reviving a superseded claim", async () => {
+  const h = await setup(true, true);
+  try {
+    const search = h.search as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "Resource" } });
+    search.setSelectionRange(2, 5);
+    act(() => h.changeResource("replaced"));
+    await frame();
+    expect(document.activeElement).toBe(search);
+    expect([search.selectionStart, search.selectionEnd]).toEqual([2, 5]);
+    const close = screen.getByRole("button", { name: "Close" });
+    close.focus();
+    act(() => h.changeResource("remount"));
+    await frame();
+    expect(document.activeElement).toBe(close);
+    const palette = commands.getSnapshot().palette!;
+    act(() => commands.blur());
+    act(() => h.changeResource("deleted"));
+    await frame();
+    expect(commands.ownsPaletteInput(palette)).toBe(false);
+    expect(document.activeElement).toBe(close);
+  } finally {
+    act(h.unregister);
+  }
 });

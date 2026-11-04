@@ -1015,7 +1015,6 @@ it.each([
   "panel",
   "pane",
   "params",
-  "uid",
 ])("invalidates active input ownership on %s even if the boundary reverses", (boundary) => {
   const h = harness();
   h.rt.openPalette("commands");
@@ -1067,11 +1066,54 @@ it.each([
       Object.assign(h.panel(), { params });
       break;
     }
-    case "uid":
-      h.uid("two");
-      h.rt.refreshAvailability();
-      h.uid("one");
-      break;
   }
   expect(h.rt.ownsPaletteInput(palette)).toBe(false);
 });
+
+it.each(["hydration", "deletion", "replacement", "remount"])(
+  "palette input follows placement through Resource %s without authorizing old actions",
+  (boundary) => {
+    const h = harness();
+    if (boundary === "hydration") h.uid(undefined);
+    const origin = h.rt.capture();
+    h.rt.openPalette("commands", origin);
+    const initial = h.rt.getSnapshot().palette!;
+    h.rt.editArguments("resource.open", origin);
+    const prompt = h.rt.getSnapshot().palette!;
+    if (boundary === "remount") {
+      h.unregister();
+      h.rt.registerSurface({
+        element: h.root,
+        read: () => ({ kind: "editor", uid: "one", review: h.review }),
+      });
+    } else h.uid(boundary === "deletion" ? undefined : "replacement");
+    h.rt.refreshAvailability();
+    expect(h.rt.ownsPaletteInput(prompt)).toBe(true);
+    expect(h.rt.valid(origin)).toBe(false);
+    h.rt.backToSearch();
+    expect(h.rt.ownsPaletteInput(h.rt.getSnapshot().palette!)).toBe(true);
+    // Exercise the real arbiter's availability check as well as pointer switching.
+    h.rt.key(key("k", "KeyK"));
+    expect(h.rt.getSnapshot().palette?.mode).toBe("resources");
+    h.rt.key(new KeyboardEvent("keyup", { key: "k", code: "KeyK" }));
+    h.rt.key(key("P", "KeyP", { shiftKey: true }));
+    expect(h.rt.getSnapshot().palette?.mode).toBe("commands");
+    h.rt.key(new KeyboardEvent("keyup", { key: "P", code: "KeyP" }));
+    for (const mode of ["resources", "commands"] as const) {
+      h.rt.openPalette(mode, origin);
+      const current = h.rt.getSnapshot().palette!;
+      expect(current.mode).toBe(mode);
+      expect(current.origin).toBe(origin);
+      expect(h.rt.ownsPaletteInput(current)).toBe(true);
+    }
+    expect(h.rt.ownsPaletteInput(initial)).toBe(false);
+    expect(h.rt.ownsPaletteInput(prompt)).toBe(false);
+    for (const id of ["manifest.review", "editor.find", "tab.close", "tab.pin"] as const) {
+      expect(h.rt.invoke(id, {}, origin)).toBe(false);
+      expect(h.rt.getSnapshot().error).toContain("captured target changed");
+    }
+    expect(h.review).not.toHaveBeenCalled();
+    expect(h.find).not.toHaveBeenCalled();
+    expect(h.panel().api.close).not.toHaveBeenCalled();
+  },
+);
