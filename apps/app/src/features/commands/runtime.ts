@@ -13,6 +13,7 @@ import {
   strokesOverlap,
   sameStrokes,
   possibleNativePaste,
+  definiteNativePaste,
   nativePasteGesture,
   matchesStroke,
   unsafeKey,
@@ -83,6 +84,7 @@ export class CommandRuntime {
   private config?: Configuration;
   private view: View = { hint: "", error: "", recording: false };
   // Compare published palette output, never callback identity or copied owner state.
+  private availabilityObservation: unknown[] = [];
   private paletteObservation?: { content: string; types?: WorkspaceValue["types"] };
   private held = new Map<string, { native?: EventTarget | null; key: string }>();
   private paletteInput?: View["palette"];
@@ -98,6 +100,7 @@ export class CommandRuntime {
     if (patch.palette) this.returnFocus = undefined;
     this.view = { ...this.view, ...patch };
     this.paletteObservation = this.observePalette();
+    this.availabilityObservation = this.observeAvailability();
     for (const fn of this.listeners) fn();
   }
   private observePalette() {
@@ -110,6 +113,47 @@ export class CommandRuntime {
       ]),
       types: origin.workspace?.value.types,
     };
+  }
+  /** Compare capabilities and captured identities, never fresh owner values or callbacks.
+   * Closed-palette consumers (notably Exec hints) also need the parent's layout
+   * updates after their own render. This projection only controls publication;
+   * invocation still reads the live owners and validates its exact capture.
+   */
+  private observeAvailability(): unknown[] {
+    const values: unknown[] = [!!this.config?.preferencesReady(), !!navigator.clipboard?.readText];
+    for (const [cluster, owner] of this.workspaces) {
+      values.push(cluster, owner.token, owner.api, owner.value.active);
+      for (const panel of new Set([owner.api.activePanel, ...(owner.api.panels ?? [])])) {
+        if (!panel) continue;
+        const sessionId = (panel.params as { sessionId?: string })?.sessionId;
+        const terminal = sessionId
+          ? useExecSessions.getState().entries.get(sessionId)?.terminal
+          : undefined;
+        values.push(
+          panel,
+          panel.group,
+          JSON.stringify(panel.params),
+          panel.api?.component,
+          terminal,
+          terminal?.inputHeld,
+          terminal?.hasSelection(),
+        );
+      }
+    }
+    for (const surface of this.surfaces.values()) {
+      const state = surface.read();
+      values.push(
+        surface,
+        surface.element.isConnected,
+        state.kind,
+        !!state.find,
+        !!state.review,
+        state.reviewReason,
+        !!state.dirty,
+        state.uid,
+      );
+    }
+    return values;
   }
   configure(config: Configuration) {
     if (
@@ -178,10 +222,13 @@ export class CommandRuntime {
       return;
     }
     const next = this.observePalette();
+    const availability = this.observeAvailability();
     if (
-      next &&
-      (next.content !== this.paletteObservation?.content ||
-        next.types !== this.paletteObservation?.types)
+      availability.length !== this.availabilityObservation.length ||
+      availability.some((value, i) => value !== this.availabilityObservation[i]) ||
+      (next &&
+        (next.content !== this.paletteObservation?.content ||
+          next.types !== this.paletteObservation?.types))
     )
       this.show({});
   }
@@ -588,6 +635,11 @@ export class CommandRuntime {
         : possibleNativePaste(rule.keys.at(-1)!, this.config!.platform));
     return !this.reason(rule.command, origin, native);
   }
+  private ruleAvailability(rule: CompiledRule, origin: Origin) {
+    if (!this.reason(rule.command, origin)) return "definite";
+    if (!this.ruleAvailable(rule, origin)) return "unavailable";
+    return definiteNativePaste(rule.keys.at(-1)!, this.config!.platform) ? "definite" : "partial";
+  }
   resolveRule(rule: CompiledRule, map: Keymap, origin: Origin, context = this.context(origin)) {
     const candidates = eligibleRules(
       map.rules,
@@ -600,11 +652,14 @@ export class CommandRuntime {
     if (!candidates.includes(rule)) return {};
     const later = candidates.slice(candidates.indexOf(rule) + 1);
     const conflict = later.at(-1);
-    if (!conflict) return { winner: rule };
+    if (!conflict)
+      return this.ruleAvailability(rule, origin) === "partial"
+        ? { partial: true }
+        : { winner: rule };
     // Only identical normalized sequences establish dominance over the entire
     // represented event class. Partial overlap depends on the actual layout.
     return sameStrokes(rule.keys, conflict.keys, context.platform) &&
-      !this.reason(conflict.command, origin)
+      this.ruleAvailability(conflict, origin) === "definite"
       ? { winner: conflict }
       : { conflict };
   }

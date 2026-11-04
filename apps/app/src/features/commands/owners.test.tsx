@@ -282,3 +282,114 @@ it("refreshes Workspace title, params, Resource Type choices and removal without
   act(off);
   expect(commands.getSnapshot().palette).toBeUndefined();
 });
+
+it.each([false, true])(
+  "publishes parent-layout Workspace activation to child labels (StrictMode=%s)",
+  (strict) => {
+    const panel = {
+      id: "p",
+      params: {},
+      group: {},
+      api: { title: "List", component: "list" },
+    } as unknown as IDockviewPanel;
+    const owner = {
+      token: {},
+      api: { activePanel: panel, getPanel: () => panel } as unknown as DockviewApi,
+      value: { active: false, cluster: "c", types: new Map() } as unknown as WorkspaceValue,
+    };
+    offs.push(commands.registerWorkspace("c", owner));
+    const peer = { ...owner, token: {}, value: { ...owner.value, cluster: "peer" } };
+    offs.push(commands.registerWorkspace("peer", peer));
+    const map = compileKeymap(
+      {
+        ...emptyDocument,
+        rules: [
+          {
+            id: "settings",
+            command: "app.openSettings",
+            keys: ["F8"],
+            scope: "app",
+            enabled: true,
+            when: "",
+          },
+        ],
+      },
+      "linux",
+    );
+    commands.configure({ ...config, map });
+    const notifications = vi.fn<() => void>();
+    offs.push(commands.subscribe(notifications));
+    let renders = 0;
+    function Labels() {
+      useSyncExternalStore(commands.subscribe, commands.getSnapshot);
+      if (++renders > 30) throw Error("availability feedback loop");
+      return (
+        <output aria-label="Live hint">
+          {commands.label("app.openSettings", commands.capture("c", "p")) ?? "missing"}
+        </output>
+      );
+    }
+    function Workspace({ active }: { active: boolean }) {
+      useLayoutEffect(() => {
+        owner.value = { ...owner.value, active };
+        commands.refreshAvailability();
+      });
+      return (
+        <>
+          <Labels />
+          <input aria-label="Caret control" />
+        </>
+      );
+    }
+    const content = (active: boolean) =>
+      strict ? (
+        <StrictMode>
+          <Workspace active={active} />
+        </StrictMode>
+      ) : (
+        <Workspace active={active} />
+      );
+    const view = render(content(false));
+    expect(screen.getByLabelText("Live hint").textContent).toBe("missing");
+    view.rerender(content(true));
+    expect(commands.label("app.openSettings", commands.capture("c", "p"))).toBe("F8");
+    expect(screen.getByLabelText("Live hint").textContent).toBe("F8");
+    const input = screen.getByRole<HTMLInputElement>("textbox", { name: "Caret control" });
+    input.value = "preserved";
+    input.focus();
+    input.setSelectionRange(2, 5);
+    notifications.mockClear();
+    const published = commands.getSnapshot();
+    for (let i = 0; i < 4; i++) view.rerender(content(true));
+    expect(commands.getSnapshot()).toBe(published);
+    expect(notifications).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([2, 5]);
+    view.rerender(content(false));
+    expect(screen.getByLabelText("Live hint").textContent).toBe("missing");
+    view.rerender(content(true));
+    expect(screen.getByLabelText("Live hint").textContent).toBe("F8");
+  },
+);
+
+it("publishes closed-palette capability changes, deduplicating equivalent callbacks and owner values", () => {
+  const view = render(<Owner kind="editor" />);
+  const notify = vi.fn<() => void>();
+  offs.push(commands.subscribe(notify));
+  const stable = commands.getSnapshot();
+  view.rerender(<Owner kind="editor" review={() => {}} />);
+  expect(commands.getSnapshot()).toBe(stable);
+  expect(notify).not.toHaveBeenCalled();
+  view.rerender(<Owner kind="editor" reason="Permission denied" />);
+  expect(notify).toHaveBeenCalledOnce();
+  notify.mockClear();
+  view.rerender(<Owner kind="editor" reason="Permission denied" uid="replacement" />);
+  expect(notify).toHaveBeenCalledOnce();
+  notify.mockClear();
+  view.rerender(
+    <Owner kind="editor" reason="Permission denied" uid="replacement" review={undefined} />,
+  );
+  expect(notify).not.toHaveBeenCalled();
+  view.rerender(<Owner kind="editor" mounted={false} />);
+  expect(notify).toHaveBeenCalledOnce();
+});

@@ -1688,3 +1688,42 @@ it.each(["commands", "resources"] as const)(
     expect(h.rt.getSnapshot().recording).toBe(true);
   },
 );
+
+it.each([false, true])(
+  "keeps partial physical Paste availability out of definite labels (chord=%s)",
+  (chord) => {
+    const h = pasteHarness(["F8"]);
+    vi.stubGlobal("navigator", {});
+    const keys = chord ? ["F10", "Control+[KeyB]"] : ["Control+[KeyB]"];
+    const clear: Rule = {
+      id: "clear",
+      command: "terminal.clear",
+      keys,
+      when: "",
+      scope: "terminal",
+      enabled: true,
+    };
+    const paste: Rule = { ...clear, id: "paste", command: "terminal.paste" };
+    const map = compileKeymap({ ...emptyDocument, rules: [clear, paste] }, "linux");
+    h.rt.configure({ ...h.config, map });
+    const origin = h.rt.capture();
+    expect(h.rt.label("terminal.paste", origin)).toBe("Ctrl+Shift+V");
+    expect(h.rt.resolveRule(map.rules.at(-1)!, map, origin)).toMatchObject({ partial: true });
+    expect(h.rt.label("terminal.clear", origin)).toBeUndefined();
+    if (chord) h.rt.key(key("F10", "F10", { ctrlKey: false }));
+    h.rt.key(key("b", "KeyB"));
+    expect(h.t.clear).toHaveBeenCalledOnce();
+    expect(h.t.paste).not.toHaveBeenCalled();
+    h.rt.blur();
+    // A complete read API makes the same class definite; rejection stays execution-owned.
+    vi.stubGlobal("navigator", { clipboard: { readText: h.readText } });
+    expect(h.rt.label("terminal.paste", origin)).toBe(chord ? "F10 Ctrl+B" : "Ctrl+B");
+    expect(h.rt.winnerFor(map.rules.at(-2)!, map, origin)).toBe(map.rules.at(-1));
+    vi.stubGlobal("navigator", {});
+    const later = compileKeymap(
+      { ...emptyDocument, rules: [paste, { ...clear, id: "last" }] },
+      "linux",
+    );
+    expect(h.rt.resolveRule(later.rules.at(-2)!, later, origin).winner?.id).toBe("last");
+  },
+);

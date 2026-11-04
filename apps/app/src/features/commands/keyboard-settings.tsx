@@ -88,13 +88,13 @@ export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
     const current = compilation.map?.rules.find((r) => r.id === id);
     if (!current) return "Disabled or inactive";
     if (!current.condition.test(context)) return "Condition does not match this context";
-    const { winner: effective, conflict } = commands.resolveRule(
-      current,
-      compilation.map!,
-      origin,
-      context,
-    );
+    const {
+      winner: effective,
+      conflict,
+      partial,
+    } = commands.resolveRule(current, compilation.map!, origin, context);
     if (conflict) return `May be shadowed here by ${conflict.id}, for some matching input`;
+    if (partial) return "Available only for some matching input via native Paste";
     if (!effective) return "Unavailable in this context";
     return effective.id === id ? "Effective in this context" : `Shadowed here by ${effective.id}`;
   };

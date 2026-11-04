@@ -1,7 +1,15 @@
+import { PUNCTUATION_CODE_MAP, matchesKeyboardEvent, parseHotkey } from "@tanstack/hotkeys";
 import { expect, it } from "vitest";
 import { compileCondition, type Context } from "./conditions.ts";
 import { argumentsFor } from "./catalog.ts";
-import { Chords, compileKeymap, defaultRules, emptyDocument, type Rule } from "./keyboard.ts";
+import {
+  Chords,
+  strokesOverlap,
+  compileKeymap,
+  defaultRules,
+  emptyDocument,
+  type Rule,
+} from "./keyboard.ts";
 const context: Context = {
   platform: "linux",
   host: "web",
@@ -129,4 +137,116 @@ it.each(["!", "?"])("rejects a shifted %s single/chord prefix overlap", (glyph) 
       "linux",
     ),
   ).toThrow("prefix");
+});
+
+const fallbackCases = [
+  ...Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ", (key) => [key, `Key${key}`]),
+  ...Array.from("0123456789", (key) => [key, `Digit${key}`]),
+  ...Array.from("0123456789", (key) => [key, `Numpad${key}`]),
+  ...Object.entries(PUNCTUATION_CODE_MAP).map(([code, key]) => [key, code]),
+  ["+", "NumpadAdd"],
+  ["-", "NumpadSubtract"],
+  ["*", "NumpadMultiply"],
+  ["/", "NumpadDivide"],
+  [".", "NumpadDecimal"],
+  ["Enter", "NumpadEnter"],
+  ["Space", "Space"],
+];
+it.each(fallbackCases)(
+  "includes installed fallback %s/%s in overlap and prefix analysis",
+  (logical, code) => {
+    for (const platform of ["mac", "linux", "windows"] as const) {
+      const a = "Alt+?",
+        b = `Alt+${logical}`;
+      // A direct logical match and a different positional fallback on the SAME event.
+      const event = {
+        key: "?",
+        code,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: true,
+        metaKey: false,
+        getModifierState: () => false,
+      } as unknown as KeyboardEvent;
+      expect(matchesKeyboardEvent(event, a, platform)).toBe(true);
+      expect(matchesKeyboardEvent(event, parseHotkey(b, platform), platform)).toBe(true);
+      expect(strokesOverlap(a, b, platform)).toBe(true);
+      for (const [single, prefix] of [
+        [a, b],
+        [b, a],
+      ]) {
+        const rules = [
+          rule({ id: "single", keys: [single!] }),
+          rule({ id: "chord", keys: [prefix!, "F12"] }),
+        ];
+        const document = {
+          ...emptyDocument,
+          disabledDefaults: defaultRules.map((r) => r.id),
+          rules,
+        };
+        expect(() => compileKeymap(document, platform)).toThrow("prefix");
+        expect(() =>
+          compileKeymap(
+            { ...document, rules: [rules[0]!, { ...rules[1]!, enabled: false }] },
+            platform,
+          ),
+        ).not.toThrow();
+        expect(() =>
+          compileKeymap(
+            {
+              ...document,
+              rules: [rules[0]!, { ...rules[1]!, when: "terminalLive", scope: "terminal" }],
+            },
+            platform,
+          ),
+        ).not.toThrow();
+      }
+      for (const keys of [
+        [[a], [b]],
+        [
+          [a, "F12"],
+          [b, "F12"],
+        ],
+        [
+          ["F12", a],
+          ["F12", b],
+        ],
+      ]) {
+        const map = compileKeymap(
+          {
+            ...emptyDocument,
+            disabledDefaults: defaultRules.map((r) => r.id),
+            rules: keys.map((sequence, i) => rule({ id: String(i), keys: sequence })),
+          },
+          platform,
+        );
+        expect(map.diagnostics.join()).toMatch(/overlap|overrides/);
+      }
+    }
+  },
+);
+it("rejects the actual plus/NumpadMultiply single-prefix witness with implicit Shift controls", () => {
+  const event = {
+    key: "+",
+    code: "NumpadMultiply",
+    ctrlKey: true,
+    getModifierState: () => false,
+  } as unknown as KeyboardEvent;
+  expect(matchesKeyboardEvent(event, "Control++", "linux")).toBe(true);
+  expect(matchesKeyboardEvent(event, "Control+*", "linux")).toBe(true);
+  expect(() =>
+    compileKeymap(
+      {
+        ...emptyDocument,
+        disabledDefaults: defaultRules.map((r) => r.id),
+        rules: [
+          rule({ id: "plus", keys: ["Control++"] }),
+          rule({ id: "multiply", keys: ["Control+*", "F12"] }),
+        ],
+      },
+      "linux",
+    ),
+  ).toThrow("prefix");
+  expect(strokesOverlap("Control++", "Control+Shift+[NumpadMultiply]", "linux")).toBe(true);
+  expect(strokesOverlap("Control++", "Alt+*", "linux")).toBe(false);
 });

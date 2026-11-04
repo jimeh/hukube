@@ -217,11 +217,27 @@ export function strokesOverlap(left: string, right: string, platform: Platform) 
     b = parseHotkey(right, platform);
   if (a.ctrl !== b.ctrl || a.meta !== b.meta || a.alt !== b.alt) return false;
   if (normalizeHotkey(left, platform) === normalizeHotkey(right, platform)) return true;
-  const codes = new Set([a.code, b.code, ""]);
+  // Remaining installed codeToLogicalKey branches beyond letters/digits and
+  // public punctuation. Keep these as witnesses, not a layout conversion.
+  const codes = new Set([
+    a.code,
+    b.code,
+    "",
+    "NumpadAdd",
+    "NumpadSubtract",
+    "NumpadMultiply",
+    "NumpadDivide",
+    "NumpadDecimal",
+    "NumpadEnter",
+    "Space",
+  ]);
   for (const p of [a, b]) {
     if (!p.key) continue;
     if (/^[A-Z]$/.test(p.key)) codes.add(`Key${p.key}`);
-    if (/^[0-9]$/.test(p.key)) codes.add(`Digit${p.key}`);
+    if (/^[0-9]$/.test(p.key)) {
+      codes.add(`Digit${p.key}`);
+      codes.add(`Numpad${p.key}`);
+    }
     for (const [code, key] of Object.entries(PUNCTUATION_CODE_MAP))
       if (key === p.key) codes.add(code);
   }
@@ -257,6 +273,9 @@ const nativePasteKeys = (platform: Platform) =>
 /** Future prefix/presentation possibility only; never grants completed permission. */
 export const possibleNativePaste = (stroke: string, platform: Platform) =>
   nativePasteKeys(platform).some((key) => strokesOverlap(stroke, key, platform));
+/** Identical logical native strokes cover the whole matched completion class. */
+export const definiteNativePaste = (stroke: string, platform: Platform) =>
+  nativePasteKeys(platform).some((key) => sameStrokes([stroke], [key], platform));
 export function nativePasteGesture(e: KeyboardEvent, platform: Platform) {
   return nativePasteKeys(platform).some((key) => matchesStroke(e, key, platform));
 }

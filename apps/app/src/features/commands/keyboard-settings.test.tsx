@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { EngineProvider } from "@hukube/engine-client/react";
 import type { EngineClient, Setting } from "@hukube/engine-client";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { KeyboardSettings } from "./keyboard-settings.tsx";
 import { Dialog, DialogContent, DialogTitle } from "@hukube/ui/components/dialog";
 import { commands } from "./runtime.ts";
@@ -258,4 +258,57 @@ it("shows a possible shifted conflict instead of claiming whole-layout shadowing
   ).toBeTruthy();
   expect(screen.getByText(/position may overlap glyph/)).toBeTruthy();
   expect(screen.getAllByText("Effective in this context").length).toBeGreaterThan(0);
+});
+
+it("keeps partially available physical Paste readable without calling it effective", async () => {
+  const { commandTestWorkspace } = await import("./test-runtime.ts");
+  const { useExecSessions } = await import("../exec/sessions.ts");
+  const { fakeTerminal } = await import("../exec/test-terminal.ts");
+  const { commandPlatform } = await import("@/lib/platform.ts");
+  const terminal = fakeTerminal().terminal;
+  const input = document.createElement("textarea");
+  terminal.element.dataset["execSession"] = "partial";
+  terminal.element.dataset["commandPanel"] = "partial-panel";
+  terminal.element.append(input);
+  document.body.append(terminal.element);
+  input.focus();
+  const panelApi = { id: "partial-panel", component: "exec" };
+  const off = commandTestWorkspace(panelApi, () => ({
+    sessionId: "partial",
+  }));
+  const surfaceOff = commands.registerSurface({
+    element: terminal.element,
+    read: () => ({ kind: "terminal" }),
+  });
+  useExecSessions.setState({ entries: new Map([["partial", { terminal } as never]]) });
+  vi.stubGlobal("navigator", { clipboard: undefined });
+  vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+  try {
+    commands.configure({
+      route: "/c/c",
+      platform: commandPlatform,
+      host: "web",
+      connection: "open",
+      modalCount: 0,
+      map: compileKeymap(emptyDocument, commandPlatform),
+      preferencesReady: () => true,
+      preference: () => {},
+      settings: () => {},
+    });
+    const keys = [commandPlatform === "mac" ? "Meta+[KeyB]" : "Control+[KeyB]"];
+    await setup([
+      { ...rule, id: "partial", command: "terminal.paste", args: {}, keys, scope: "terminal" },
+    ]);
+    expect(
+      screen.getByText("Available only for some matching input via native Paste"),
+    ).toBeTruthy();
+  } finally {
+    cleanup();
+    surfaceOff();
+    off();
+    terminal.element.remove();
+    useExecSessions.setState({ entries: new Map() });
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
 });
