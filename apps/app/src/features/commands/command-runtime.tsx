@@ -229,7 +229,7 @@ export function CommandRuntime() {
                           <CommandItem
                             value={c.id}
                             disabled={!!reason}
-                            className="min-w-0 flex-1"
+                            className="min-w-0 flex-1 data-[disabled=true]:opacity-100"
                             onSelect={() => commands.invoke(c.id, {}, palette.origin)}
                           >
                             <div className="min-w-0">
