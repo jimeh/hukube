@@ -1727,3 +1727,155 @@ it.each([false, true])(
     expect(h.rt.resolveRule(later.rules.at(-2)!, later, origin).winner?.id).toBe("last");
   },
 );
+
+function logReviewHarness() {
+  const h = harness([
+    {
+      id: "log-review",
+      command: "manifest.review",
+      keys: ["F8"],
+      when: "focus == 'log'",
+      scope: "app",
+      enabled: true,
+    },
+  ]);
+  h.unregister();
+  const log = document.createElement("div"),
+    button = document.createElement("button");
+  log.append(h.input);
+  h.root.append(button, log);
+  let uid: string | undefined = "original",
+    reviewReason: string | undefined;
+  const focus = vi.fn<() => void>();
+  const resource = {
+    element: h.root,
+    read: () => ({
+      kind: "resource" as const,
+      uid,
+      dirty: true,
+      review: h.review,
+      reviewReason,
+      focus,
+    }),
+  };
+  const off = h.rt.registerSurface(resource);
+  const surface = { element: log, read: () => ({ kind: "log" as const, find: h.find }) };
+  const surfaceOff = h.rt.registerSurface(surface);
+  h.input.focus();
+  return {
+    ...h,
+    button,
+    resource,
+    surface,
+    focus,
+    off,
+    surfaceOff,
+    uid: (value: string | undefined) => (uid = value),
+    refuse: (value: string) => (reviewReason = value),
+  };
+}
+it.each(["log", "dirty bar", "palette", "keyboard"] as const)(
+  "uses the captured Resource Review owner from %s without changing Log Find",
+  (source) => {
+    const h = logReviewHarness();
+    if (source === "dirty bar") h.button.focus();
+    const origin = h.rt.capture();
+    expect(origin.surface).toBe(h.surface);
+    expect(origin.resource).toBe(h.resource);
+    expect(h.rt.reason("manifest.review", origin)).toBeUndefined();
+    if (source === "palette") h.rt.openPalette("commands", origin);
+    let invoked: boolean;
+    if (source === "keyboard") {
+      const event = new KeyboardEvent("keydown", { key: "F8", code: "F8", cancelable: true });
+      h.rt.key(event);
+      invoked = event.defaultPrevented;
+    } else
+      invoked = h.rt.invoke(
+        "manifest.review",
+        {},
+        origin,
+        source === "palette" ? "palette" : "pointer",
+      );
+    expect(invoked).toBe(true);
+    expect(h.focus).toHaveBeenCalledTimes(1);
+    expect(h.review).toHaveBeenCalledTimes(1);
+    expect(h.find).not.toHaveBeenCalled();
+    expect(h.rt.dispatch("editor.find", {}, origin)).toBe(true);
+    expect(h.find).toHaveBeenCalledTimes(1);
+    expect(h.review).toHaveBeenCalledTimes(1);
+  },
+);
+it.each([
+  "replacement",
+  "deletion",
+  "panel",
+  "pane",
+  "params",
+  "route",
+  "workspace",
+  "resource owner",
+  "log owner",
+] as const)("refuses Log Review after captured %s loss", (boundary) => {
+  const h = logReviewHarness(),
+    origin = h.rt.capture();
+  switch (boundary) {
+    case "replacement":
+      h.uid("replacement");
+      break;
+    case "deletion":
+      h.uid(undefined);
+      break;
+    case "panel":
+      h.replace();
+      break;
+    case "pane":
+      Object.assign(h.panel(), { group: {} });
+      break;
+    case "params":
+      Object.assign(h.panel(), { params: { uri: "different" } });
+      break;
+    case "route":
+      h.rt.configure({ ...h.config, route: "/settings/appearance" });
+      break;
+    case "workspace":
+      h.rt.registerWorkspace("c", { ...h.owner, token: {} });
+      break;
+    case "resource owner":
+      h.off();
+      break;
+    case "log owner":
+      h.surfaceOff();
+      break;
+  }
+  expect(h.rt.invoke("manifest.review", {}, origin)).toBe(false);
+  expect(h.rt.getSnapshot().error).toContain("captured target changed");
+  expect(h.review).not.toHaveBeenCalled();
+  expect(h.focus).not.toHaveBeenCalled();
+});
+it("uses the captured surface Review refusal without falling back to a permitted Resource owner", () => {
+  const h = logReviewHarness(),
+    review = vi.fn<() => void>();
+  h.rt.registerSurface({
+    element: h.surface.element,
+    read: () => ({ kind: "editor", review, reviewReason: "Invalid field" }),
+  });
+  const origin = h.rt.capture();
+  expect(h.rt.reason("manifest.review", origin)).toBe("Invalid field");
+  expect(h.rt.invoke("manifest.review", {}, origin)).toBe(false);
+  expect(review).not.toHaveBeenCalled();
+  expect(h.review).not.toHaveBeenCalled();
+});
+it("reports missing or unavailable captured Resource Review without substituting another panel", () => {
+  const h = logReviewHarness();
+  h.refuse("Not permitted");
+  expect(h.rt.reason("manifest.review", h.rt.capture())).toBe("Not permitted");
+  expect(h.rt.dispatch("manifest.review", {})).toBe(false);
+  h.off();
+  const other = document.createElement("div");
+  other.dataset["commandPanel"] = "other";
+  document.body.append(other);
+  h.rt.registerSurface({ element: other, read: () => ({ kind: "resource", review: h.review }) });
+  expect(h.rt.dispatch("manifest.review", {})).toBe(false);
+  expect(h.rt.getSnapshot().error).toBe("No captured Manifest edit.");
+  expect(h.review).not.toHaveBeenCalled();
+});

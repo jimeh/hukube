@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState, useSyncExternalStore } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref } from "react";
 import type { DockviewPanelApi } from "dockview-react";
-import type { ResourceData } from "@hukube/engine-client";
+import { useCommandSurface } from "../commands/owners.ts";
+import type { ResourceData, StreamListener } from "@hukube/engine-client";
 import { formatResourceUri, type Facet } from "@hukube/k8s";
 import { compileKeymap, emptyDocument } from "../commands/keyboard.ts";
 import { commands } from "../commands/runtime.ts";
@@ -22,9 +23,16 @@ const state = vi.hoisted(() => ({
   snapshot: {} as RegistrySnapshot,
   error: undefined as string | undefined,
   store: undefined as ReturnType<typeof createRegistryStore> | undefined,
+  find: vi.fn<() => void>(),
   client: {
     subscribe: () => ({ close: () => {}, update: () => {} }),
-    request: (_method: string): Promise<unknown> =>
+    openStream: (_method: string, _params: unknown, listener: StreamListener<"resource.logs">) => {
+      queueMicrotask(() => {
+        void listener.data([{ source: 0, time: 1, text: "line" }]);
+      });
+      return { close() {}, pause() {}, resume() {} };
+    },
+    request: (_method: string, _params?: unknown, _options?: unknown): Promise<unknown> =>
       Promise.resolve({ edit: { allowed: true }, delete: { allowed: true } }),
     getState: () => "open",
     onStateChange: () => () => {},
@@ -63,24 +71,30 @@ vi.mock("./registry.ts", async (importOriginal) => ({
     store: state.store ?? { retry: () => {} },
   }),
 }));
-vi.mock("../resource/yaml-editor.tsx", () => ({
-  default: ({
-    value,
-    onChange,
-    editing,
-  }: {
-    value: string;
-    onChange: (text: string) => void;
-    editing: boolean;
-  }) => (
+function StandInYamlEditor({
+  value,
+  onChange,
+  editing,
+  ref,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+  editing: boolean;
+  ref?: Ref<{ focus(): void }>;
+}) {
+  const input = useRef<HTMLTextAreaElement>(null);
+  useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }));
+  return (
     <textarea
+      ref={input}
       aria-label="YAML draft"
       value={value}
       readOnly={!editing}
       onChange={(event) => onChange(event.target.value)}
     />
-  ),
-}));
+  );
+}
+vi.mock("../resource/yaml-editor.tsx", () => ({ default: StandInYamlEditor }));
 vi.mock("../edit/diff-editor.tsx", () => ({ default: () => <div>Diff</div> }));
 vi.mock("../resource/events-facet.tsx", () => ({
   EventsFacet: () => <div>Live Events</div>,
@@ -92,7 +106,16 @@ vi.mock("../resource/related-facet.tsx", () => ({
   RelatedBadge: () => null,
   relatedTabName: () => "Related",
 }));
-vi.mock("../resource/logs-facet.tsx", () => ({ LogsFacet: () => <div>Logs</div> }));
+function StandInLogEditor() {
+  const root = useRef<HTMLDivElement>(null);
+  useCommandSurface(root, () => ({ kind: "log", find: state.find }));
+  return (
+    <div ref={root}>
+      <textarea aria-label="Log input" />
+    </div>
+  );
+}
+vi.mock("../logs/log-editor.tsx", () => ({ default: StandInLogEditor }));
 const deployment = {
   apiVersion: "apps/v1",
   kind: "Deployment",
@@ -622,3 +645,188 @@ it.each(["pointer", "palette", "keyboard", "removed-origin"] as const)(
     );
   },
 );
+
+const reviewPod = {
+  apiVersion: "v1",
+  kind: "Pod",
+  metadata: { name: "web", uid: "original" },
+  spec: { containers: [{ name: "app", image: "old" }] },
+};
+function prepareLogBoundary() {
+  state.manifest = { object: reviewPod };
+  state.find.mockReset();
+  vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return (this.closest("[hidden]") ? [] : [{}]) as unknown as DOMRectList;
+  });
+  vi.spyOn(state.client, "request").mockImplementation(async (method) =>
+    method === "resource.review"
+      ? {
+          before: reviewPod,
+          desired: reviewPod,
+          after: reviewPod,
+          edited: [["spec", "containers"]],
+          changedOnCluster: [],
+          overlaps: [],
+          setByCluster: [],
+          ignored: [],
+          warnings: [],
+        }
+      : { edit: { allowed: true }, delete: { allowed: true } },
+  );
+}
+async function editLogs() {
+  prepareLogBoundary();
+  const view = render(<Harness type="pods" />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Containers 1 Image" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Containers 1 Image" }), {
+    target: { value: "new" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Logs" }));
+  const input = await screen.findByRole("textbox", { name: "Log input" });
+  commandOwners.push(
+    commandTestWorkspace({ id: "panel" }, () =>
+      JSON.parse(screen.getByLabelText("Tab params").textContent),
+    ),
+  );
+  commands.configure({
+    route: "/c/c",
+    platform: "mac",
+    host: "web",
+    connection: "open",
+    modalCount: 0,
+    map: compileKeymap(
+      {
+        ...emptyDocument,
+        rules: [
+          {
+            id: "review-log",
+            command: "manifest.review",
+            keys: ["F8"],
+            when: "focus == 'log'",
+            scope: "app",
+            enabled: true,
+          },
+        ],
+      },
+      "mac",
+    ),
+    preferencesReady: () => true,
+    preference() {},
+    settings() {},
+  });
+  return { view, input };
+}
+it.each(["pointer", "palette", "keyboard"] as const)(
+  "reviews the original Resource edit from Logs via %s and returns to its visible Review button after Back",
+  async (source) => {
+    const { input } = await editLogs();
+    act(() => input.focus());
+    const origin = commands.capture();
+    expect(origin.resourceUid).toBe("original");
+    expect(origin.surface?.read().kind).toBe("log");
+    const button = screen.getByRole("button", { name: "Review changes" });
+    await act(async () => {
+      if (source === "pointer") fireEvent.click(button);
+      else if (source === "palette") {
+        commands.openPalette("commands", origin);
+        commands.invoke("manifest.review", {}, origin);
+      } else {
+        commands.key(new KeyboardEvent("keydown", { key: "F8", code: "F8", cancelable: true }));
+        commands.key(new KeyboardEvent("keyup", { key: "F8", code: "F8" }));
+      }
+    });
+    expect(
+      vi.mocked(state.client.request).mock.calls.filter(([method]) => method === "resource.review"),
+    ).toEqual([
+      [
+        "resource.review",
+        expect.objectContaining({
+          uid: "original",
+          manifest: expect.objectContaining({
+            spec: { containers: [{ name: "app", image: "new" }] },
+          }),
+        }),
+        expect.anything(),
+      ],
+    ]);
+    const back = await screen.findByRole("button", { name: "Back to editing" });
+    fireEvent.click(back);
+    await waitFor(() => expect(document.activeElement).toBe(button));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(state.find).not.toHaveBeenCalled();
+  },
+);
+it("keeps Log Find on its surface and refuses a captured Review after exact UID replacement", async () => {
+  const { input, view } = await editLogs();
+  act(() => input.focus());
+  const origin = commands.capture();
+  act(() => {
+    expect(commands.dispatch("editor.find", {}, origin)).toBe(true);
+  });
+  expect(state.find).toHaveBeenCalledTimes(1);
+  state.manifest = {
+    object: { ...reviewPod, metadata: { ...reviewPod.metadata, uid: "replacement" } },
+  };
+  view.rerender(<Harness type="pods" />);
+  act(() => {
+    expect(commands.invoke("manifest.review", {}, origin)).toBe(false);
+  });
+  expect(commands.getSnapshot().error).toContain("captured target changed");
+  expect(
+    vi.mocked(state.client.request).mock.calls.filter(([method]) => method === "resource.review"),
+  ).toEqual([]);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+it("retains YAML's prepared editor focus when Review uses the Resource owner", async () => {
+  prepareLogBoundary();
+  render(<Harness type="pods" />);
+  fireEvent.click(screen.getByRole("tab", { name: /^YAML/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  const yaml = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "YAML draft" });
+  fireEvent.change(yaml, { target: { value: yaml.value.replace("image: old", "image: new") } });
+  commandOwners.push(
+    commandTestWorkspace({ id: "panel" }, () =>
+      JSON.parse(screen.getByLabelText("Tab params").textContent),
+    ),
+  );
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Review changes" })));
+  fireEvent.click(await screen.findByRole("button", { name: "Back to editing" }));
+  await waitFor(() => expect(document.activeElement).toBe(yaml));
+});
+it("keeps invalid YAML refusal on Review from Logs", async () => {
+  await editLogs();
+  fireEvent.click(screen.getByRole("tab", { name: /^YAML/ }));
+  fireEvent.change(await screen.findByRole("textbox", { name: "YAML draft" }), {
+    target: { value: "spec: [" },
+  });
+  fireEvent.click(screen.getByRole("tab", { name: "Logs" }));
+  await act(async () => commands.dispatch("manifest.review", {}));
+  expect(
+    vi.mocked(state.client.request).mock.calls.filter(([method]) => method === "resource.review"),
+  ).toEqual([]);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+it("keeps the Engine's permission refusal on Review from Logs", async () => {
+  await editLogs();
+  vi.mocked(state.client.request).mockImplementation(async (method) =>
+    method === "resource.review"
+      ? {
+          before: reviewPod,
+          desired: reviewPod,
+          edited: [["spec", "containers"]],
+          changedOnCluster: [],
+          overlaps: [],
+          setByCluster: [],
+          ignored: [],
+          warnings: [],
+          refusal: { code: "forbidden", message: "Edit denied" },
+        }
+      : { edit: { allowed: true }, delete: { allowed: true } },
+  );
+  await act(async () => commands.dispatch("manifest.review", {}));
+  expect(within(await screen.findByRole("dialog")).getByText("Not permitted")).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply" }).disabled).toBe(true);
+});

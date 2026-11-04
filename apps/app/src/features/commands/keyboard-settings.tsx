@@ -14,13 +14,22 @@ import {
 } from "./catalog.ts";
 import { ArgumentFields, focusInvalidArgument } from "./argument-fields.tsx";
 import { commands } from "./runtime.ts";
-import { compileKeymap, defaultRules, displayKeys, emptyDocument, type Rule } from "./keyboard.ts";
+import {
+  compileKeymap,
+  defaultRules,
+  displayKeys,
+  emptyDocument,
+  type Rule,
+  type KeybindingDocument,
+} from "./keyboard.ts";
 import { vocabulary } from "./conditions.ts";
 import { useKeybindings } from "./store.ts";
 export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
   const { store, snapshot } = useKeybindings();
   const [search, setSearch] = useState(""),
     [editing, setEditing] = useState<Rule>();
+  // Only an unchanged draft created for this form can be released on Cancel.
+  const formDraft = useRef<KeybindingDocument | undefined>(undefined);
   const keymapDocument = snapshot.draft ?? snapshot.document;
   const usable =
     keymapDocument?.version === 1 &&
@@ -56,7 +65,8 @@ export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
   const update = (rule: Rule) =>
     change({ ...candidate, rules: candidate.rules.map((r) => (r.id === rule.id ? rule : r)) });
   const begin = (rule: Rule) => {
-    store.edit(candidate);
+    formDraft.current = snapshot.draft ? undefined : candidate;
+    if (!snapshot.draft) store.edit(candidate);
     setEditing({ ...rule, args: { ...rule.args }, keys: [...rule.keys] });
   };
   const move = (id: string, delta: number) => {
@@ -145,8 +155,14 @@ export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
           initial={editing}
           visible={visible}
           disabled={locked}
-          onCancel={() => setEditing(undefined)}
+          onCancel={() => {
+            if (formDraft.current && store.getSnapshot().draft === formDraft.current)
+              store.discard();
+            formDraft.current = undefined;
+            setEditing(undefined);
+          }}
           onSave={(rule) => {
+            formDraft.current = undefined;
             const rules = candidate.rules.some((r) => r.id === rule.id)
               ? candidate.rules.map((r) => (r.id === rule.id ? rule : r))
               : [...candidate.rules, rule];
@@ -173,6 +189,7 @@ export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
           variant="outline"
           disabled={!snapshot.draft && !editing}
           onClick={() => {
+            formDraft.current = undefined;
             setEditing(undefined);
             store.discard();
           }}
@@ -183,6 +200,7 @@ export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
           variant="outline"
           disabled={locked}
           onClick={() => {
+            formDraft.current = undefined;
             setEditing(undefined);
             change({ ...candidate, rules: [], disabledDefaults: [] });
           }}

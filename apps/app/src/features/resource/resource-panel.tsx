@@ -4,7 +4,7 @@ import { formatResourceUri, parseResourceUri, type Facet } from "@hukube/k8s";
 import { Badge } from "@hukube/ui/components/badge";
 import { Tabs, TabsContent } from "@hukube/ui/components/tabs";
 import type { IDockviewPanelProps } from "dockview-react";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef } from "react";
 
 import { usePanelEdit } from "../edit/use-panel-edit.ts";
 import { ReviewDialog } from "../edit/review-dialog.tsx";
@@ -86,6 +86,7 @@ export function ResourcePanel({
     onEdit: () => pinPanel(api, params),
   });
   const commandBody = useRef<HTMLDivElement>(null);
+  const reviewButton = useRef<HTMLButtonElement>(null);
   useCommandSurface(commandBody, () => ({
     kind: "resource",
     review: edit.reviewOperation,
@@ -130,6 +131,11 @@ export function ResourcePanel({
   );
   const resolved = resolveFacet(address?.facet, target);
   const selected = !address?.facet && edit.session && latched ? latched : resolved;
+  const setReviewFocus = edit.setFocus;
+  useLayoutEffect(() => {
+    if (selected !== "overview" && selected !== "yaml")
+      setReviewFocus(() => reviewButton.current?.focus());
+  }, [selected, setReviewFocus]);
   if (!edit.session && !defaultPending && latched !== resolved) setLatched(resolved);
   const related = useSubscription(
     "resource.related",
@@ -256,6 +262,7 @@ export function ResourcePanel({
           <span className="text-warning">Unsaved changes</span>
           {selected !== "yaml" && selected !== "overview" && (
             <Button
+              ref={reviewButton}
               size="sm"
               disabled={!!edit.reviewReason || !edit.parsed?.object}
               title={

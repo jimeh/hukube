@@ -380,6 +380,10 @@ export class CommandRuntime {
     });
     return true;
   }
+  private reviewOwner(origin: Origin) {
+    const surface = origin.surface?.read();
+    return surface?.review ? surface : origin.resource?.read();
+  }
   reason(id: CommandId, origin: Origin, nativePaste = false): string | undefined {
     if (paletteCommand(id) && this.view.recording)
       return "Stop or cancel shortcut recording before opening Commands or Go to Resource.";
@@ -397,8 +401,10 @@ export class CommandRuntime {
     if (def.target === "tab" && !origin.panel) return "No captured Tab.";
     if (id === "tab.pin" && !(origin.panel?.params as { preview?: boolean })?.preview)
       return "The Tab is already pinned.";
-    if (id === "manifest.review")
-      return surface?.review ? surface.reviewReason : "No captured Manifest edit.";
+    if (id === "manifest.review") {
+      const review = this.reviewOwner(origin);
+      return review?.review ? review.reviewReason : "No captured Manifest edit.";
+    }
     if (id === "editor.find" && !surface?.find) return "No captured searchable editor or terminal.";
     if (def.target === "terminal" && !origin.session) return "Focus an Exec terminal first.";
     if (id === "terminal.copy" && !origin.session?.hasSelection())
@@ -519,12 +525,14 @@ export class CommandRuntime {
         this.closePalette(false);
         surface!.find!();
         return;
-      case "manifest.review":
+      case "manifest.review": {
+        const review = this.reviewOwner(origin)!;
         this.closePalette(false);
-        // Overview and YAML prepare their own field/editor return policy.
-        surface?.focus?.();
-        surface!.review!();
+        // The feature owner prepares its own field/editor return policy.
+        review.focus?.();
+        review.review!();
         return;
+      }
       case "appearance.setTheme":
         cfg.preference("theme", String(args.theme));
         break;

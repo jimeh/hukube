@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useLayoutEffect } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { EngineProvider } from "@hukube/engine-client/react";
 import type { EngineClient, Setting } from "@hukube/engine-client";
@@ -6,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { KeyboardSettings } from "./keyboard-settings.tsx";
 import { Dialog, DialogContent, DialogTitle } from "@hukube/ui/components/dialog";
 import { commands } from "./runtime.ts";
+import { useKeybindings } from "./store.ts";
 import { compileKeymap, emptyDocument, type Rule } from "./keyboard.ts";
 const rule: Rule = {
   id: "saved-theme",
@@ -22,12 +24,30 @@ afterEach(() => {
   commands.blur();
 });
 async function setup(rules: Rule[] = [], visible = true) {
-  const value = { ...emptyDocument, rules };
+  let value = { ...emptyDocument, rules };
+  let revision = "one";
+  let listener!: { data(s: Setting): void };
+  let current!: ReturnType<typeof useKeybindings>;
+  function Probe() {
+    const bindings = useKeybindings();
+    useLayoutEffect(() => {
+      current = bindings;
+    });
+    return null;
+  }
+  const writes = vi.fn<(_method: string, params: { value: typeof value }) => Promise<void>>(
+    async (_method, params) => {
+      value = params.value;
+      revision = "saved";
+    },
+  );
   const client = {
+    request: writes,
     getState: () => "open",
     onStateChange: () => () => {},
     subscribe: (_m: string, _p: unknown, l: { data(s: Setting): void }) => {
-      queueMicrotask(() => l.data({ key: "app/keybindings", revision: "one", value }));
+      listener = l;
+      queueMicrotask(() => l.data({ key: "app/keybindings", revision, value }));
       return { close() {}, update() {} };
     },
   } as unknown as EngineClient;
@@ -35,6 +55,7 @@ async function setup(rules: Rule[] = [], visible = true) {
   const content = (shown: boolean, modal = false) => (
     <EngineProvider client={client}>
       <KeyboardSettings visible={shown} />
+      <Probe />
       <input aria-label="Outside" />
       <Dialog open={modal}>
         <DialogContent>
@@ -49,6 +70,19 @@ async function setup(rules: Rule[] = [], visible = true) {
   });
   expect(screen.getByText("Shortcuts loaded")).toBeTruthy();
   return {
+    get snapshot() {
+      return current.snapshot;
+    },
+    get store() {
+      return current.store;
+    },
+    writes,
+    receive: (next: typeof value) =>
+      act(() => {
+        value = next;
+        revision = "two";
+        listener.data({ key: "app/keybindings", revision, value });
+      }),
     modal: (open: boolean) => view.rerender(content(true, open)),
     hide: () => view.rerender(content(false)),
     show: () => view.rerender(content(true)),
@@ -312,3 +346,103 @@ it("keeps partially available physical Paste readable without calling it effecti
     vi.unstubAllGlobals();
   }
 });
+
+it.each([
+  ["edit", false],
+  ["edit", true],
+  ["add", false],
+  ["add", true],
+] as const)(
+  "cancels %s-only work (changed %s) without retaining a document draft",
+  async (kind, changed) => {
+    const h = await setup([rule]);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: kind === "edit" ? "Edit / recordsaved-theme" : /Add binding.*Open Settings/,
+      }),
+    );
+    expect(h.snapshot.draft).toBeDefined();
+    if (changed)
+      fireEvent.change(screen.getByLabelText("Condition (when)"), {
+        target: { value: "workspace" },
+      });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel rule" }));
+    expect(screen.queryByRole("form", { name: "Edit keyboard rule" })).toBeNull();
+    expect(h.snapshot.draft).toBeUndefined();
+    expect(h.snapshot.conflict).toBe(false);
+    expect(h.writes).not.toHaveBeenCalled();
+  },
+);
+it.each([false, true])(
+  "releases only form-owned work after concurrent Engine updates (reload %s)",
+  async (reload) => {
+    const h = await setup([rule]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit / recordsaved-theme" }));
+    const latest = { ...emptyDocument, rules: [{ ...rule, args: { theme: "light" } }] };
+    h.receive(latest);
+    expect(h.snapshot.conflict).toBe(true);
+    if (reload) await act(async () => h.store.retry());
+    expect(screen.getByLabelText<HTMLSelectElement>("Theme (required)").value).toBe("dark");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel rule" }));
+    await act(async () => {});
+    expect(h.snapshot.document).toEqual(latest);
+    expect(h.snapshot.draft).toBeUndefined();
+    expect(h.snapshot.conflict).toBe(false);
+    expect(h.snapshot.active.rules.find((r) => r.id === rule.id)?.args).toEqual({ theme: "light" });
+  },
+);
+it.each(["preexisting", "independent", "conflicted"] as const)(
+  "retains %s set work when cancelling a form",
+  async (kind) => {
+    const h = await setup([rule, { ...rule, id: "other", keys: ["F9"] }]);
+    if (kind !== "independent")
+      fireEvent.click(screen.getByRole("button", { name: "Disablesaved-theme" }));
+    if (kind === "conflicted") h.receive({ ...emptyDocument, rules: [{ ...rule, keys: ["F10"] }] });
+    fireEvent.click(screen.getByRole("button", { name: "Edit / recordsaved-theme" }));
+    fireEvent.change(screen.getByLabelText("Condition (when)"), { target: { value: "workspace" } });
+    if (kind !== "conflicted")
+      fireEvent.click(screen.getByRole("button", { name: "Move down saved-theme" }));
+    const draft = h.snapshot.draft;
+    h.receive({ ...emptyDocument, rules: [{ ...rule, keys: ["F11"] }] });
+    await act(async () => h.store.retry());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel rule" }));
+    expect(h.snapshot.draft).toEqual(draft);
+    expect(h.snapshot.conflict).toBe(true);
+    expect(h.writes).not.toHaveBeenCalled();
+  },
+);
+it("saves a same-ID form into the reordered set and activates only after document Save", async () => {
+  const h = await setup([rule, { ...rule, id: "other", keys: ["F9"] }]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit / recordsaved-theme" }));
+  fireEvent.change(screen.getByLabelText("Condition (when)"), { target: { value: "workspace" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move down saved-theme" }));
+  submit();
+  expect(h.snapshot.draft?.rules.map((r) => r.id)).toEqual(["other", rule.id]);
+  expect(h.snapshot.draft?.rules[1]?.when).toBe("workspace");
+  expect(h.snapshot.active.rules.find((r) => r.id === rule.id)?.when).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "Save shortcuts" }));
+  await act(async () => {});
+  expect(h.writes).toHaveBeenCalledTimes(1);
+  expect(h.snapshot.draft).toBeUndefined();
+  expect(h.snapshot.active.rules.find((r) => r.id === rule.id)?.when).toBe("workspace");
+});
+it.each(["cancel", "reset", "remove"] as const)(
+  "keeps explicit set %s semantics after form work",
+  async (operation) => {
+    const h = await setup([rule]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit / recordsaved-theme" }));
+    fireEvent.change(screen.getByLabelText("Condition (when)"), { target: { value: "workspace" } });
+    if (operation === "cancel") {
+      submit();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
+    } else if (operation === "reset") {
+      fireEvent.click(screen.getByRole("button", { name: "Reset keyboard shortcuts" }));
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "Removesaved-theme" }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel rule" }));
+    }
+    expect(screen.queryByRole("form", { name: "Edit keyboard rule" })).toBeNull();
+    expect(h.snapshot.draft?.rules).toEqual(operation === "cancel" ? undefined : []);
+    expect(h.writes).not.toHaveBeenCalled();
+  },
+);
