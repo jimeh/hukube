@@ -1,0 +1,63 @@
+name: Desktop packages
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            target: mac-arm64
+          - runner: macos-15-intel
+            arch: x64
+            target: mac-x64
+          - runner: ubuntu-24.04
+            arch: x64
+            target: linux-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      ARCH: ${{ matrix.arch }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - run: mise run install
+      - name: Install Linux runtime dependencies
+        if: runner.os == 'Linux'
+        working-directory: e2e
+        run: |
+          bunx playwright install-deps chromium
+          sudo apt-get install -y xvfb
+      - run: mise run package -- "$ARCH"
+      - name: Verify snapshot package
+        run: |
+          version="$(bun -p 'require("./apps/desktop/package.json").version')-snapshot"
+          directory=".data/packages/snapshot/$version/$TARGET"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a mise run release:verify -- "$directory" "$TARGET" snapshot
+          else
+            mise run release:verify -- "$directory" "$TARGET" snapshot
+          fi
+      - name: Verify controlled two-version update and quit lifecycle
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a mise run update:verify -- "$ARCH"
+          else
+            mise run update:verify -- "$ARCH"
+          fi
