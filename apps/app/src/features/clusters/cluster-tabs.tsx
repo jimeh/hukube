@@ -171,7 +171,10 @@ export function ClusterTabs() {
                   commands.dispatch(
                     "app.openSettings",
                     {},
-                    event.detail ? (origin ?? commands.capture()) : commands.capture(),
+                    {
+                      ...(event.detail ? (origin ?? commands.capture()) : commands.capture()),
+                      element: event.currentTarget,
+                    },
                   );
                 }}
               />

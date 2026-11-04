@@ -154,7 +154,8 @@ async function setup(workspace = false, resource: boolean | "hydrated" = false) 
       if (change === "remount") {
         unregisterSurface();
         unregisterSurface = commands.registerSurface({ ...surface });
-      } else uid = change === "deleted" ? undefined : "replacement";
+      } else
+        uid = change === "deleted" ? undefined : change === "original" ? "original" : "replacement";
       commands.refreshAvailability();
     },
     search,
@@ -603,3 +604,64 @@ it("Resource updates preserve deliberate palette focus and selection without rev
     act(h.unregister);
   }
 });
+
+it("keeps an unavailable-only search readable and disabled through Enter and pointer activation", async () => {
+  const { search } = await setup();
+  const palette = commands.getSnapshot().palette;
+  fireEvent.change(search, { target: { value: "Go to Resource" } });
+  await frame();
+  const row = screen.getByRole("option", { name: /Go to Resource/ });
+  expect(row.textContent).toContain("Open a Cluster Workspace first.");
+  expect(row.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.keyDown(search, { key: "ArrowDown", code: "ArrowDown" });
+  fireEvent.keyDown(search, { key: "Enter", code: "Enter" });
+  fireEvent.keyUp(window, { key: "Enter", code: "Enter" });
+  fireEvent.pointerMove(row);
+  fireEvent.click(row);
+  await frame();
+  expect(commands.getSnapshot().palette).toBe(palette);
+  expect(commands.getSnapshot().error).toBe("");
+  expect(document.activeElement).toBe(search);
+  fireEvent.change(search, { target: { value: "Set theme" } });
+  await frame();
+  const available = screen.getByRole("option", { name: /Set theme/i });
+  expect(available.getAttribute("aria-disabled")).toBe("false");
+  fireEvent.keyDown(search, { key: "Enter", code: "Enter" });
+  expect(screen.getByLabelText("Theme (required)")).toBe(document.activeElement);
+});
+
+it.each(["deleted", "replaced"])(
+  "refreshes real cmdk disabled state when the captured Resource is %s",
+  async (change) => {
+    const h = await setup(true, true);
+    try {
+      const captured = commands.getSnapshot().palette!.origin;
+      fireEvent.change(h.search, { target: { value: "Review Manifest changes" } });
+      await frame();
+      const row = screen.getByRole("option", { name: /Review Manifest changes/ });
+      expect(row.getAttribute("aria-disabled")).toBe("false");
+      act(() => h.changeResource(change));
+      await frame();
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.textContent).toContain("The captured target changed or is no longer available.");
+      fireEvent.keyDown(h.search, { key: "Enter", code: "Enter" });
+      fireEvent.keyUp(window, { key: "Enter", code: "Enter" });
+      fireEvent.click(row);
+      await frame();
+      expect(h.review).not.toHaveBeenCalled();
+      expect(commands.getSnapshot().palette?.origin).toBe(captured);
+      expect(commands.getSnapshot().error).toBe("");
+      act(() => expect(commands.invoke("manifest.review", {}, captured)).toBe(false));
+      expect(commands.getSnapshot().error).toContain("captured target changed");
+      expect(h.review).not.toHaveBeenCalled();
+      act(() => h.changeResource("original"));
+      await frame();
+      expect(row.getAttribute("aria-disabled")).toBe("false");
+      fireEvent.click(row);
+      expect(h.review).toHaveBeenCalledTimes(1);
+      expect(commands.getSnapshot().palette).toBeUndefined();
+    } finally {
+      act(h.unregister);
+    }
+  },
+);

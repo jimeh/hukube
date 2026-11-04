@@ -228,7 +228,7 @@ export function CommandRuntime() {
                         <div key={c.id} className="flex min-w-0 items-center">
                           <CommandItem
                             value={c.id}
-                            aria-disabled={!!reason}
+                            disabled={!!reason}
                             className="min-w-0 flex-1"
                             onSelect={() => commands.invoke(c.id, {}, palette.origin)}
                           >
