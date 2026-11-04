@@ -4,7 +4,8 @@ import { EngineProvider } from "@hukube/engine-client/react";
 import type { EngineClient, Setting } from "@hukube/engine-client";
 import { afterEach, expect, it } from "vitest";
 import { KeyboardSettings } from "./keyboard-settings.tsx";
-import { emptyDocument, type Rule } from "./keyboard.ts";
+import { commands } from "./runtime.ts";
+import { compileKeymap, emptyDocument, type Rule } from "./keyboard.ts";
 const rule: Rule = {
   id: "saved-theme",
   command: "appearance.setTheme",
@@ -14,8 +15,12 @@ const rule: Rule = {
   enabled: true,
   args: { theme: "dark" },
 };
-afterEach(cleanup);
-async function setup(rules: Rule[] = []) {
+afterEach(() => {
+  cleanup();
+  commands.setRecording(false);
+  commands.blur();
+});
+async function setup(rules: Rule[] = [], visible = true) {
   const value = { ...emptyDocument, rules };
   const client = {
     getState: () => "open",
@@ -25,14 +30,18 @@ async function setup(rules: Rule[] = []) {
       return { close() {}, update() {} };
     },
   } as unknown as EngineClient;
+  let view!: ReturnType<typeof render>;
+  const content = (shown: boolean) => (
+    <EngineProvider client={client}>
+      <KeyboardSettings visible={shown} />
+      <input aria-label="Outside" />
+    </EngineProvider>
+  );
   await act(async () => {
-    render(
-      <EngineProvider client={client}>
-        <KeyboardSettings />
-      </EngineProvider>,
-    );
+    view = render(content(visible));
   });
   expect(screen.getByText("Shortcuts loaded")).toBeTruthy();
+  return { hide: () => view.rerender(content(false)), show: () => view.rerender(content(true)) };
 }
 it("searches real default and saved rows by title while preserving unknown rules and drafts", async () => {
   await setup([rule, { ...rule, id: "future", command: "future.action", args: { retained: 1 } }]);
@@ -137,4 +146,49 @@ it("keeps unknown commands recoverable without rendering known-command fields", 
   submit();
   expect(screen.queryByRole("form", { name: "Edit keyboard rule" })).toBeNull();
   expect(screen.getByText(/args:.*future.*true/)).toBeTruthy();
+});
+
+it("releases a hidden recorder and preserves its draft without resuming", async () => {
+  const h = await setup([rule]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit / recordsaved-theme" }));
+  fireEvent.change(screen.getByLabelText("Condition (when)"), { target: { value: "workspace" } });
+  fireEvent.click(screen.getByRole("button", { name: "Record shortcut" }));
+  expect(commands.getSnapshot().recording).toBe(true);
+  h.hide();
+  const input = screen.getByLabelText("Outside");
+  input.focus();
+  const e = new KeyboardEvent("keydown", {
+    key: "x",
+    code: "KeyX",
+    cancelable: true,
+    bubbles: true,
+  });
+  fireEvent(input, e);
+  expect(e.defaultPrevented).toBe(false);
+  expect(commands.getSnapshot().recording).toBe(false);
+  h.show();
+  expect(screen.getByRole("button", { name: "Record shortcut" })).toBeTruthy();
+  expect(screen.getByLabelText<HTMLInputElement>("Condition (when)").value).toBe("workspace");
+});
+it("refreshes effective rule status on actual DOM focus changes", async () => {
+  const rules = [{ ...rule, when: "focus == 'input'" }];
+  commands.configure({
+    route: "/settings/keyboard-shortcuts",
+    platform: "linux",
+    host: "web",
+    connection: "open",
+    modalCount: 0,
+    map: compileKeymap({ ...emptyDocument, rules }, "linux"),
+    preferencesReady: () => true,
+    preference() {},
+    settings() {},
+  });
+  await setup(rules);
+  const input = screen.getByLabelText("Search commands and bindings");
+  fireEvent.change(input, { target: { value: "saved-theme" } });
+  act(() => input.focus());
+  expect(document.activeElement).toBe(input);
+  expect(screen.getByText("Effective in this context")).toBeTruthy();
+  act(() => screen.getByRole("button", { name: "Edit / recordsaved-theme" }).focus());
+  expect(screen.getByText("Condition does not match this context")).toBeTruthy();
 });

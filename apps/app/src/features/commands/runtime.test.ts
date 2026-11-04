@@ -1117,3 +1117,384 @@ it.each(["hydration", "deletion", "replacement", "remount"])(
     expect(h.panel().api.close).not.toHaveBeenCalled();
   },
 );
+
+function pasteHarness(keys: string[], disabledDefaults: string[] = []) {
+  const h = harness(),
+    t = fakeTerminal().terminal;
+  t.element.dataset["execSession"] = "s";
+  const input = document.createElement("textarea");
+  t.element.append(input);
+  h.root.append(t.element);
+  input.focus();
+  Object.assign(h.panel(), { params: { sessionId: "s" } });
+  useExecSessions.setState({
+    entries: new Map([
+      [
+        "s",
+        {
+          terminal: t,
+          params: { sessionId: "s" },
+          state: { phase: "live" },
+        } as unknown as ExecSession,
+      ],
+    ]),
+  });
+  h.rt.registerSurface({ element: t.element, read: () => ({ kind: "terminal" }) });
+  h.rt.configure({
+    ...h.config,
+    map: compileKeymap(
+      {
+        ...emptyDocument,
+        disabledDefaults,
+        rules: [
+          {
+            id: "paste",
+            command: "terminal.paste",
+            keys,
+            when: "",
+            scope: "terminal",
+            enabled: true,
+          },
+        ],
+      },
+      "linux",
+    ),
+  });
+  const readText = vi.fn<() => Promise<string>>(async () => "fixture-only");
+  vi.stubGlobal("navigator", { clipboard: { readText } });
+  return { ...h, t, readText };
+}
+it("consumes native Paste prefixes without granting a pending chord clipboard access", () => {
+  const h = pasteHarness(["Control+V", "G"], ["default.paste.terminal.other"]);
+  const prefix = key("v", "KeyV");
+  h.rt.key(prefix);
+  expect(h.rt.chords.pending).toBeDefined();
+  expect(prefix.defaultPrevented).toBe(true);
+  expect(terminalVerdicts.get(prefix)).toBe("handled");
+  h.rt.blur();
+  expect(h.readText).not.toHaveBeenCalled();
+});
+it.each([["F8"], ["Control+Alt+V"], ["F8", "G"]])(
+  "executes custom Paste %j once through the clipboard boundary",
+  async (...keys) => {
+    const h = pasteHarness(keys);
+    const first =
+      keys[0] === "F8" ? key("F8", "F8", { ctrlKey: false }) : key("v", "KeyV", { altKey: true });
+    h.rt.key(first);
+    expect(first.defaultPrevented).toBe(true);
+    expect(terminalVerdicts.get(first)).toBe("handled");
+    if (keys.length === 2) {
+      h.rt.key(key("g", "KeyG", { ctrlKey: false }));
+    }
+    await Promise.resolve();
+    expect(h.readText).toHaveBeenCalledTimes(1);
+    expect(h.t.paste).toHaveBeenCalledExactlyOnceWith("fixture-only");
+  },
+);
+it("does not paste custom clipboard results into a replaced panel", async () => {
+  const h = pasteHarness(["F8"]);
+  let finish!: (text: string) => void;
+  h.readText.mockImplementation(
+    () =>
+      new Promise<string>((r) => {
+        finish = r;
+      }),
+  );
+  h.rt.key(key("F8", "F8", { ctrlKey: false }));
+  expect(h.readText).toHaveBeenCalledTimes(1);
+  h.replace();
+  finish("fixture-only");
+  await Promise.resolve();
+  expect(h.t.paste).not.toHaveBeenCalled();
+});
+it("suppresses labels shadowed by a different available command", () => {
+  const h = harness([
+    {
+      id: "override",
+      command: "app.openSettings",
+      keys: ["Mod+Shift+P"],
+      when: "",
+      scope: "app",
+      enabled: true,
+    },
+  ]);
+  expect(h.rt.label("app.commandPalette")).toBeUndefined();
+  expect(h.rt.label("app.openSettings")).toBe("Ctrl+Shift+P");
+  h.rt.key(key("P", "KeyP", { shiftKey: true }));
+  expect(h.settings).toHaveBeenCalledTimes(1);
+});
+it("preserves a palette native control's keypress default while guarding repeat and release", () => {
+  const h = harness();
+  h.rt.openPalette("commands");
+  const button = document.createElement("button");
+  document.body.append(button);
+  button.focus();
+  const send = (type: string, repeat = false) => {
+    const e = new KeyboardEvent(type, { key: "Enter", code: "Enter", cancelable: true, repeat });
+    button.dispatchEvent(e);
+    h.rt.key(e);
+    return e;
+  };
+  expect(send("keydown").defaultPrevented).toBe(false);
+  expect(send("keypress").defaultPrevented).toBe(false);
+  expect(send("keydown", true).defaultPrevented).toBe(true);
+  expect(send("keyup").defaultPrevented).toBe(true);
+});
+
+it.each(["Escape", "timeout", "mismatch", "blur", "recording", "map", "stale"])(
+  "never reads or pastes after a Paste prefix is cancelled by %s",
+  async (boundary) => {
+    vi.useFakeTimers();
+    try {
+      const h = pasteHarness(["Control+V", "G"], ["default.paste.terminal.other"]);
+      const prefix = key("v", "KeyV");
+      h.rt.key(prefix);
+      expect(prefix.defaultPrevented).toBe(true);
+      expect(h.rt.chords.pending).toBeDefined();
+      h.rt.key(new KeyboardEvent("keyup", { key: "v", code: "KeyV" }));
+      if (boundary === "Escape") h.rt.key(key("Escape", "Escape", { ctrlKey: false }));
+      if (boundary === "timeout") vi.advanceTimersByTime(1000);
+      if (boundary === "mismatch") h.rt.key(key("x", "KeyX", { ctrlKey: false }));
+      if (boundary === "blur") h.rt.blur();
+      if (boundary === "recording") h.rt.setRecording(true);
+      if (boundary === "map") h.rt.configure(h.config);
+      if (boundary === "stale") h.replace();
+      h.rt.key(key("g", "KeyG", { ctrlKey: false }));
+      await Promise.resolve();
+      expect(h.rt.chords.pending).toBeUndefined();
+      expect(h.readText).not.toHaveBeenCalled();
+      expect(h.t.paste).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+it("keeps only a completed actual native Paste gesture on its native path", () => {
+  const h = pasteHarness(["F8", "Control+V"], ["default.paste.terminal.other"]);
+  h.rt.key(key("F8", "F8", { ctrlKey: false }));
+  expect(h.rt.chords.pending).toBeDefined();
+  const e = key("v", "KeyV");
+  h.rt.key(e);
+  expect(h.rt.chords.pending).toBeUndefined();
+  expect(e.defaultPrevented).toBe(false);
+  expect(terminalVerdicts.get(e)).toBe("paste");
+  expect(h.readText).not.toHaveBeenCalled();
+});
+it.each(["held", "replaced"])("refuses async custom Paste into a %s terminal", async (boundary) => {
+  const h = pasteHarness(["F8"]);
+  let finish!: (text: string) => void;
+  h.readText.mockImplementation(
+    () =>
+      new Promise<string>((r) => {
+        finish = r;
+      }),
+  );
+  h.rt.key(key("F8", "F8", { ctrlKey: false }));
+  expect(h.readText).toHaveBeenCalledTimes(1);
+  if (boundary === "replaced") useExecSessions.setState({ entries: new Map() });
+  else h.t.holdInput(true);
+  finish("fixture-only");
+  await Promise.resolve();
+  expect(h.t.paste).not.toHaveBeenCalled();
+});
+it("reports rejected or unavailable clipboard access without reading for availability", async () => {
+  const h = pasteHarness(["F8"]);
+  const origin = h.rt.capture();
+  h.readText.mockRejectedValue(Error("fixture clipboard denied"));
+  expect(h.rt.reason("terminal.paste", origin)).toBeUndefined();
+  expect(h.readText).not.toHaveBeenCalled();
+  h.rt.key(key("F8", "F8", { ctrlKey: false }));
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(h.rt.getSnapshot().error).toContain("fixture clipboard denied");
+  expect(h.t.paste).not.toHaveBeenCalled();
+  vi.stubGlobal("navigator", {});
+  expect(h.rt.reason("terminal.paste", origin)).toContain("Clipboard reading is unavailable");
+  expect(h.rt.invoke("terminal.paste", {}, origin, "keyboard")).toBe(false);
+});
+it("resolves normalized chord winners with conditions and availability across commands", () => {
+  const rules: Rule[] = [
+    {
+      id: "first",
+      command: "app.openSettings",
+      keys: ["Control+G", "H"],
+      when: "",
+      enabled: true,
+      scope: "app",
+    },
+    {
+      id: "last",
+      command: "manifest.review",
+      keys: ["Mod+G", "[KeyH]"],
+      when: "focus == 'editor'",
+      enabled: true,
+      scope: "app",
+    },
+  ];
+  const h = harness(rules);
+  expect(h.rt.label("app.openSettings")).toBeUndefined();
+  expect(h.rt.label("manifest.review")).toBe("Ctrl+G H");
+  h.rt.key(key("g", "KeyG"));
+  h.rt.key(key("h", "KeyH", { ctrlKey: false }));
+  expect(h.review).toHaveBeenCalledTimes(1);
+  expect(h.settings).not.toHaveBeenCalled();
+  h.unregister();
+  h.rt.blur();
+  expect(h.rt.label("app.openSettings")).toBe("Ctrl+G H");
+});
+it("keeps Exec menu labels tied to the supplied terminal capture after DOM focus moves", () => {
+  const h = pasteHarness(["F8"]),
+    origin = h.rt.capture(),
+    context = h.rt.context(origin);
+  const button = document.createElement("button");
+  document.body.append(button);
+  button.focus();
+  h.rt.configure({
+    ...h.config,
+    map: compileKeymap(
+      {
+        ...emptyDocument,
+        rules: [
+          {
+            id: "override",
+            command: "terminal.clear",
+            keys: ["Control+V"],
+            scope: "terminal",
+            when: "",
+            enabled: true,
+          },
+        ],
+      },
+      "linux",
+    ),
+  });
+  expect(h.rt.labelFor("terminal.paste", context, origin)).toBe("Ctrl+Shift+V");
+  expect(h.rt.labelFor("terminal.clear", context, origin)).toBe("Ctrl+V");
+});
+
+it("publishes context changes so labels recover after a palette exit releases its modal", () => {
+  const h = harness();
+  h.rt.configure({ ...h.config, modalCount: 1 });
+  expect(h.rt.label("app.commandPalette")).toBeUndefined();
+  const changed = vi.fn<() => void>();
+  const off = h.rt.subscribe(changed);
+  h.rt.configure(h.config);
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(h.rt.label("app.commandPalette")).toBe("Ctrl+Shift+P");
+  off();
+});
+
+it.each([
+  {
+    platform: "mac",
+    keys: ["Meta+V"],
+    ctrlKey: false,
+    metaKey: true,
+    shiftKey: false,
+    native: true,
+  },
+  {
+    platform: "mac",
+    keys: ["Meta+Shift+V"],
+    ctrlKey: false,
+    metaKey: true,
+    shiftKey: true,
+    native: false,
+  },
+  {
+    platform: "linux",
+    keys: ["Control+V"],
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: false,
+    native: true,
+  },
+  {
+    platform: "linux",
+    keys: ["Control+Shift+V"],
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: true,
+    native: true,
+  },
+  {
+    platform: "windows",
+    keys: ["Control+V"],
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: false,
+    native: true,
+  },
+  {
+    platform: "windows",
+    keys: ["Control+Shift+V"],
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: true,
+    native: true,
+  },
+] as const)(
+  "respects completed $platform $keys Paste gesture policy",
+  async ({ platform, keys, native, ...modifiers }) => {
+    const h = pasteHarness(["F8"]);
+    h.rt.configure({
+      ...h.config,
+      platform,
+      map: compileKeymap(
+        {
+          ...emptyDocument,
+          rules: [
+            {
+              id: "paste",
+              command: "terminal.paste",
+              keys: [...keys],
+              when: "",
+              scope: "terminal",
+              enabled: true,
+            },
+          ],
+        },
+        platform,
+      ),
+    });
+    const event = key("v", "KeyV", modifiers);
+    h.rt.key(event);
+    await Promise.resolve();
+    expect(event.defaultPrevented).toBe(!native);
+    expect(terminalVerdicts.get(event)).toBe(native ? "paste" : "handled");
+    expect(h.readText).toHaveBeenCalledTimes(native ? 0 : 1);
+  },
+);
+
+it.each([
+  { logical: "F8", physical: "[F8]", key: "F8", code: "F8" },
+  { logical: "8", physical: "[Digit8]", key: "8", code: "Digit8" },
+  { logical: "/", physical: "[Slash]", key: "/", code: "Slash" },
+])(
+  "resolves logical $logical and physical $physical presentation through the same matcher",
+  ({ logical, physical, key: letter, code }) => {
+    const h = harness([
+      {
+        id: "logical",
+        command: "app.openSettings",
+        keys: [logical],
+        when: "",
+        scope: "app",
+        enabled: true,
+      },
+      {
+        id: "physical",
+        command: "appearance.setTheme",
+        keys: [physical],
+        when: "",
+        scope: "app",
+        enabled: true,
+        args: { theme: "dark" },
+      },
+    ]);
+    expect(h.rt.label("app.openSettings")).toBeUndefined();
+    h.rt.key(key(letter, code, { ctrlKey: false }));
+    expect(h.preference).toHaveBeenCalledExactlyOnceWith("theme", "dark");
+    expect(h.settings).not.toHaveBeenCalled();
+  },
+);

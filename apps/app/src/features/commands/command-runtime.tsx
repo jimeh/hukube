@@ -207,7 +207,20 @@ export function CommandRuntime() {
                 <ResourceSearch origin={palette.origin} />
               </WorkspaceContext>
             ) : (
-              <Command shouldFilter={false} loop>
+              <Command
+                shouldFilter={false}
+                loop
+                onKeyDownCapture={(e) => {
+                  // cmdk owns Search/list navigation. Nested native controls own
+                  // their activation defaults, including Enter on Arguments.
+                  if (
+                    e.key === "Enter" &&
+                    e.target instanceof HTMLElement &&
+                    e.target.closest("button,a[href]")
+                  )
+                    e.stopPropagation();
+                }}
+              >
                 <CommandInput
                   aria-label="Search commands"
                   placeholder="Search commands…"

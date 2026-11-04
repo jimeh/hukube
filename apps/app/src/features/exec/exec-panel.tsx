@@ -117,11 +117,11 @@ export function ExecPanel({
     terminalSelection: selection,
   };
   const keys = {
-    copy: commands.labelFor("terminal.copy", keyContext),
-    paste: commands.labelFor("terminal.paste", keyContext),
-    selectAll: commands.labelFor("terminal.selectAll", keyContext),
-    find: commands.labelFor("editor.find", keyContext),
-    goToResource: commands.labelFor("app.goToResource", keyContext),
+    copy: commands.labelFor("terminal.copy", keyContext, commandOrigin()),
+    paste: commands.labelFor("terminal.paste", keyContext, commandOrigin()),
+    selectAll: commands.labelFor("terminal.selectAll", keyContext, commandOrigin()),
+    find: commands.labelFor("editor.find", keyContext, commandOrigin()),
+    goToResource: commands.labelFor("app.goToResource", keyContext, commandOrigin()),
   };
   // Asked for again while its bar is open, find returns to its field.
   const find = () => {

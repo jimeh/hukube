@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useMemo, useState, useId } from "react";
+import { useLayoutEffect, useRef, useMemo, useState, useId } from "react";
 import { HotkeyRecorder } from "@tanstack/hotkeys";
 import { Button } from "@hukube/ui/components/button";
 import { Input } from "@hukube/ui/components/input";
@@ -16,19 +16,19 @@ import { commands } from "./runtime.ts";
 import { compileKeymap, defaultRules, displayKeys, emptyDocument, type Rule } from "./keyboard.ts";
 import { vocabulary } from "./conditions.ts";
 import { useKeybindings } from "./store.ts";
-export function KeyboardSettings() {
+export function KeyboardSettings({ visible = true }: { visible?: boolean }) {
   const { store, snapshot } = useKeybindings();
   const [search, setSearch] = useState(""),
     [editing, setEditing] = useState<Rule>();
-  const document = snapshot.draft ?? snapshot.document;
+  const keymapDocument = snapshot.draft ?? snapshot.document;
   const usable =
-    document?.version === 1 &&
-    Array.isArray(document.rules) &&
-    document.rules.length <= 256 &&
-    new Set(document.rules.map((r) => r?.id)).size === document.rules.length &&
-    Array.isArray(document.disabledDefaults) &&
-    document.disabledDefaults.length <= 256 &&
-    document.rules.every(
+    keymapDocument?.version === 1 &&
+    Array.isArray(keymapDocument.rules) &&
+    keymapDocument.rules.length <= 256 &&
+    new Set(keymapDocument.rules.map((r) => r?.id)).size === keymapDocument.rules.length &&
+    Array.isArray(keymapDocument.disabledDefaults) &&
+    keymapDocument.disabledDefaults.length <= 256 &&
+    keymapDocument.rules.every(
       (r) =>
         r &&
         typeof r.id === "string" &&
@@ -43,7 +43,7 @@ export function KeyboardSettings() {
           (!!r.args && typeof r.args === "object" && !Array.isArray(r.args))) &&
         r.keys.every((k) => typeof k === "string"),
     );
-  const candidate = usable ? document : emptyDocument;
+  const candidate = usable ? keymapDocument : emptyDocument;
   const compilation = useMemo(() => {
     try {
       return { map: compileKeymap(candidate, commandPlatform), error: "" };
@@ -51,7 +51,7 @@ export function KeyboardSettings() {
       return { error: String(e) };
     }
   }, [candidate]);
-  const change = (next: typeof document) => store.edit(next);
+  const change = (next: typeof keymapDocument) => store.edit(next);
   const update = (rule: Rule) =>
     change({ ...candidate, rules: candidate.rules.map((r) => (r.id === rule.id ? rule : r)) });
   const begin = (rule: Rule) => {
@@ -70,20 +70,26 @@ export function KeyboardSettings() {
     `${r.id} ${r.command} ${isCommand(r.command) ? definition(r.command).title : ""} ${JSON.stringify(r.args)} ${r.when} ${r.keys.join(" ")}`
       .toLowerCase()
       .includes(search.toLowerCase());
-  const context = commands.context({
-    route: "/settings/keyboard-shortcuts",
-    element: document.activeElement instanceof HTMLElement ? document.activeElement : undefined,
-  });
+  const [, refreshContext] = useState(0);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const refresh = () => refreshContext((value) => value + 1);
+    document.addEventListener("focusin", refresh);
+    document.addEventListener("focusout", refresh);
+    return () => {
+      document.removeEventListener("focusin", refresh);
+      document.removeEventListener("focusout", refresh);
+    };
+  }, [visible]);
+  const origin = commands.capture();
+  const context = commands.context(origin);
   const winner = (id: string) => {
     const current = compilation.map?.rules.find((r) => r.id === id);
     if (!current) return "Disabled or inactive";
     if (!current.condition.test(context)) return "Condition does not match this context";
-    const effective = compilation.map?.rules.findLast(
-      (r) => r.keys.join(" ") === current.keys.join(" ") && r.condition.test(context),
-    );
-    return effective?.id === id
-      ? "Effective in this context"
-      : `Shadowed here by ${effective?.id ?? "none"}`;
+    const effective = commands.winnerFor(current, compilation.map!, origin, context);
+    if (!effective) return "Unavailable in this context";
+    return effective.id === id ? "Effective in this context" : `Shadowed here by ${effective.id}`;
   };
   const locked = snapshot.readOnly || snapshot.pending || !snapshot.loaded;
   return (
@@ -130,6 +136,7 @@ export function KeyboardSettings() {
         <RuleEditor
           key={editing.id}
           initial={editing}
+          visible={visible}
           disabled={locked}
           onCancel={() => setEditing(undefined)}
           onSave={(rule) => {
@@ -376,7 +383,9 @@ function RuleEditor({
   onSave,
   onCancel,
   disabled,
+  visible,
 }: {
+  visible: boolean;
   initial: Rule;
   onSave: (rule: Rule) => void;
   onCancel: () => void;
@@ -403,8 +412,9 @@ function RuleEditor({
     setRule((r) => ({ ...r, args: value }));
     setArgsText(JSON.stringify(value, null, 2));
   };
-  useEffect(() => {
-    if (!recording) return;
+  if (!visible && recording) setRecording(false);
+  useLayoutEffect(() => {
+    if (!visible || !recording) return;
     commands.setRecording(true);
     const recorder = new HotkeyRecorder({
       platform: commandPlatform,
@@ -427,7 +437,7 @@ function RuleEditor({
       subscription.unsubscribe();
       commands.setRecording(false);
     };
-  }, [recording]);
+  }, [recording, visible]);
   return (
     <form
       ref={form}

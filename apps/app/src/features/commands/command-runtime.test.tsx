@@ -665,3 +665,25 @@ it.each(["deleted", "replaced"])(
     }
   },
 );
+
+it("keeps Arguments Enter away from cmdk selection for multiple rows", async () => {
+  const h = await setup();
+  fireEvent.change(h.search, { target: { value: "app." } });
+  const button = screen.getByRole("button", { name: "Edit arguments for Open Settings" });
+  button.focus();
+  fireEvent.keyDown(button, { key: "Enter", code: "Enter" });
+  expect(commands.getSnapshot().palette?.mode).toBe("commands");
+  expect(commands.getSnapshot().palette?.prompt).toBeUndefined();
+  expect(h.router.state.location.pathname).toBe("/");
+  // jsdom has no native Enter default. Browser verification checks the resulting click.
+  const press = new KeyboardEvent("keypress", {
+    key: "Enter",
+    code: "Enter",
+    cancelable: true,
+    bubbles: true,
+  });
+  fireEvent(button, press);
+  expect(press.defaultPrevented).toBe(false);
+  fireEvent.keyUp(button, { key: "Enter", code: "Enter" });
+  h.unregister();
+});

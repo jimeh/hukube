@@ -9,6 +9,9 @@ import { pinPanel } from "../workspace/dock.ts";
 import { argumentsFor, catalog, definition, type CommandArgs, type CommandId } from "./catalog.ts";
 import {
   Chords,
+  eligibleRules,
+  strokeEvent,
+  nativePasteGesture,
   matchesStroke,
   unsafeKey,
   type Keymap,
@@ -79,7 +82,7 @@ export class CommandRuntime {
   private view: View = { hint: "", error: "", recording: false };
   // Compare published palette output, never callback identity or copied owner state.
   private paletteObservation?: { content: string; types?: WorkspaceValue["types"] };
-  private held = new Set<string>();
+  private held = new Map<string, { native?: EventTarget | null; key: string }>();
   private paletteInput?: View["palette"];
   private returnFocus?: { origin: Origin; target: Origin; closed: boolean };
   readonly chords = new Chords<Origin>((hint) => this.show({ hint }));
@@ -125,9 +128,16 @@ export class CommandRuntime {
       config.connection === "outdated"
     )
       this.paletteInput = undefined;
-    const mapChanged = this.config?.map !== config.map;
+    const contextChanged =
+      !this.config ||
+      this.config.map !== config.map ||
+      this.config.route !== config.route ||
+      this.config.platform !== config.platform ||
+      this.config.host !== config.host ||
+      this.config.connection !== config.connection ||
+      this.config.modalCount !== config.modalCount;
     this.config = config;
-    if (mapChanged) this.show({});
+    if (contextChanged) this.show({});
     this.refreshAvailability();
   }
   registerWorkspace(cluster: string, owner: WorkspaceOwner) {
@@ -314,7 +324,7 @@ export class CommandRuntime {
       recording: this.view.recording,
     };
   }
-  reason(id: CommandId, origin: Origin, source = "palette"): string | undefined {
+  reason(id: CommandId, origin: Origin, nativePaste = false): string | undefined {
     if (this.config?.connection === "outdated") return "The app is out of date.";
     const def = definition(id);
     if (
@@ -337,7 +347,7 @@ export class CommandRuntime {
       return "No terminal text selected.";
     if (
       id === "terminal.paste" &&
-      source !== "keyboard" &&
+      !nativePaste &&
       (!navigator.clipboard?.readText || origin.session?.inputHeld)
     )
       return "Clipboard reading is unavailable here. Use the browser paste shortcut in a live terminal.";
@@ -360,10 +370,16 @@ export class CommandRuntime {
     raw: unknown,
     origin: Origin,
     source: "pointer" | "keyboard" | "palette" = "palette",
+    gesture?: KeyboardEvent,
   ) {
     try {
       const args = argumentsFor(id, raw, source !== "pointer");
-      const reason = this.reason(id, origin, source);
+      const nativePaste =
+        source === "keyboard" &&
+        id === "terminal.paste" &&
+        !!gesture &&
+        nativePasteGesture(gesture, this.config!.platform);
+      const reason = this.reason(id, origin, nativePaste);
       if (reason) throw Error(reason);
       try {
         argumentsFor(id, args);
@@ -372,14 +388,19 @@ export class CommandRuntime {
         this.show({ palette: { mode: "commands", origin, prompt: { id, args } } });
         return true;
       }
-      this.execute(id, args, origin, source);
+      this.execute(id, args, origin, nativePaste);
       return true;
     } catch (e) {
       this.show({ error: e instanceof Error ? e.message : String(e) });
       return false;
     }
   }
-  private execute(id: CommandId, args: Record<string, unknown>, origin: Origin, source: string) {
+  private execute(
+    id: CommandId,
+    args: Record<string, unknown>,
+    origin: Origin,
+    nativePaste: boolean,
+  ) {
     const cfg = this.config!,
       workspace = origin.workspace,
       surface = origin.surface?.read(),
@@ -464,7 +485,7 @@ export class CommandRuntime {
         terminal!.clear();
         break;
       case "terminal.paste":
-        if (source !== "keyboard")
+        if (!nativePaste)
           void navigator.clipboard
             .readText()
             .then((text) => {
@@ -543,20 +564,55 @@ export class CommandRuntime {
     this.show({ recording });
   }
   label(id: CommandId, origin = this.capture()) {
-    return this.labelFor(id, this.context(origin));
+    return this.labelFor(id, this.context(origin), origin);
   }
-  labelFor(id: CommandId, c: Context) {
+  private ruleAvailable(rule: CompiledRule, origin: Origin) {
+    const native =
+      rule.command === "terminal.paste" &&
+      nativePasteGesture(
+        strokeEvent(rule.keys.at(-1)!, this.config!.platform),
+        this.config!.platform,
+      );
+    return !this.reason(rule.command, origin, native);
+  }
+  winnerFor(rule: CompiledRule, map: Keymap, origin: Origin, context = this.context(origin)) {
+    const events = rule.keys.map((key) => strokeEvent(key, context.platform));
+    return eligibleRules(
+      map.rules,
+      () => context,
+      (r) =>
+        r.keys.length === events.length &&
+        r.keys.every((key, i) => matchesStroke(events[i]!, key, context.platform)),
+      (r) => this.ruleAvailable(r, origin),
+    ).at(-1);
+  }
+  labelFor(id: CommandId, c: Context, origin = this.capture()) {
     return this.config?.map.rules
-      .findLast((r) => r.command === id && r.condition.test(c))
+      .findLast((r) => r.command === id && this.winnerFor(r, this.config!.map, origin, c) === r)
       ?.keys.map((k) => displayKeys([k], c.platform))
       .join(" ");
   }
   key = (event: KeyboardEvent) => {
     const physical = event.code || event.key;
-    if (this.held.has(physical)) {
+    const held = this.held.get(physical);
+    if (held) {
+      // Keep the native default only for the original still-visible control.
+      // A search selection, prompt submission or close may already have removed it.
+      const nativeDefault =
+        held.native &&
+        event.target === held.native &&
+        this.view.palette &&
+        held.native instanceof HTMLElement &&
+        held.native.isConnected &&
+        ((event.type === "keypress" && held.key === "Enter") ||
+          (event.type === "keyup" && held.key === " "));
+      if (nativeDefault && event.type === "keypress") held.native = undefined;
+      if (nativeDefault && event.type !== "keyup") return;
       terminalVerdicts.set(event, "handled");
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      if (!nativeDefault) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
       if (event.type === "keyup") {
         this.held.delete(physical);
         if (!this.held.size) this.restorePaletteFocus();
@@ -575,8 +631,10 @@ export class CommandRuntime {
       this.chords.cancel();
       return;
     }
-    if (this.view.palette && ["Enter", "Escape"].includes(event.key)) {
-      this.held.add(physical);
+    if (this.view.palette && ["Enter", "Escape", " "].includes(event.key)) {
+      const native = event.target instanceof HTMLElement && event.target.closest("button,a[href]");
+      if (event.key === " " && !native) return;
+      this.held.set(physical, { key: event.key, native: native || undefined });
       return;
     }
     const origin = this.capture(),
@@ -607,15 +665,23 @@ export class CommandRuntime {
     const pending = this.chords.pending;
     if (pending) {
       this.chords.cancel();
-      const winner = pending.rules.findLast(
+      const winner = eligibleRules(
+        pending.rules,
+        (r) => matchContext(r, pending.origin),
+        (r) => matchesStroke(event, r.keys[1]!, context.platform),
         (r) =>
-          r.condition.test(matchContext(r, pending.origin)) &&
-          matchesStroke(event, r.keys[1]!, context.platform) &&
-          !this.reason(r.command, pending.origin, "keyboard"),
-      );
+          !this.reason(
+            r.command,
+            pending.origin,
+            r.command === "terminal.paste" && nativePasteGesture(event, context.platform),
+          ),
+      ).at(-1);
       if (winner) {
-        this.consume(event, winner.command === "terminal.paste");
-        this.invoke(winner.command, winner.args, pending.origin, "keyboard");
+        this.consume(
+          event,
+          winner.command === "terminal.paste" && nativePasteGesture(event, context.platform),
+        );
+        this.invoke(winner.command, winner.args, pending.origin, "keyboard", event);
         return;
       }
     }
@@ -623,27 +689,26 @@ export class CommandRuntime {
       (command === "app.commandPalette" || command === "app.goToResource") && this.view.palette
         ? this.view.palette.origin
         : origin;
-    const eligible = this.config.map.rules.filter((r) => {
-      const target = ruleOrigin(r.command),
-        c = matchContext(r, target);
-      return (
-        r.condition.test(c) &&
-        (!c.terminalLive || r.scope === "terminal") &&
-        (r.scope !== "terminal" ||
-          (c.focus === "terminal" && (r.id.startsWith("default.") || c.terminalLive))) &&
-        matchesStroke(event, r.keys[0]!, c.platform) &&
-        !this.reason(r.command, target, "keyboard")
-      );
-    });
+    const eligible = eligibleRules(
+      this.config.map.rules,
+      (r) => matchContext(r, ruleOrigin(r.command)),
+      (r) => matchesStroke(event, r.keys[0]!, context.platform),
+      (r) => this.ruleAvailable(r, ruleOrigin(r.command)),
+    );
     if (!eligible.length) return;
     const winner = eligible.at(-1)!,
       target = ruleOrigin(winner.command);
-    this.consume(event, winner.command === "terminal.paste");
+    this.consume(
+      event,
+      winner.keys.length === 1 &&
+        winner.command === "terminal.paste" &&
+        nativePasteGesture(event, context.platform),
+    );
     if (winner.keys.length === 2) this.chords.start(eligible, target);
-    else this.invoke(winner.command, winner.args, target, "keyboard");
+    else this.invoke(winner.command, winner.args, target, "keyboard", event);
   };
   private consume(e: KeyboardEvent, paste = false) {
-    this.held.add(e.code || e.key);
+    this.held.set(e.code || e.key, { key: e.key });
     terminalVerdicts.set(e, paste ? "paste" : "handled");
     if (!paste) {
       e.preventDefault();

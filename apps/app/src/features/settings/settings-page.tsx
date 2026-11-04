@@ -205,7 +205,11 @@ export function SettingsPage({ visible }: { visible: boolean }) {
                   {key === "overview-definitions" ? (
                     <DefinitionManager />
                   ) : key === "keyboard-shortcuts" ? (
-                    <KeyboardSettings />
+                    <KeyboardSettings
+                      visible={
+                        visible && section === key && location.pathname.startsWith("/settings/")
+                      }
+                    />
                   ) : (
                     <>
                       <p className="mb-4 text-sm text-muted-foreground">

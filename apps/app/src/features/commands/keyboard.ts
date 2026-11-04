@@ -4,6 +4,7 @@ import {
   matchesKeyboardEvent,
   formatForDisplay,
   validateHotkey,
+  PUNCTUATION_CODE_MAP,
 } from "@tanstack/hotkeys";
 import { compileCondition, disjoint, type Context, type Condition } from "./conditions.ts";
 import { argumentsFor, isCommand, type CommandId } from "./catalog.ts";
@@ -193,6 +194,59 @@ export function compileKeymap(document: KeybindingDocument, platform: Platform):
 }
 export const matchesStroke = (e: KeyboardEvent, key: string, platform: Platform) =>
   !unsafeKey(e) && matchesKeyboardEvent(e, parseHotkey(key, platform), platform);
+/** One ordered eligibility boundary for dispatch and shortcut presentation. */
+export function eligibleRules(
+  rules: CompiledRule[],
+  context: (rule: CompiledRule) => Context,
+  matches: (rule: CompiledRule) => boolean,
+  available: (rule: CompiledRule) => boolean,
+) {
+  return rules.filter((candidate) => {
+    const c = context(candidate);
+    return (
+      !c.modalOpen &&
+      !c.recording &&
+      candidate.condition.test(c) &&
+      matches(candidate) &&
+      available(candidate)
+    );
+  });
+}
+/** Matcher input only; never dispatched or replayed into a control or terminal. */
+export function strokeEvent(stroke: string, platform: Platform) {
+  const p = parseHotkey(stroke, platform);
+  const punctuation = Object.entries(PUNCTUATION_CODE_MAP);
+  const code =
+    p.code ??
+    (/^[A-Z]$/.test(p.key ?? "")
+      ? `Key${p.key}`
+      : /^[0-9]$/.test(p.key ?? "")
+        ? `Digit${p.key}`
+        : (punctuation.find(([, key]) => key === p.key)?.[0] ?? p.key ?? ""));
+  const key =
+    p.key ??
+    (code.startsWith("Key")
+      ? code.slice(3)
+      : code.startsWith("Digit")
+        ? code.slice(5)
+        : (punctuation.find(([position]) => position === code)?.[1] ?? code));
+  return new KeyboardEvent("keydown", {
+    key,
+    code,
+    ctrlKey: p.ctrl,
+    metaKey: p.meta,
+    altKey: p.alt,
+    shiftKey: p.shift,
+  });
+}
+export function nativePasteGesture(e: KeyboardEvent, platform: Platform) {
+  return (
+    !unsafeKey(e) &&
+    e.key.toLowerCase() === "v" &&
+    !e.altKey &&
+    (platform === "mac" ? e.metaKey && !e.ctrlKey && !e.shiftKey : e.ctrlKey && !e.metaKey)
+  );
+}
 export interface Clock {
   set(fn: () => void, ms: number): unknown;
   clear(id: unknown): void;
