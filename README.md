@@ -22,7 +22,7 @@ CRDs, with live counts and lists, and show any resource's YAML as it changes.
   abstraction, Kubernetes helpers, and shared UI components.
 
 Design decisions live in [`docs/adr/`](docs/adr), and the project's vocabulary
-in [`CONTEXT.md`](CONTEXT.md).
+in [`GLOSSARY.md`](GLOSSARY.md).
 
 ## Development
 

@@ -396,7 +396,7 @@ definitions.
    `dev:engine` and `dev:ui` loop.
 3. Should a Changeset apply be one request per Resource? That keeps each
    message under the 4 MiB limit (W11) and gives each Resource its own
-   result, which matches "not atomic across Resources" in `CONTEXT.md`.
+   result, which matches "not atomic across Resources" in `GLOSSARY.md`.
 4. What should the UI show when a mutation's connection drops before the
    result arrives? Options are to make every mutation safe to repeat, or to
    let the client ask for the outcome by request ID after it reconnects.

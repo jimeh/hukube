@@ -1,7 +1,7 @@
 # Agent notes
 
-Read `CONTEXT.md` for the project's vocabulary and `docs/adr/` for the
-decisions behind the architecture. Use the terms from `CONTEXT.md` in code,
+Read `GLOSSARY.md` for the project's vocabulary and `docs/adr/` for the
+decisions behind the architecture. Use the terms from `GLOSSARY.md` in code,
 comments, and UI copy.
 
 ## Commands

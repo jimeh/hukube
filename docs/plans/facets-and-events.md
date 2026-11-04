@@ -136,7 +136,7 @@ See ADR-0013. In code:
 - `packages/k8s/src/resource-uri.ts` lists the Facet names, `yaml` and
   `events`, and derives the `Facet` type and the parser's check from the list.
 - `apps/app/src/features/resource/facets.ts` holds the registry, in the
-  order `CONTEXT.md` lists Facets. An entry has an `id`, a `label`,
+  order `GLOSSARY.md` lists Facets. An entry has an `id`, a `label`,
   `appliesTo(target)`, a `View` component, and an optional `Badge` component
   shown after the label in the switcher. `target` is the Resource's type key
   and, once the Cluster's types are known, its `ResourceType`.
