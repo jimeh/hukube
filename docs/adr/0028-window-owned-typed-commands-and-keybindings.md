@@ -17,7 +17,9 @@ The catalog validates named arguments with Zod. Missing prompted fields open a
 form in the palette; invalid supplied arguments never run. Review retains the
 existing edit owner. Navigation, menus and controls use the same path, while
 owner operations remain separate to avoid dispatch recursion. Pane zoom and
-Log Stream filtering are deferred until their APIs arrive.
+Log Stream filtering registrations remain bounded follow-ups: their actions
+are local to feature components and need new owner adapters before the runtime
+can call them directly. Their merged behavior remains intact.
 
 Headless @tanstack/hotkeys 0.18.0 supplies logical and physical normalization,
 per-stroke matching, labels and recording. One arbiter chooses the last eligible

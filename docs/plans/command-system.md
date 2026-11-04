@@ -1,5 +1,35 @@
 # Commands, palette, and keyboard shortcuts
 
+## Current delivery decisions, November 4
+
+The launch contract below records the original Settings stack. Settings, Pane
+zoom, filtering and the private Treeboot harness have since merged. Deliver
+this single PR against `main`, currently pinned to
+`c05a2e8c296e7bf3745448b559b6ff1a9065f497`, preserving those merged owners and
+PR #38's fractional Monaco sizing and geometry diagnostics. Private Mise
+verification replaces the historical shared-fixture lease requirement below.
+
+Pane zoom and filtering Command registrations remain bounded follow-ups. The
+Pane header calls Dockview directly and LogRun owns filter expansion; their
+owners do not expose an adapter the command runtime can call directly. No new
+owner adapters, duplicate implementations, issue, or shortcut defaults are
+part of this batch. The approved wrap and timestamp Commands remain included.
+
+Jim approved one seventh correction: palette-view input lifetime follows the
+surviving Workspace/Tab/Pane/params placement through incidental Resource UID
+hydration, deletion or replacement. Captured Command execution and availability
+retain their exact Resource/edit identity guards. No recapture or retargeting
+is permitted. A material eighth source correction requires a new checkpoint.
+
+The remaining gates include current-source checks and private E2E, fresh whole
+palette UX, two independent fresh Codex code reviews with different prompts,
+and the selected normal CodeRabbit review after internal acceptance. This
+explicit routing supersedes the historical Codex/Claude references below.
+No merge is authorized. Earlier Engine cleanup and disclosed CI flake causes
+remain unexplained; later green runs do not establish their causes.
+
+## Original launch contract
+
 Deliver one PR based on Settings PR #29, `feat/settings-log-retention` at
 `783f7383855e4d171cc15a0855fdbe69a2180c60`. This plan implements Jim's approved
 contract. It does not include the alternative Settings implementation, Pane zoom
