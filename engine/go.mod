@@ -6,12 +6,12 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/junegunn/fzf v0.74.5
-	k8s.io/api v0.37.1
-	k8s.io/apiextensions-apiserver v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/client-go v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apiextensions-apiserver v0.37.2
+	k8s.io/apimachinery v0.37.2
+	k8s.io/client-go v0.37.2
 	k8s.io/klog/v2 v2.140.0
-	k8s.io/streaming v0.37.1
+	k8s.io/streaming v0.37.2
 	sigs.k8s.io/controller-runtime v0.25.2
 )
 
